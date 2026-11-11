@@ -359,8 +359,7 @@ export function recurring(db: DB, opts: RecurringOptions = {}) {
       and(isNull(t.deletedAt), gte(t.date, since), opts.propertyId ? eq(t.propertyId, opts.propertyId) : undefined),
     )
     .orderBy(t.date, t.id)
-    .all()
-    .filter((r) => r.date <= today);
+    .all();
 
   const groups = new Map<string, Row[]>();
   for (const r of rows) {
@@ -414,6 +413,9 @@ export function monthChecklist(db: DB, ym: string, opts: RecurringOptions = {}) 
         kind: s.kind,
         cadence_label: s.cadence_label,
         typical_amount: s.typical_amount,
+        fixed_amount: s.fixed_amount,
+        allocation: s.allocation,
+        property_id: s.property_id,
         expected_date: dateIn(monthIdx(ym), s.expected_day),
         state,
         amount: h?.amount ?? null,

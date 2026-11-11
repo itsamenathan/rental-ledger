@@ -205,6 +205,15 @@ describe("backup", () => {
     expect((await call("GET", "/api/backup", undefined, bearer(readKey))).status).toBe(200); // owner's key is admin
   });
 
+  it("builds the preparer package for a year", async () => {
+    const r = await call("GET", "/api/reports/tax-package.zip?year=2026");
+    expect(r.status).toBe(200);
+    expect(r.res.headers.get("content-disposition")).toContain("2026 tax package.zip");
+    const body = Buffer.from(typeof r.json === "string" ? r.json : JSON.stringify(r.json), "latin1");
+    expect(body.subarray(0, 4).readUInt32LE(0)).toBe(0x04034b50);
+    expect(body.toString("latin1")).toContain("Summary.txt");
+  });
+
   it("writes a valid zip", async () => {
     const { zip } = await import("./services/backup.ts");
     const { inflateRawSync } = await import("node:zlib");

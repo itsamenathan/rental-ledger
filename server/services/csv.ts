@@ -9,3 +9,27 @@ export function toCsv(rows: Record<string, unknown>[], columns?: string[]): stri
   };
   return [cols.join(","), ...rows.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\n") + "\n";
 }
+
+export const TRANSACTION_COLUMNS = [
+  "id",
+  "date",
+  "property",
+  "amount",
+  "kind",
+  "category",
+  "subcategory",
+  "vendor",
+  "allocation",
+  "schedule_e_line",
+  "description",
+  "account",
+  "reference",
+  "attachment_count",
+  "needs_review",
+  "source",
+];
+
+/** Transactions (as returned by listTransactions) as a spreadsheet-safe CSV. */
+export function transactionsCsv(items: object[]) {
+  return toCsv(items as Record<string, unknown>[], TRANSACTION_COLUMNS);
+}

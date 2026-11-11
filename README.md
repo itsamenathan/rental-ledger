@@ -4,6 +4,10 @@ Income and expense tracking for short-term rental properties, built for year-end
 
 - **Overview charts**: month by month, running profit vs last year, where the money goes (top categories by month),
   and a year-by-year table.
+- **Preparer package** (Taxes → Download for preparer): one zip per year with a plain-English Summary.txt, the
+  tax summary CSV, every transaction as CSV, and the receipts named by date, category and amount.
+- **Record this month's bills**: from a month page (or Add entry), add every expected recurring bill at once;
+  same-every-time bills are pre-ticked, variable ones take the real amount.
 - **Backup** (Settings → Backup, admins): one `.zip` with a live-safe snapshot of the database plus all receipts;
   restore by unzipping into the data folder. CLI: `node server/cli.ts backup --out backup.zip`.
 - **Month by month**: the overview lists every month's income, expenses and net; open a month to see it against

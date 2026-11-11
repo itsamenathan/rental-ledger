@@ -76,6 +76,7 @@ remove_subcategory, month_summary, category_by_month, year_totals, get_todo, get
     GET    /api/todo                           to-do counts (flagged, unallocated, recurring alerts, missing receipts)
     GET    /api/recurring                      learned recurring bills + alerts (missing, duplicate, amount changed)
     POST   /api/recurring/dismissals           {series_key, month?} "fine this month" / stop tracking; DELETE /:id undoes
+    GET    /api/reports/tax-package.zip?year=  for the tax preparer: Summary.txt, tax CSV, transactions CSV, receipts
     GET    /api/reports/tax?year=              JSON; /api/reports/tax.csv for CSV
     GET    /api/export/transactions.csv?year=
     GET    /api/audit?entity=transaction&entity_id=

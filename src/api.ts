@@ -164,6 +164,9 @@ export interface ChecklistItem {
   kind: "income" | "expense";
   cadence_label: string;
   typical_amount: number;
+  fixed_amount: boolean;
+  allocation: Allocation;
+  property_id: number;
   expected_date: string;
   state: ChecklistState;
   amount: number | null;

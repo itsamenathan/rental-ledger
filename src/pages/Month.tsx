@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, Navigate, useParams } from "react-router";
+import { Link, Navigate, useParams, useSearchParams } from "react-router";
 import {
   addLinkFor,
   dismissRecurring,
@@ -10,6 +10,7 @@ import {
   type TxList,
 } from "../api.ts";
 import AttentionList from "../components/AttentionList.tsx";
+import RecordBills from "../components/RecordBills.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, money, money0, monthShort, monthTitle, shiftMonth, thisMonth } from "../format.ts";
 import { useApi, useSession, useToast } from "../hooks.ts";
@@ -43,6 +44,9 @@ function Month({ ym }: { ym: string }) {
   const txs = useApi<TxList>(`transactions${qs({ month: ym, limit: 1000, sort: "date_asc" })}`);
   const rec = useApi<Recurring>("recurring");
   const [editing, setEditing] = useState<number | null>(null);
+  // /months/2026-11?record=1 (from Add entry) opens the "record bills" dialog straight away
+  const [params, setParams] = useSearchParams();
+  const [recording, setRecording] = useState(params.get("record") === "1");
   const reload = () => {
     void detail.reload();
     void txs.reload();
@@ -51,6 +55,9 @@ function Month({ ym }: { ym: string }) {
   const d = detail.data;
   const isFuture = ym > thisMonth();
   const year = ym.slice(0, 4);
+  const unpaid =
+    d?.recurring.items.filter((i) => i.kind === "expense" && (i.state === "missing" || i.state === "upcoming"))
+      .length ?? 0;
 
   return (
     <div className="page">
@@ -147,9 +154,16 @@ function Month({ ym }: { ym: string }) {
         <section className="card">
           <div className="section-head">
             <h2>Recurring bills &amp; income</h2>
-            <Link to="/recurring" className="link">
-              All recurring →
-            </Link>
+            <span className="head-actions">
+              {canWrite && unpaid > 0 && (
+                <button className="btn small primary" onClick={() => setRecording(true)}>
+                  Record {unpaid} {unpaid === 1 ? "bill" : "bills"}
+                </button>
+              )}
+              <Link to="/recurring" className="link">
+                All recurring →
+              </Link>
+            </span>
           </div>
           {d.recurring.alerts.filter((a) => a.type !== "missing").length > 0 && rec.data && (
             <AttentionList
@@ -174,6 +188,21 @@ function Month({ ym }: { ym: string }) {
       )}
 
       {editing && <TxEditModal id={editing} onClose={() => setEditing(null)} onChanged={reload} />}
+      {recording && d && (
+        <RecordBills
+          ym={ym}
+          items={d.recurring.items}
+          onClose={() => {
+            setRecording(false);
+            if (params.has("record")) setParams({}, { replace: true });
+          }}
+          onDone={() => {
+            setRecording(false);
+            if (params.has("record")) setParams({}, { replace: true });
+            reload();
+          }}
+        />
+      )}
     </div>
   );
 }

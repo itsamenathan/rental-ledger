@@ -10,8 +10,9 @@ import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
 import { todoSummary } from "../services/todo.ts";
 import { createBackup } from "../services/backup.ts";
+import { preparerPackage } from "../services/preparer.ts";
 import * as files from "../services/attachments.ts";
-import { toCsv } from "../services/csv.ts";
+import { transactionsCsv } from "../services/csv.ts";
 import { listAudit } from "../services/audit.ts";
 import { actorOf, requireAuth, type Env } from "./middleware.ts";
 
@@ -181,62 +182,25 @@ api.get("/reports/tax", (c) => c.json(reports.taxReport(getDb(), queryYear(c), q
 
 api.get("/reports/tax.csv", (c) => {
   const r = reports.taxReport(getDb(), queryYear(c), queryProperty(c));
-  const rows: Record<string, unknown>[] = [];
-  const push = (section: string, item: string, amount: number | null, extra = "") =>
-    rows.push({ section, item, amount, notes: extra });
-  push("Summary", "Property", null, r.property.name);
-  push("Summary", "Tax year", r.year);
-  push("Summary", "Rental days", r.use.rental_days);
-  push("Summary", "Personal days", r.use.personal_days);
-  push("Summary", "Rental use %", Math.round(r.use.rental_pct * 10000) / 100);
-  for (const l of r.income.by_category) push("Income", l.category, l.amount, `${l.count} transactions`);
-  for (const l of r.income.by_payer) push("Income by payer", l.payer, l.amount, `${l.count} payouts`);
-  for (const l of r.expenses.direct.by_category)
-    push("Direct expenses", l.category, l.amount, `Sch E line ${l.schedule_e_line ?? "19"}`);
-  push("Direct expenses", "Total", r.expenses.direct.total);
-  for (const l of r.expenses.indirect.by_category)
-    push("Indirect expenses", l.category, l.amount, `Sch E line ${l.schedule_e_line ?? "19"}`);
-  push("Indirect expenses", "Total", r.expenses.indirect.total);
-  push("Indirect expenses", "Deductible (× rental use %)", r.allocation.indirect_deductible);
-  for (const l of r.expenses.unallocated.by_category) push("Unallocated expenses", l.category, l.amount);
-  for (const l of r.schedule_e)
-    push(
-      "Schedule E",
-      `Line ${l.line} ${l.label}`,
-      l.total,
-      `direct ${l.direct}; indirect ${l.indirect} → ${l.indirect_allocated}`,
-    );
-  push("Totals", "Gross income", r.totals.gross_income);
-  push("Totals", "Deductible expenses", r.totals.deductible_expenses);
-  push("Totals", "Net", r.totals.net);
-  for (const ch of r.checks) push("Checks", ch.code, null, ch.message);
-  return csvResponse(c, toCsv(rows, ["section", "item", "amount", "notes"]), `tax-report-${r.year}.csv`);
+  return csvResponse(c, reports.taxReportCsv(r), `tax-report-${r.year}.csv`);
+});
+
+// Everything for the tax preparer for one year: summary, tax CSV, transactions CSV, receipts.
+api.get("/reports/tax-package.zip", (c) => {
+  const p = preparerPackage(getDb(), actorOf(c), queryYear(c), queryProperty(c));
+  return c.body(new Uint8Array(p.data), 200, {
+    "Content-Type": "application/zip",
+    "Content-Disposition": `attachment; filename="${p.filename}"; filename*=UTF-8''${encodeURIComponent(p.filename)}`,
+    "Cache-Control": "no-store",
+  });
 });
 
 api.get("/export/transactions.csv", (c) => {
   const q = { ...c.req.query(), limit: "5000" };
   const { items } = ledger.listTransactions(getDb(), q);
-  const cols = [
-    "id",
-    "date",
-    "property",
-    "amount",
-    "kind",
-    "category",
-    "subcategory",
-    "vendor",
-    "allocation",
-    "schedule_e_line",
-    "description",
-    "account",
-    "reference",
-    "attachment_count",
-    "needs_review",
-    "source",
-  ];
   return csvResponse(
     c,
-    toCsv(items as unknown as Record<string, unknown>[], cols),
+    transactionsCsv(items),
     `transactions${c.req.query("year") ? "-" + c.req.query("year") : ""}.csv`,
   );
 });

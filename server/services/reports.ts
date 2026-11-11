@@ -8,7 +8,6 @@ import {
   exists,
   isNull,
   like,
-  ne,
   not,
   sql,
   type AnyColumn,
@@ -19,6 +18,7 @@ import { attachments, categories, occupancy as occupancyTable, transactions } fr
 import { getProperty, resolvePropertyId, SCHEDULE_E_LINES } from "./ledger.ts";
 import { getTaxYear } from "./rental.ts";
 import { monthChecklist } from "./recurring.ts";
+import { toCsv } from "./csv.ts";
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const pct = (n: number) => Math.round(n * 10000) / 10000;
@@ -163,13 +163,15 @@ export function summary(db: DB, year: number, propertyId?: number) {
     .orderBy(desc(sql`abs(sum(${t.amountCents}))`))
     .all();
 
+  // Who gets paid: the vendor if set, else the subcategory (Acme PM, Electric…), else the category (Mortgage).
   const vendorTotal = sql<number>`-sum(${t.amountCents})`.mapWith(Number);
+  const payee = sql<string>`CASE WHEN ${t.vendor} <> '' THEN ${t.vendor} WHEN ${t.subcategory} <> '' THEN ${t.subcategory} ELSE ${c.name} END`;
   const byVendor = db
-    .select({ vendor: t.vendor, amount: vendorTotal, count: count() })
+    .select({ vendor: payee, amount: vendorTotal, count: count() })
     .from(t)
     .innerJoin(c, eq(c.id, t.categoryId))
-    .where(and(live, isExpense, ne(t.vendor, "")))
-    .groupBy(t.vendor)
+    .where(and(live, isExpense))
+    .groupBy(payee)
     .orderBy(desc(vendorTotal))
     .limit(10)
     .all()
@@ -648,4 +650,38 @@ export function taxReport(db: DB, year: number, propertyRef?: number | string) {
     disclaimer:
       "Estimates for organizing records. Allocation uses rental days ÷ (rental + personal days) per IRS Pub 527. Confirm figures and treatment with a tax professional.",
   };
+}
+
+/** The tax report as a flat CSV (section, item, amount, notes) for the preparer. */
+export function taxReportCsv(r: ReturnType<typeof taxReport>) {
+  const rows: Record<string, unknown>[] = [];
+  const push = (section: string, item: string, amount: number | null, extra = "") =>
+    rows.push({ section, item, amount, notes: extra });
+  push("Summary", "Property", null, r.property.name);
+  push("Summary", "Tax year", r.year);
+  push("Summary", "Rental days", r.use.rental_days);
+  push("Summary", "Personal days", r.use.personal_days);
+  push("Summary", "Rental use %", Math.round(r.use.rental_pct * 10000) / 100);
+  for (const l of r.income.by_category) push("Income", l.category, l.amount, `${l.count} transactions`);
+  for (const l of r.income.by_payer) push("Income by payer", l.payer, l.amount, `${l.count} payouts`);
+  for (const l of r.expenses.direct.by_category)
+    push("Direct expenses", l.category, l.amount, `Sch E line ${l.schedule_e_line ?? "19"}`);
+  push("Direct expenses", "Total", r.expenses.direct.total);
+  for (const l of r.expenses.indirect.by_category)
+    push("Indirect expenses", l.category, l.amount, `Sch E line ${l.schedule_e_line ?? "19"}`);
+  push("Indirect expenses", "Total", r.expenses.indirect.total);
+  push("Indirect expenses", "Deductible (× rental use %)", r.allocation.indirect_deductible);
+  for (const l of r.expenses.unallocated.by_category) push("Unallocated expenses", l.category, l.amount);
+  for (const l of r.schedule_e)
+    push(
+      "Schedule E",
+      `Line ${l.line} ${l.label}`,
+      l.total,
+      `direct ${l.direct}; indirect ${l.indirect} → ${l.indirect_allocated}`,
+    );
+  push("Totals", "Gross income", r.totals.gross_income);
+  push("Totals", "Deductible expenses", r.totals.deductible_expenses);
+  push("Totals", "Net", r.totals.net);
+  for (const ch of r.checks) push("Checks", ch.code, null, ch.message);
+  return toCsv(rows, ["section", "item", "amount", "notes"]);
 }

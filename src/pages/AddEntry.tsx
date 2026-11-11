@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import type { Allocation, Transaction } from "../api.ts";
 import TxForm, { type TxPrefill } from "../components/TxForm.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
-import { fmtDate } from "../format.ts";
+import { fmtDate, thisMonth } from "../format.ts";
 import { useToast } from "../hooks.ts";
 import { AllocationBadge, Amount } from "../lib.tsx";
 
@@ -31,9 +31,14 @@ export default function AddEntry() {
     <div className="page narrow">
       <header className="page-head">
         <h1>Add entry</h1>
-        <Link to="/import" className="link">
-          Import a CSV instead
-        </Link>
+        <span className="head-actions">
+          <Link to={`/months/${thisMonth()}?record=1`} className="link">
+            Record this month's bills
+          </Link>
+          <Link to="/import" className="link">
+            Import a CSV
+          </Link>
+        </span>
       </header>
       <div className="card">
         <TxForm

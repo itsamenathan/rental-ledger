@@ -92,13 +92,14 @@ export default function Reports() {
             </select>
           )}
           <YearSelect value={year} onChange={setYear} />
-          <a className="btn" href={`/api/reports/tax.csv${qs({ year, property_id: propertyId })}`}>
-            CSV
+          <a
+            className="btn primary"
+            href={`/api/reports/tax-package.zip${qs({ year, property_id: propertyId })}`}
+            title="Summary, tax CSV, all transactions and receipts for the year, in one zip"
+          >
+            Download for preparer
           </a>
-          <a className="btn" href={`/api/export/transactions.csv${qs({ year, property_id: propertyId })}`}>
-            Transactions CSV
-          </a>
-          <button className="btn primary" onClick={() => window.print()}>
+          <button className="btn" onClick={() => window.print()}>
             Print / PDF
           </button>
         </div>

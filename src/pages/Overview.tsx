@@ -278,7 +278,7 @@ export default function Overview() {
               />
             </section>
             <section className="card">
-              <h2>Top vendors</h2>
+              <h2>Who you pay</h2>
               {s.top_vendors.length ? (
                 <HBars
                   rows={s.top_vendors.map((v) => ({
@@ -287,7 +287,9 @@ export default function Overview() {
                     value: v.amount,
                     sub: `${v.count} transactions`,
                   }))}
-                  onPick={(v) => void navigate(`/transactions?year=${year}&vendor=${encodeURIComponent(String(v))}`)}
+                  onPick={(v) =>
+                    void navigate(`/transactions?year=${year}&kind=expense&q=${encodeURIComponent(String(v))}`)
+                  }
                 />
               ) : (
                 <p className="muted">Add vendors to expenses to see who you pay most.</p>

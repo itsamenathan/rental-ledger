@@ -5,7 +5,8 @@ const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFra
 
 export const money = (n: number | null | undefined) => (n == null ? "—" : usd.format(n));
 export const money0 = (n: number | null | undefined) => (n == null ? "—" : usd0.format(n));
-export const moneyCompact = (n: number) => (Math.abs(n) >= 10000 ? "$" + compact.format(n) : usd0.format(n));
+export const moneyCompact = (n: number) =>
+  Math.abs(n) >= 10000 ? (n < 0 ? "-$" : "$") + compact.format(Math.abs(n)) : usd0.format(n);
 export const percent = (n: number | null | undefined, digits = 1) =>
   n == null ? "—" : `${(n * 100).toFixed(digits)}%`;
 export const today = () => {
