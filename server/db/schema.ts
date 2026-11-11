@@ -1,0 +1,251 @@
+/**
+ * Database schema. Change tables here, then run `vp run db:generate` to create a migration in
+ * server/db/migrations. Migrations are applied automatically on startup.
+ */
+import { sql } from "drizzle-orm";
+import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+
+const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
+const createdAt = () => text("created_at").notNull().default(now);
+
+export const users = sqliteTable(
+  "users",
+  {
+    id: integer("id").primaryKey(),
+    email: text("email").notNull(),
+    name: text("name").notNull().default(""),
+    passwordHash: text("password_hash"),
+    role: text("role", { enum: ["admin", "member", "viewer"] })
+      .notNull()
+      .default("member"),
+    oidcSub: text("oidc_sub").unique(),
+    disabled: integer("disabled", { mode: "boolean" }).notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("users_email_unique").on(sql`lower(${t.email})`),
+    check("users_role_check", sql`${t.role} IN ('admin','member','viewer')`),
+  ],
+);
+
+export const sessions = sqliteTable(
+  "sessions",
+  {
+    /** sha256 of the session token */
+    id: text("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (t) => [index("sessions_user").on(t.userId)],
+);
+
+export const apiKeys = sqliteTable(
+  "api_keys",
+  {
+    id: integer("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    prefix: text("prefix").notNull(),
+    /** sha256 of the full key */
+    keyHash: text("key_hash").notNull().unique(),
+    scope: text("scope", { enum: ["read", "write"] }).notNull(),
+    createdAt: createdAt(),
+    lastUsedAt: text("last_used_at"),
+    revokedAt: text("revoked_at"),
+  },
+  (t) => [check("api_keys_scope_check", sql`${t.scope} IN ('read','write')`)],
+);
+
+export const properties = sqliteTable(
+  "properties",
+  {
+    id: integer("id").primaryKey(),
+    name: text("name").notNull(),
+    address: text("address").notNull().default(""),
+    /** YYYY-MM-DD */
+    placedInService: text("placed_in_service"),
+    /** Depreciable basis, excluding land */
+    buildingBasisCents: integer("building_basis_cents"),
+    recoveryYears: real("recovery_years").notNull().default(27.5),
+    notes: text("notes").notNull().default(""),
+    archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("properties_name_unique").on(sql`lower(${t.name})`)],
+);
+
+export const categories = sqliteTable(
+  "categories",
+  {
+    id: integer("id").primaryKey(),
+    name: text("name").notNull(),
+    kind: text("kind", { enum: ["income", "expense"] }).notNull(),
+    defaultAllocation: text("default_allocation", { enum: ["direct", "indirect"] }),
+    scheduleELine: text("schedule_e_line"),
+    description: text("description").notNull().default(""),
+    sortOrder: integer("sort_order").notNull().default(0),
+    archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+  },
+  (t) => [
+    uniqueIndex("categories_name_unique").on(sql`lower(${t.name})`),
+    check("categories_kind_check", sql`${t.kind} IN ('income','expense')`),
+    check("categories_allocation_check", sql`${t.defaultAllocation} IN ('direct','indirect')`),
+  ],
+);
+
+/**
+ * Saved subcategories, so they can be offered before first use. Transactions store the subcategory as text;
+ * rename/remove in services/categories.ts keep both in step.
+ */
+export const subcategories = sqliteTable(
+  "subcategories",
+  {
+    id: integer("id").primaryKey(),
+    categoryId: integer("category_id")
+      .notNull()
+      .references(() => categories.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("subcategories_category_name").on(t.categoryId, t.name)],
+);
+
+export const transactions = sqliteTable(
+  "transactions",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    /** Cash-basis date paid/received, YYYY-MM-DD */
+    date: text("date").notNull(),
+    /** Signed: income positive, expenses negative */
+    amountCents: integer("amount_cents").notNull(),
+    categoryId: integer("category_id")
+      .notNull()
+      .references(() => categories.id),
+    subcategory: text("subcategory").notNull().default(""),
+    vendor: text("vendor").notNull().default(""),
+    allocation: text("allocation", { enum: ["direct", "indirect"] }),
+    description: text("description").notNull().default(""),
+    account: text("account").notNull().default(""),
+    reference: text("reference").notNull().default(""),
+    needsReview: integer("needs_review", { mode: "boolean" }).notNull().default(false),
+    reviewNote: text("review_note").notNull().default(""),
+    source: text("source").notNull().default("web"),
+    externalId: text("external_id").unique(),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+    updatedAt: text("updated_at").notNull().default(now),
+    updatedBy: integer("updated_by").references(() => users.id),
+    deletedAt: text("deleted_at"),
+  },
+  (t) => [
+    check("transactions_date_check", sql`${t.date} GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]'`),
+    check("transactions_allocation_check", sql`${t.allocation} IN ('direct','indirect')`),
+    index("tx_date")
+      .on(t.date)
+      .where(sql`${t.deletedAt} IS NULL`),
+    index("tx_property_date").on(t.propertyId, t.date),
+    index("tx_category").on(t.categoryId),
+    index("tx_review")
+      .on(t.needsReview)
+      .where(sql`${t.needsReview} = 1 AND ${t.deletedAt} IS NULL`),
+  ],
+);
+
+export const attachments = sqliteTable(
+  "attachments",
+  {
+    id: integer("id").primaryKey(),
+    transactionId: integer("transaction_id")
+      .notNull()
+      .references(() => transactions.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    contentType: text("content_type").notNull(),
+    size: integer("size").notNull(),
+    sha256: text("sha256").notNull(),
+    storageKey: text("storage_key").notNull().unique(),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+  },
+  (t) => [index("attachments_tx").on(t.transactionId)],
+);
+
+export const occupancy = sqliteTable(
+  "occupancy",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    /** YYYY-MM */
+    month: text("month").notNull(),
+    nightsAvailable: integer("nights_available"),
+    nightsBooked: integer("nights_booked").notNull().default(0),
+    ownerNights: integer("owner_nights").notNull().default(0),
+    checkIns: integer("check_ins").notNull().default(0),
+    notes: text("notes").notNull().default(""),
+  },
+  (t) => [
+    uniqueIndex("occupancy_property_month").on(t.propertyId, t.month),
+    check("occupancy_month_check", sql`${t.month} GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]'`),
+  ],
+);
+
+export const taxYears = sqliteTable(
+  "tax_years",
+  {
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    year: integer("year").notNull(),
+    /** From Form 1098 */
+    mortgageInterestCents: integer("mortgage_interest_cents"),
+    rentalDaysOverride: integer("rental_days_override"),
+    personalDaysOverride: integer("personal_days_override"),
+    notes: text("notes").notNull().default(""),
+  },
+  (t) => [primaryKey({ columns: [t.propertyId, t.year] })],
+);
+
+export const auditLog = sqliteTable(
+  "audit_log",
+  {
+    id: integer("id").primaryKey(),
+    at: text("at").notNull().default(now),
+    userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
+    apiKeyId: integer("api_key_id").references(() => apiKeys.id, { onDelete: "set null" }),
+    /** web | api | mcp | cli */
+    via: text("via").notNull(),
+    action: text("action").notNull(),
+    entity: text("entity").notNull(),
+    entityId: integer("entity_id"),
+    /** JSON */
+    changes: text("changes", { mode: "json" }),
+  },
+  (t) => [index("audit_entity").on(t.entity, t.entityId)],
+);
+
+/**
+ * User feedback on recurring-expense detection. A row with month = '' stops tracking the whole series;
+ * a row with a month (YYYY-MM) says "nothing was due / it's fine" for that one month.
+ */
+export const recurringDismissals = sqliteTable(
+  "recurring_dismissals",
+  {
+    id: integer("id").primaryKey(),
+    /** property:category:vendor:subcategory, see services/recurring.ts */
+    seriesKey: text("series_key").notNull(),
+    month: text("month").notNull().default(""),
+    note: text("note").notNull().default(""),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+  },
+  (t) => [uniqueIndex("recurring_dismissals_unique").on(t.seriesKey, t.month)],
+);

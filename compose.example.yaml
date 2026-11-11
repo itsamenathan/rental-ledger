@@ -1,0 +1,21 @@
+# Example deployment. Put it behind your reverse proxy (TLS terminates there).
+services:
+  rental-ledger:
+    image: rental-ledger:latest
+    build: .
+    restart: unless-stopped
+    environment:
+      PUBLIC_URL: https://rental.example.com
+      # Optional OIDC (e.g. Pocket ID). Callback: ${PUBLIC_URL}/api/auth/oidc/callback
+      # OIDC_ISSUER: https://id.example.com
+      # OIDC_CLIENT_ID: ...
+      # OIDC_CLIENT_SECRET: ...
+      # OIDC_NAME: Pocket ID
+      # OIDC_AUTO_CREATE: "false"
+      # DISABLE_PASSWORD_LOGIN: "true"
+    volumes:
+      - rental-data:/data
+    ports:
+      - "3000:3000"
+volumes:
+  rental-data:

@@ -1,0 +1,297 @@
+import { Hono, type Context } from "hono";
+import { z } from "zod";
+import { getDb } from "../db.ts";
+import { AppError, badRequest, requireAdmin } from "../context.ts";
+import * as auth from "../services/auth.ts";
+import * as ledger from "../services/ledger.ts";
+import * as rental from "../services/rental.ts";
+import * as reports from "../services/reports.ts";
+import * as recurring from "../services/recurring.ts";
+import * as cats from "../services/categories.ts";
+import { todoSummary } from "../services/todo.ts";
+import { createBackup } from "../services/backup.ts";
+import * as files from "../services/attachments.ts";
+import { toCsv } from "../services/csv.ts";
+import { listAudit } from "../services/audit.ts";
+import { actorOf, requireAuth, type Env } from "./middleware.ts";
+
+export const api = new Hono<Env>();
+api.use("*", requireAuth);
+
+const id = (c: Context) => {
+  const n = Number(c.req.param("id"));
+  if (!Number.isInteger(n) || n <= 0) throw badRequest("Invalid id");
+  return n;
+};
+const body = async (c: Context) => {
+  try {
+    return await c.req.json();
+  } catch {
+    throw badRequest("Expected a JSON body");
+  }
+};
+const queryYear = (c: Context) => {
+  const y = Number(c.req.query("year") ?? new Date().getFullYear());
+  if (!Number.isInteger(y) || y < 2000 || y > 2100) throw badRequest("Invalid year");
+  return y;
+};
+const queryProperty = (c: Context) => {
+  const p = c.req.query("property_id") ?? c.req.query("property");
+  return p ? (/^\d+$/.test(p) ? Number(p) : ledger.resolvePropertyId(getDb(), p)) : undefined;
+};
+
+// ---------------- overview ----------------
+
+api.get("/overview", (c) => {
+  const db = getDb();
+  return c.json({
+    properties: ledger.listProperties(db),
+    categories: ledger.listCategories(db),
+    years: reports.availableYears(db),
+    schedule_e_lines: ledger.SCHEDULE_E_LINES,
+  });
+});
+
+// ---------------- properties ----------------
+
+api.get("/properties", (c) => c.json(ledger.listProperties(getDb())));
+api.post("/properties", async (c) => c.json(ledger.createProperty(getDb(), actorOf(c), await body(c)), 201));
+api.get("/properties/:id", (c) => c.json(ledger.getProperty(getDb(), id(c))));
+api.patch("/properties/:id", async (c) => c.json(ledger.updateProperty(getDb(), actorOf(c), id(c), await body(c))));
+
+// ---------------- categories ----------------
+
+api.get("/categories", (c) => c.json(ledger.listCategories(getDb())));
+api.post("/categories", async (c) => c.json(ledger.createCategory(getDb(), actorOf(c), await body(c)), 201));
+api.patch("/categories/:id", async (c) => c.json(ledger.updateCategory(getDb(), actorOf(c), id(c), await body(c))));
+api.delete("/categories/:id", async (c) => {
+  // optional body {move_to: category} moves its transactions there first (merge)
+  const raw = (await c.req.text()) ? await body(c) : {};
+  return c.json(cats.deleteCategoryMoving(getDb(), actorOf(c), id(c), raw));
+});
+api.get("/categories/tree", (c) => c.json(cats.categoryTree(getDb())));
+api.get("/subcategories", (c) => c.json(cats.listSubcategories(getDb())));
+api.post("/subcategories", async (c) => c.json(cats.addSubcategory(getDb(), actorOf(c), await body(c)), 201));
+api.post("/subcategories/rename", async (c) => c.json(cats.renameSubcategory(getDb(), actorOf(c), await body(c))));
+api.post("/subcategories/remove", async (c) => c.json(cats.removeSubcategory(getDb(), actorOf(c), await body(c))));
+
+// ---------------- transactions ----------------
+
+api.get("/transactions", (c) => c.json(ledger.listTransactions(getDb(), c.req.query())));
+api.post("/transactions", async (c) => {
+  const b = await body(c);
+  const db = getDb();
+  if (Array.isArray(b)) return c.json(ledger.bulkCreate(db, actorOf(c), { transactions: b }), 201);
+  return c.json(ledger.createTransaction(db, actorOf(c), b), 201);
+});
+api.post("/transactions/bulk", async (c) => c.json(ledger.bulkCreate(getDb(), actorOf(c), await body(c))));
+api.post("/transactions/bulk-update", async (c) => c.json(ledger.bulkUpdate(getDb(), actorOf(c), await body(c))));
+api.post("/transactions/bulk-delete", async (c) => {
+  const { ids } = z.object({ ids: z.array(z.number().int()).min(1).max(5000) }).parse(await body(c));
+  return c.json(ledger.bulkDelete(getDb(), actorOf(c), ids));
+});
+api.get("/transactions/:id", (c) => {
+  const db = getDb();
+  const t = ledger.getTransaction(db, id(c));
+  return c.json({ ...t, attachments: files.listAttachments(db, t.id) });
+});
+api.patch("/transactions/:id", async (c) =>
+  c.json(ledger.updateTransaction(getDb(), actorOf(c), id(c), await body(c))),
+);
+api.delete("/transactions/:id", (c) => c.json(ledger.deleteTransaction(getDb(), actorOf(c), id(c))));
+api.post("/transactions/:id/restore", (c) => c.json(ledger.restoreTransaction(getDb(), actorOf(c), id(c))));
+
+api.get("/transactions/:id/attachments", (c) => c.json(files.listAttachments(getDb(), id(c))));
+api.post("/transactions/:id/attachments", async (c) => {
+  const form = await c.req.formData();
+  const uploaded = form.getAll("file").filter((f): f is File => f instanceof File);
+  if (!uploaded.length) throw badRequest('Send multipart/form-data with one or more "file" fields');
+  const out = [];
+  for (const f of uploaded) {
+    out.push(
+      await files.addAttachment(getDb(), actorOf(c), id(c), {
+        filename: f.name,
+        contentType: f.type || "application/octet-stream",
+        data: new Uint8Array(await f.arrayBuffer()),
+      }),
+    );
+  }
+  return c.json(out, 201);
+});
+api.get("/attachments/:id", async (c) => {
+  const { meta, data } = await files.readAttachment(getDb(), id(c));
+  const inline = /^(image\/|application\/pdf)/.test(meta.content_type) && c.req.query("download") == null;
+  return c.body(new Uint8Array(data), 200, {
+    "Content-Type": meta.content_type,
+    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${meta.filename}"`,
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+    "Cache-Control": "private, max-age=3600",
+  });
+});
+api.delete("/attachments/:id", async (c) => {
+  await files.deleteAttachment(getDb(), actorOf(c), id(c));
+  return c.json({ ok: true });
+});
+
+api.get("/suggestions", (c) => c.json(ledger.suggestions(getDb())));
+
+// ---------------- occupancy & tax inputs ----------------
+
+api.get("/occupancy", (c) =>
+  c.json(
+    rental.listOccupancy(getDb(), {
+      year: c.req.query("year") ? queryYear(c) : undefined,
+      property_id: queryProperty(c),
+    }),
+  ),
+);
+api.put("/occupancy", async (c) => {
+  const b = await body(c);
+  const db = getDb();
+  if (Array.isArray(b)) return c.json(b.map((row) => rental.upsertOccupancy(db, actorOf(c), row)));
+  return c.json(rental.upsertOccupancy(db, actorOf(c), b));
+});
+api.delete("/occupancy/:id", (c) => {
+  rental.deleteOccupancy(getDb(), actorOf(c), id(c));
+  return c.json({ ok: true });
+});
+
+api.get("/tax-years/:year", (c) => {
+  const db = getDb();
+  return c.json(rental.getTaxYear(db, ledger.resolvePropertyId(db, queryProperty(c)), Number(c.req.param("year"))));
+});
+api.put("/tax-years/:year", async (c) =>
+  c.json(rental.setTaxYear(getDb(), actorOf(c), { ...(await body(c)), year: Number(c.req.param("year")) })),
+);
+
+// ---------------- reports & exports ----------------
+
+api.get("/reports/summary", (c) => c.json(reports.summary(getDb(), queryYear(c), queryProperty(c))));
+api.get("/reports/month", (c) =>
+  c.json(reports.monthDetail(getDb(), recurring.assertMonth(c.req.query("month")), queryProperty(c))),
+);
+api.get("/reports/years", (c) => c.json(reports.yearTotals(getDb(), queryProperty(c))));
+api.get("/reports/categories", (c) => c.json(reports.categoryMonths(getDb(), queryYear(c), queryProperty(c))));
+api.get("/todo", (c) => c.json(todoSummary(getDb(), { propertyId: queryProperty(c) })));
+api.get("/recurring", (c) => c.json(recurring.recurring(getDb(), { propertyId: queryProperty(c) })));
+api.post("/recurring/dismissals", async (c) => c.json(recurring.dismiss(getDb(), actorOf(c), await body(c)), 201));
+api.delete("/recurring/dismissals/:id", (c) => c.json(recurring.undismiss(getDb(), actorOf(c), id(c))));
+api.get("/reports/tax", (c) => c.json(reports.taxReport(getDb(), queryYear(c), queryProperty(c))));
+
+api.get("/reports/tax.csv", (c) => {
+  const r = reports.taxReport(getDb(), queryYear(c), queryProperty(c));
+  const rows: Record<string, unknown>[] = [];
+  const push = (section: string, item: string, amount: number | null, extra = "") =>
+    rows.push({ section, item, amount, notes: extra });
+  push("Summary", "Property", null, r.property.name);
+  push("Summary", "Tax year", r.year);
+  push("Summary", "Rental days", r.use.rental_days);
+  push("Summary", "Personal days", r.use.personal_days);
+  push("Summary", "Rental use %", Math.round(r.use.rental_pct * 10000) / 100);
+  for (const l of r.income.by_category) push("Income", l.category, l.amount, `${l.count} transactions`);
+  for (const l of r.income.by_payer) push("Income by payer", l.payer, l.amount, `${l.count} payouts`);
+  for (const l of r.expenses.direct.by_category)
+    push("Direct expenses", l.category, l.amount, `Sch E line ${l.schedule_e_line ?? "19"}`);
+  push("Direct expenses", "Total", r.expenses.direct.total);
+  for (const l of r.expenses.indirect.by_category)
+    push("Indirect expenses", l.category, l.amount, `Sch E line ${l.schedule_e_line ?? "19"}`);
+  push("Indirect expenses", "Total", r.expenses.indirect.total);
+  push("Indirect expenses", "Deductible (× rental use %)", r.allocation.indirect_deductible);
+  for (const l of r.expenses.unallocated.by_category) push("Unallocated expenses", l.category, l.amount);
+  for (const l of r.schedule_e)
+    push(
+      "Schedule E",
+      `Line ${l.line} ${l.label}`,
+      l.total,
+      `direct ${l.direct}; indirect ${l.indirect} → ${l.indirect_allocated}`,
+    );
+  push("Totals", "Gross income", r.totals.gross_income);
+  push("Totals", "Deductible expenses", r.totals.deductible_expenses);
+  push("Totals", "Net", r.totals.net);
+  for (const ch of r.checks) push("Checks", ch.code, null, ch.message);
+  return csvResponse(c, toCsv(rows, ["section", "item", "amount", "notes"]), `tax-report-${r.year}.csv`);
+});
+
+api.get("/export/transactions.csv", (c) => {
+  const q = { ...c.req.query(), limit: "5000" };
+  const { items } = ledger.listTransactions(getDb(), q);
+  const cols = [
+    "id",
+    "date",
+    "property",
+    "amount",
+    "kind",
+    "category",
+    "subcategory",
+    "vendor",
+    "allocation",
+    "schedule_e_line",
+    "description",
+    "account",
+    "reference",
+    "attachment_count",
+    "needs_review",
+    "source",
+  ];
+  return csvResponse(
+    c,
+    toCsv(items as unknown as Record<string, unknown>[], cols),
+    `transactions${c.req.query("year") ? "-" + c.req.query("year") : ""}.csv`,
+  );
+});
+
+// Full backup (admin): database snapshot + receipts as a zip.
+api.get("/backup", (c) => {
+  const b = createBackup(getDb(), actorOf(c));
+  return c.body(new Uint8Array(b.data), 200, {
+    "Content-Type": "application/zip",
+    "Content-Disposition": `attachment; filename="${b.filename}"`,
+    "Cache-Control": "no-store",
+  });
+});
+
+function csvResponse(c: Context, csv: string, filename: string) {
+  return c.body(csv, 200, {
+    "Content-Type": "text/csv; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${filename}"`,
+  });
+}
+
+// ---------------- audit ----------------
+
+api.get("/audit", (c) => {
+  const q = z
+    .object({
+      entity: z.string().optional(),
+      entity_id: z.coerce.number().int().optional(),
+      limit: z.coerce.number().int().min(1).max(1000).default(100),
+      offset: z.coerce.number().int().min(0).default(0),
+    })
+    .parse(c.req.query());
+  return c.json(listAudit(getDb(), q));
+});
+
+// ---------------- API keys & users ----------------
+
+api.get("/api-keys", (c) => c.json(auth.listApiKeys(getDb(), actorOf(c))));
+api.post("/api-keys", async (c) =>
+  c.json(auth.createApiKey(getDb(), actorOf(c), auth.apiKeyInput.parse(await body(c))), 201),
+);
+api.delete("/api-keys/:id", (c) => {
+  auth.revokeApiKey(getDb(), actorOf(c), id(c));
+  return c.json({ ok: true });
+});
+
+api.get("/users", (c) => c.json(auth.listUsers(getDb(), actorOf(c))));
+api.post("/users", async (c) => {
+  const actor = actorOf(c);
+  requireAdmin(actor);
+  if (actor.apiKeyId) throw new AppError(403, "Manage users from a browser session");
+  return c.json(await auth.createUser(getDb(), actor, auth.userCreateInput.parse(await body(c))), 201);
+});
+api.patch("/users/:id", async (c) => {
+  const actor = actorOf(c);
+  if (actor.apiKeyId) throw new AppError(403, "Manage users from a browser session");
+  return c.json(await auth.updateUser(getDb(), actor, id(c), auth.userUpdateInput.parse(await body(c))));
+});

@@ -1,0 +1,99 @@
+import { useState } from "react";
+import { Link, useLocation } from "react-router";
+import { addLinkFor, dismissRecurring, qs, type RecurringAlert, type RecurringSeries } from "../api.ts";
+import { dateInMonth, monthShort } from "../format.ts";
+import { useSession, useToast } from "../hooks.ts";
+
+const ICON: Record<RecurringAlert["type"], string> = {
+  missing: "?",
+  duplicate: "2×",
+  amount_changed: "Δ",
+  unusual: "!",
+};
+
+/** Recurring-bill alerts with one-click fixes: add the missing entry, or tell the app it's fine. */
+export default function AttentionList({
+  alerts,
+  series,
+  limit,
+  onChanged,
+}: {
+  alerts: RecurringAlert[];
+  series: RecurringSeries[];
+  limit?: number;
+  onChanged: () => void;
+}) {
+  const { canWrite } = useSession();
+  const here = useLocation().pathname;
+  const toast = useToast();
+  const [showAll, setShowAll] = useState(false);
+  const shown = limit && !showAll ? alerts.slice(0, limit) : alerts;
+  if (!alerts.length) return <p className="muted small">Nothing missing. All recurring bills look up to date.</p>;
+
+  const dismiss = async (a: RecurringAlert, whole: boolean) => {
+    try {
+      await dismissRecurring(a.series_key, whole ? null : a.month);
+      toast({ text: whole ? `Stopped tracking ${a.label}` : "Got it, won't flag that again", kind: "ok" });
+      onChanged();
+    } catch (e) {
+      toast({ text: (e as Error).message, kind: "error" });
+    }
+  };
+
+  return (
+    <>
+      <ul className="checks attention-list">
+        {shown.map((a) => {
+          const s = series.find((x) => x.key === a.series_key);
+          return (
+            <li key={`${a.series_key}|${a.type}|${a.month}`} className={`check-item ${a.level}`}>
+              <span className="status-icon">{ICON[a.type]}</span>
+              <div className="attention-body">
+                <div>{a.message}</div>
+                <div className="attention-actions">
+                  <Link to={`/months/${a.month}`} className="link small">
+                    Open {monthShort(a.month)}
+                  </Link>
+                  {canWrite && (
+                    <>
+                      {a.type === "missing" && s && (
+                        <Link className="btn small" to={addLinkFor(s, dateInMonth(a.month, s.expected_day), here)}>
+                          Add it
+                        </Link>
+                      )}
+                      {a.type === "duplicate" && a.ids && (
+                        <Link
+                          className="btn small"
+                          to={`/transactions${qs({ month: a.month, category: s?.category_id, vendor: s?.vendor || undefined, q: s?.subcategory || undefined })}`}
+                        >
+                          Review
+                        </Link>
+                      )}
+                      <button className="btn small ghost" onClick={() => void dismiss(a, false)}>
+                        {a.type === "missing"
+                          ? "Nothing was due"
+                          : a.type === "duplicate"
+                            ? "Not a duplicate"
+                            : "Looks right"}
+                      </button>
+                      {a.type === "missing" && (
+                        <button className="link small" onClick={() => void dismiss(a, true)}>
+                          Stop tracking {a.label}
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      {limit && alerts.length > limit && (
+        <button className="link small" onClick={() => setShowAll((v) => !v)}>
+          {showAll ? "Show fewer" : `Show all ${alerts.length}`}
+        </button>
+      )}
+    </>
+  );
+}

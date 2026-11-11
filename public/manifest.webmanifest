@@ -1,0 +1,9 @@
+{
+  "name": "Rental Ledger",
+  "short_name": "Ledger",
+  "start_url": "/add",
+  "display": "standalone",
+  "background_color": "#f7f7f5",
+  "theme_color": "#1f5f4a",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
