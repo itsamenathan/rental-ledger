@@ -10,6 +10,7 @@ import * as reports from "../services/reports.ts";
 import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
 import { todoSummary } from "../services/todo.ts";
+import { annotate, undoAudit } from "../services/undo.ts";
 import * as files from "../services/attachments.ts";
 import { listAudit } from "../services/audit.ts";
 import type { Env } from "./middleware.ts";
@@ -492,20 +493,32 @@ export function buildMcpServer(actor: Actor) {
   );
 
   server.registerTool(
+    "undo_change",
+    {
+      description:
+        "Reverse one audit-log entry by id (from recent_changes): puts back edited fields, restores deleted transactions, removes added ones, etc. Ask the user first.",
+      inputSchema: { audit_id: z.number().int() },
+    },
+    wrap(({ audit_id }) => undoAudit(db, actor, audit_id)),
+  );
+
+  server.registerTool(
     "recent_changes",
     {
-      description: "Audit log of recent changes (who, via web/api/mcp, what changed).",
+      description:
+        "Audit log of recent changes (who, via web/api/mcp, what changed). Entries with an `undo` description can be reversed with undo_change.",
       inputSchema: { limit: z.number().int().max(200).default(30), transaction_id: z.number().int().optional() },
       annotations: ro,
     },
     wrap(({ limit, transaction_id }) =>
-      listAudit(db, { limit, entity: transaction_id ? "transaction" : undefined, entity_id: transaction_id }).map(
-        ({ id: _id, user_id: _u, api_key_id: _k, user_email, api_key_name, ...r }) => ({
-          ...r,
-          user: user_email,
-          api_key: api_key_name,
-        }),
-      ),
+      annotate(
+        db,
+        listAudit(db, { limit, entity: transaction_id ? "transaction" : undefined, entity_id: transaction_id }),
+      ).map(({ user_id: _u, api_key_id: _k, user_email, api_key_name, ...r }) => ({
+        ...r,
+        user: user_email,
+        api_key: api_key_name,
+      })),
     ),
   );
 

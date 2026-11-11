@@ -30,7 +30,7 @@ Tools: get_overview, list_categories, search_transactions, get_transaction, add_
 bulk_add_transactions, update_transaction, bulk_update_transactions, delete_transaction, flag_for_review,
 attach_receipt, get_summary, get_tax_report, list_occupancy, set_occupancy, set_tax_year_inputs,
 add_category, update_category, delete_category, add_subcategory, rename_subcategory,
-remove_subcategory, month_summary, category_by_month, year_totals, get_todo, get_recurring, dismiss_recurring, recent_changes.
+remove_subcategory, month_summary, category_by_month, year_totals, get_todo, get_recurring, dismiss_recurring, recent_changes, undo_change.
 
 ## Data model
 
@@ -79,7 +79,8 @@ remove_subcategory, month_summary, category_by_month, year_totals, get_todo, get
     GET    /api/reports/tax-package.zip?year=  for the tax preparer: Summary.txt, tax CSV, transactions CSV, receipts
     GET    /api/reports/tax?year=              JSON; /api/reports/tax.csv for CSV
     GET    /api/export/transactions.csv?year=
-    GET    /api/audit?entity=transaction&entity_id=
+    GET    /api/audit?entity=transaction&entity_id=   each entry has "undo" (what undo does) and "undone"
+    POST   /api/audit/:id/undo                reverse one change
 
 Errors return \`{"error": "message"}\` with an HTTP status.
 

@@ -98,3 +98,35 @@ describe("categories", () => {
     expect(ledger.getTransaction(db, t.id).category).toBe("Services & Subscriptions");
   });
 });
+
+describe("undo from the audit log", () => {
+  it("reverses edits, deletes and subcategory renames, once", async () => {
+    const { db, actor, add, subs } = setup();
+    const { undoAudit, annotate } = await import("./services/undo.ts");
+    const { listAudit } = await import("./services/audit.ts");
+    const last = (action: string, entity: string) =>
+      annotate(db, listAudit(db, { limit: 50 })).find((r) => r.action === action && r.entity === entity)!;
+
+    const t = add("Supplies", "", -50);
+    ledger.updateTransaction(db, actor, t.id, { amount: -42.5, vendor: "Costco" });
+    const edit = last("update", "transaction");
+    expect(edit.undo).toMatch(/amount/);
+    undoAudit(db, actor, edit.id);
+    expect(ledger.getTransaction(db, t.id)).toMatchObject({ amount: -50, vendor: "" });
+    expect(() => undoAudit(db, actor, edit.id)).toThrow(/already undone/);
+    expect(last("update", "transaction").id).not.toBe(edit.id); // the undo itself was audited
+
+    ledger.deleteTransaction(db, actor, t.id);
+    undoAudit(db, actor, last("delete", "transaction").id);
+    expect(ledger.getTransaction(db, t.id).amount).toBe(-50);
+
+    add("Utilities", "Gas");
+    add("Utilities", "Gas");
+    cats.renameSubcategory(db, actor, { category: "Utilities", from: "Gas", to: "Propane" });
+    undoAudit(db, actor, last("rename", "subcategory").id);
+    expect(subs("Utilities")).toEqual(["Gas:2"]);
+
+    const login = annotate(db, [{ id: 0, action: "login", entity: "user", entity_id: 1, changes: null }])[0]!;
+    expect(login.undo).toBeNull();
+  });
+});

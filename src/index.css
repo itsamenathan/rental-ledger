@@ -1046,6 +1046,11 @@ tr.dirty td {
   gap: 0.25rem;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 .tabs a,
 .tabs button {
@@ -2093,6 +2098,11 @@ hr.sep {
   .table-card {
     overflow-x: auto;
   }
+}
+.audit-details {
+  font-size: 0.85rem;
+  color: var(--text-2);
+  max-width: 34rem;
 }
 @media print {
   :root {

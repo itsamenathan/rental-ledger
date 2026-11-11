@@ -75,7 +75,12 @@ export function upsertOccupancy(db: DB, actor: Actor | null, raw: unknown) {
     .onConflictDoUpdate({ target: [occupancy.propertyId, occupancy.month], set: values })
     .run();
   const after = findOccupancy(db, propertyId, o.month)!;
-  audit(db, actor, before ? "update" : "create", "occupancy", after.id, before ? diff(before, after) : after);
+  if (!before) audit(db, actor, "create", "occupancy", after.id, after);
+  else {
+    const changes = diff(before, after);
+    // re-imports often save a month unchanged; don't clutter the audit log with empty edits
+    if (Object.keys(changes).length) audit(db, actor, "update", "occupancy", after.id, changes);
+  }
   return after;
 }
 

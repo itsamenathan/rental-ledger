@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, notInArray } from "drizzle-orm";
 import type { DB } from "../db.ts";
 import { apiKeys, auditLog, users } from "../db/schema.ts";
 
@@ -7,6 +7,8 @@ export interface AuditQuery {
   entity_id?: number;
   limit: number;
   offset?: number;
+  /** leave out sign-ins/outs */
+  hide_logins?: boolean;
 }
 
 /** Recent changes, newest first, with the user and API key that made them. */
@@ -32,6 +34,7 @@ export function listAudit(db: DB, q: AuditQuery) {
       and(
         q.entity ? eq(auditLog.entity, q.entity) : undefined,
         q.entity_id ? eq(auditLog.entityId, q.entity_id) : undefined,
+        q.hide_logins ? notInArray(auditLog.action, ["login", "logout"]) : undefined,
       ),
     )
     .orderBy(desc(auditLog.id))

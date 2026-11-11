@@ -11,6 +11,7 @@ import * as cats from "../services/categories.ts";
 import { todoSummary } from "../services/todo.ts";
 import { createBackup } from "../services/backup.ts";
 import { preparerPackage } from "../services/preparer.ts";
+import { annotate, undoAudit } from "../services/undo.ts";
 import * as files from "../services/attachments.ts";
 import { transactionsCsv } from "../services/csv.ts";
 import { listAudit } from "../services/audit.ts";
@@ -231,10 +232,13 @@ api.get("/audit", (c) => {
       entity_id: z.coerce.number().int().optional(),
       limit: z.coerce.number().int().min(1).max(1000).default(100),
       offset: z.coerce.number().int().min(0).default(0),
+      hide_logins: z.preprocess((v) => v === "true", z.boolean()).optional(),
     })
     .parse(c.req.query());
-  return c.json(listAudit(getDb(), q));
+  const db = getDb();
+  return c.json(annotate(db, listAudit(db, q)));
 });
+api.post("/audit/:id/undo", (c) => c.json(undoAudit(getDb(), actorOf(c), id(c))));
 
 // ---------------- API keys & users ----------------
 

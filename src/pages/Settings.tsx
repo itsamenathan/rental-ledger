@@ -19,7 +19,7 @@ export default function Settings() {
         <NavLink to="/settings/categories">Categories</NavLink>
         {user.role === "admin" && <NavLink to="/settings/users">Users</NavLink>}
         {user.role === "admin" && <NavLink to="/settings/backup">Backup</NavLink>}
-        <NavLink to="/settings/activity">Activity</NavLink>
+        <NavLink to="/settings/audit">Audit log</NavLink>
       </nav>
       <Routes>
         <Route path="account" element={<Account />} />
@@ -28,7 +28,8 @@ export default function Settings() {
         <Route path="categories" element={<CategorySettings />} />
         <Route path="users" element={<Users />} />
         <Route path="backup" element={<Backup />} />
-        <Route path="activity" element={<Activity />} />
+        <Route path="audit" element={<AuditLog />} />
+        <Route path="activity" element={<Navigate to="../audit" replace />} />
         <Route path="*" element={<Navigate to="account" replace />} />
       </Routes>
     </div>
@@ -534,41 +535,112 @@ interface AuditRow {
   changes: unknown;
   user_email: string | null;
   api_key_name: string | null;
+  /** what undo would do, or null if this kind of change can't be undone */
+  undo: string | null;
+  undone: boolean;
 }
 
 const show = (v: unknown) =>
-  v == null || v === "" ? "∅" : typeof v === "object" ? JSON.stringify(v) : String(v as string);
+  v == null || v === "" ? "(blank)" : typeof v === "object" ? JSON.stringify(v) : String(v as string);
 
-function Activity() {
+const VERB: Record<string, string> = {
+  create: "Added",
+  update: "Edited",
+  delete: "Deleted",
+  restore: "Restored",
+  bulk_create: "Added several",
+  rename: "Renamed",
+  revoke: "Revoked",
+  export: "Downloaded",
+  undo: "Undid",
+  login: "Signed in",
+  logout: "Signed out",
+  change_password: "Changed password",
+};
+const NOUN: Record<string, string> = {
+  transaction: "transaction",
+  recurring_dismissal: "recurring-bill mark",
+  preparer_package: "preparer package",
+  api_key: "API key",
+  tax_year: "tax-year inputs",
+  audit: "change",
+};
+
+/** One readable line for an audit entry. */
+function describe(r: AuditRow) {
+  const verb = VERB[r.action] ?? r.action;
+  if (r.action === "login" || r.action === "logout" || r.action === "change_password") return verb;
+  const noun = (NOUN[r.entity] ?? r.entity.replace(/_/g, " ")) + (r.action === "bulk_create" ? "s" : "");
+  const ref = r.entity_id && r.entity !== "subcategory" && r.entity !== "audit" ? ` #${r.entity_id}` : "";
+  return `${verb} ${noun}${r.action === "undo" ? ` #${r.entity_id}` : ref}`;
+}
+
+function details(r: AuditRow) {
+  const c = (r.changes ?? {}) as Record<string, unknown>;
+  // field diffs look like { field: [before, after] }
+  if (r.action === "update" && Object.values(c).every((v) => Array.isArray(v) && v.length === 2))
+    return Object.entries(c as Record<string, [unknown, unknown]>)
+      .filter(([k]) => !["category", "kind", "schedule_e_line", "property"].includes(k) || !("category_id" in c))
+      .map(([k, [a, b]]) => `${k.replace(/_/g, " ")}: ${show(a)} → ${show(b)}`)
+      .join(" · ");
+  if (r.entity === "transaction" && "amount" in c)
+    return [c.date, c.category, c.subcategory || c.vendor, show(c.amount)].filter(Boolean).join(" · ");
+  if (r.entity === "subcategory" && r.action === "rename")
+    return `${show(c.category)}: ${show(c.from)} → ${show(c.to)} (${(c.transactions as unknown[])?.length ?? 0} transactions)`;
+  if (r.entity === "subcategory")
+    return `${show(c.category ?? "")} ${show(c.name)}${c.moved_to ? ` → ${show(c.moved_to)}` : ""}`.trim();
+  if (r.entity === "occupancy")
+    return `${show(c.month ?? "")} · ${show(c.nights_booked ?? "")} nights booked`.replace(/^ · /, "");
+  if (r.action === "undo") return `${VERB[String(c.action)] ?? show(c.action)} ${show(c.entity)} #${show(c.entity_id)}`;
+  if (Array.isArray(c.ids)) return `${c.ids.length} transactions`;
+  if (Array.isArray(c.transactions)) return `${c.transactions.length} transactions`;
+  const text = Object.entries(c)
+    .filter(([, v]) => v != null && v !== "")
+    .map(([k, v]) => `${k.replace(/_/g, " ")}: ${show(v)}`)
+    .join(" · ");
+  return text.length > 160 ? text.slice(0, 157) + "…" : text;
+}
+
+/** Settings → Audit log: every change, who made it, and a one-click undo where possible. */
+function AuditLog() {
+  const { canWrite } = useSession();
+  const toast = useToast();
   const [offset, setOffset] = useState(0);
-  const { data } = useApi<AuditRow[]>(`audit?limit=100&offset=${offset}`);
-  const summarize = (r: AuditRow) => {
-    if (!r.changes || typeof r.changes !== "object") return "";
-    if (r.action === "update") {
-      return Object.entries(r.changes as Record<string, [unknown, unknown]>)
-        .map(([k, [a, b]]) => `${k}: ${show(a)} → ${show(b)}`)
-        .join("; ");
+  const [logins, setLogins] = useState(false);
+  const { data, reload } = useApi<AuditRow[]>(`audit?limit=100&offset=${offset}${logins ? "" : "&hide_logins=true"}`);
+  const undo = async (r: AuditRow) => {
+    if (!confirm(`Undo this change?\n\n${r.undo}`)) return;
+    try {
+      await api(`audit/${r.id}/undo`, { method: "POST" });
+      toast({ text: "Undone", kind: "ok" });
+      void reload();
+    } catch (e) {
+      toast({ text: (e as Error).message, kind: "error" });
     }
-    const c = r.changes as Record<string, unknown>;
-    if (r.entity === "transaction" && "amount" in c)
-      return `${show(c.date)} ${show(c.category)} ${show(c.amount)}${c.vendor ? ` (${show(c.vendor)})` : ""}`;
-    if ("ids" in c) return `${(c.ids as unknown[]).length} transactions`;
-    return JSON.stringify(c).slice(0, 140);
   };
   return (
     <section className="card table-card">
+      <div className="section-head card-pad">
+        <p className="muted small">
+          Every change, who made it and from where (web, API or AI agent). Use Undo to reverse one.
+        </p>
+        <label className="check small">
+          <input type="checkbox" checked={logins} onChange={(e) => setLogins(e.target.checked)} /> Show sign-ins
+        </label>
+      </div>
       <table className="data-table audit-table">
         <thead>
           <tr>
             <th>When</th>
             <th>Who</th>
-            <th>Action</th>
+            <th>What</th>
             <th>Details</th>
+            {canWrite && <th />}
           </tr>
         </thead>
         <tbody>
           {data?.map((r) => (
-            <tr key={r.id}>
+            <tr key={r.id} className={r.undone ? "excluded" : ""}>
               <td className="nowrap">{new Date(r.at).toLocaleString()}</td>
               <td>
                 {r.user_email ?? "system"}
@@ -578,11 +650,19 @@ function Activity() {
                   {r.api_key_name ? ` (${r.api_key_name})` : ""}
                 </small>
               </td>
-              <td className="nowrap">
-                {r.action} {r.entity}
-                {r.entity_id ? ` #${r.entity_id}` : ""}
-              </td>
-              <td className="desc">{summarize(r)}</td>
+              <td className="nowrap">{describe(r)}</td>
+              <td className="desc audit-details">{details(r)}</td>
+              {canWrite && (
+                <td className="nowrap">
+                  {r.undone ? (
+                    <span className="muted small">undone</span>
+                  ) : r.undo ? (
+                    <button className="btn small" title={r.undo} onClick={() => void undo(r)}>
+                      Undo
+                    </button>
+                  ) : null}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
