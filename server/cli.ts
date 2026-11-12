@@ -5,18 +5,20 @@
  *   node server/cli.ts import-grist --doc <docId> [--property "My Rental"] [--dry-run]
  *       (reads GRIST_BASE_URL and GRIST_API_KEY from the environment; read-only)
  *   node server/cli.ts backup [--out backup.zip]     database snapshot + receipts
+ *   node server/cli.ts restore backup.zip            replace all data (stop the app first, or use the web UI)
  */
 import { parseArgs } from "node:util";
 import { closeDb, getDb } from "./db.ts";
 import { seedDefaults } from "./seed.ts";
 import { createUser, findUserByEmail, setPassword } from "./services/auth.ts";
 import { importFromGrist } from "./grist-import.ts";
-import { createBackup } from "./services/backup.ts";
-import { writeFileSync } from "node:fs";
+import { createBackup, restoreBackup } from "./services/backup.ts";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const [command, ...rest] = process.argv.slice(2);
-const { values } = parseArgs({
+const parsed = parseArgs({
   args: rest,
+  allowPositionals: true,
   options: {
     email: { type: "string" },
     password: { type: "string" },
@@ -29,6 +31,7 @@ const { values } = parseArgs({
   },
 });
 
+const { values, positionals } = parsed;
 const db = getDb();
 
 switch (command) {
@@ -75,8 +78,20 @@ switch (command) {
     if (b.missing.length) console.warn(`Missing receipt files: ${b.missing.join(", ")}`);
     break;
   }
+  case "restore": {
+    const file = positionals[0];
+    if (!file) throw new Error("Usage: restore <backup.zip>");
+    const r = restoreBackup(db, null, readFileSync(file), file);
+    console.log(
+      `Restored ${r.transactions} transactions and ${r.receipts} receipts from ${file}.\n` +
+        `Users: ${r.users_kept} kept their current sign-in, ${r.users_disabled} only in the backup (disabled), ` +
+        `${r.users_added} only on this server (kept).\n` +
+        `Previous data saved to ${r.previous_data_saved_as}`,
+    );
+    break;
+  }
   default:
-    console.log("Commands: create-user, set-password, import-grist, backup");
+    console.log("Commands: create-user, set-password, import-grist, backup, restore");
     process.exitCode = 1;
 }
-closeDb(db);
+closeDb(getDb()); // restore swaps the handle

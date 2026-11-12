@@ -8,8 +8,12 @@ Income and expense tracking for short-term rental properties, built for year-end
   tax summary CSV, every transaction as CSV, and the receipts named by date, category and amount.
 - **Record this month's bills**: from a month page (or Add entry), add every expected recurring bill at once;
   same-every-time bills are pre-ticked, variable ones take the real amount.
-- **Backup** (Settings → Backup, admins): one `.zip` with a live-safe snapshot of the database plus all receipts;
-  restore by unzipping into the data folder. CLI: `node server/cli.ts backup --out backup.zip`.
+- **Backup and restore** (Settings → Backup, admins): one `.zip` with a live-safe snapshot of the database plus all
+  receipts. Restoring a zip replaces all data in place without a restart; the current data is saved first to
+  `backups/pre-restore-*.zip` in the data folder. Sign-ins are not restored: current passwords, sessions and API
+  keys are kept, and users who exist only in the backup come back disabled. CLI: `node server/cli.ts backup --out backup.zip` and
+  `node server/cli.ts restore backup.zip` (stop the app before restoring from the CLI). API:
+  `POST /api/backup/restore` with the zip as the body (`MAX_RESTORE_MB`, default 1024).
 - **Month by month**: the overview lists every month's income, expenses and net; open a month to see it against
   last month, the same month last year and the 12-month average, with every transaction grouped by category.
 - **Categories by month**: a category × month grid for the year (split by subcategory, e.g. Utilities → Electric,
@@ -121,6 +125,7 @@ back up that volume. Run the CLI inside the container with `docker exec <ctr> no
 | `COOKIE_SECURE`                                       | `true` in production            | Set `false` only when serving plain HTTP                                     |
 | `SESSION_DAYS`                                        | `30`                            | Session lifetime                                                             |
 | `MAX_UPLOAD_MB`                                       | `20`                            | Receipt size limit                                                           |
+| `MAX_RESTORE_MB`                                      | `1024`                          | Largest backup zip accepted for restore                                      |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | –                               | Enable SSO. Callback: `$PUBLIC_URL/api/auth/oidc/callback`                   |
 | `OIDC_NAME`                                           | `SSO`                           | Button label                                                                 |
 | `OIDC_AUTO_CREATE`                                    | `false`                         | Create unknown SSO users as members (otherwise the email must already exist) |
