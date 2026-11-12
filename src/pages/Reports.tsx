@@ -250,49 +250,51 @@ export default function Reports() {
 
           <section className="card">
             <h2>Schedule E summary</h2>
-            <table className="data-table sched-e">
-              <thead>
-                <tr>
-                  <th>Line</th>
-                  <th className="num">Direct</th>
-                  <th className="num">Indirect</th>
-                  <th className="num">Indirect × {percent(r.use.rental_pct)}</th>
-                  <th className="num">Deductible</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>3 · Rents received</td>
-                  <td colSpan={3} />
-                  <td className="num">{money(r.totals.gross_income)}</td>
-                </tr>
-                {r.schedule_e.map((l) => (
-                  <tr key={l.line}>
-                    <td>
-                      {l.line} · {l.label}
-                    </td>
-                    <td className="num">{l.direct ? money(l.direct) : ""}</td>
-                    <td className="num">{l.indirect ? money(l.indirect) : ""}</td>
-                    <td className="num">{l.indirect ? money(l.indirect_allocated) : ""}</td>
-                    <td className="num">{money(l.total)}</td>
+            <div className="sched-e-wrap">
+              <table className="data-table sched-e">
+                <thead>
+                  <tr>
+                    <th>Line</th>
+                    <th className="num">Direct</th>
+                    <th className="num">Indirect</th>
+                    <th className="num">Indirect × {percent(r.use.rental_pct)}</th>
+                    <th className="num">Deductible</th>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td>20 · Total expenses</td>
-                  <td colSpan={3} />
-                  <td className="num">{money(r.totals.deductible_expenses)}</td>
-                </tr>
-                <tr>
-                  <td>21 · Income or (loss)</td>
-                  <td colSpan={3} />
-                  <td className="num">
-                    <strong>{money(r.totals.net)}</strong>
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>3 · Rents received</td>
+                    <td colSpan={3} />
+                    <td className="num">{money(r.totals.gross_income)}</td>
+                  </tr>
+                  {r.schedule_e.map((l) => (
+                    <tr key={l.line}>
+                      <td>
+                        {l.line} · {l.label}
+                      </td>
+                      <td className="num">{l.direct ? money(l.direct) : ""}</td>
+                      <td className="num">{l.indirect ? money(l.indirect) : ""}</td>
+                      <td className="num">{l.indirect ? money(l.indirect_allocated) : ""}</td>
+                      <td className="num">{money(l.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td>20 · Total expenses</td>
+                    <td colSpan={3} />
+                    <td className="num">{money(r.totals.deductible_expenses)}</td>
+                  </tr>
+                  <tr>
+                    <td>21 · Income or (loss)</td>
+                    <td colSpan={3} />
+                    <td className="num">
+                      <strong>{money(r.totals.net)}</strong>
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
             {r.depreciation && (
               <p className="muted small">
                 Depreciation: {money(r.depreciation.basis)} basis over {r.depreciation.recovery_years} years from{" "}

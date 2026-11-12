@@ -252,7 +252,7 @@ pre {
 
 @media (max-width: 900px) {
   .shell {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .sidebar {
     display: none;
@@ -271,7 +271,8 @@ pre {
     justify-content: space-around;
     align-items: center;
   }
-  .bottom-nav a {
+  .bottom-nav a,
+  .bottom-nav button {
     position: relative;
     display: flex;
     flex-direction: column;
@@ -283,7 +284,15 @@ pre {
     min-width: 56px;
     padding: 4px;
   }
-  .bottom-nav a.active {
+  .bottom-nav button {
+    background: none;
+    border: 0;
+    font: inherit;
+    font-size: 0.68rem;
+    cursor: pointer;
+  }
+  .bottom-nav a.active,
+  .bottom-nav button.active {
     color: var(--accent);
   }
   .bottom-nav a.nav-primary {
@@ -305,6 +314,35 @@ pre {
   h1 {
     font-size: 1.35rem;
   }
+}
+
+.more-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.more-menu a {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.75rem 0.65rem;
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 500;
+}
+.more-menu a.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.more-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.65rem calc(0.25rem + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
 }
 
 /* ---------- surfaces ---------- */
@@ -329,7 +367,7 @@ pre {
 }
 @media (max-width: 900px) {
   .grid-2 {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .section-head {
@@ -450,7 +488,7 @@ label.check {
 }
 @media (max-width: 640px) {
   .row-3 {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .input-prefix {
@@ -1373,6 +1411,9 @@ tr.dirty td {
 .sched-e td:first-child {
   white-space: nowrap;
 }
+.sched-e-wrap {
+  overflow-x: auto;
+}
 .disclaimer {
   font-size: 0.8rem;
   color: var(--muted);
@@ -1493,7 +1534,7 @@ tr.dirty td {
 }
 @media (max-width: 900px) {
   .tiles.tiles-3 {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .month-nav {
@@ -2150,6 +2191,6 @@ hr.sep {
 }
 @media (max-width: 480px) {
   .tx-form .row-2:not(:first-of-type) {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
