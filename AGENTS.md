@@ -1,0 +1,48 @@
+<!--VITE PLUS START-->
+
+# Using Vite+, the Unified Toolchain for the Web
+
+This project is using Vite+, a unified toolchain built on top of Vite, Rolldown, Vitest, tsdown, Oxlint, Oxfmt, and Vite Task. Vite+ wraps runtime management, package management, and frontend tooling in a single global CLI called `vp`. Vite+ is distinct from Vite, and it invokes Vite through `vp dev` and `vp build`. Run `vp help` to print a list of commands and `vp <command> --help` for information about a specific command.
+
+Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.dev/guide/.
+
+## Built-in Commands vs Scripts
+
+`vp <name>` runs a built-in command. `vp run <name>` runs a `package.json` script or a `vite.config.ts` task. Scripts cannot overwrite built-ins, so `vp dev` and `vp run dev` may do different things. Check `package.json` and `vite.config.ts` first, and run `vp run <name>` when the project defines a script or task with that name.
+
+## Tool Versions
+
+Run `vp toolchain` to show versions and relationships in the active Vite+
+release. Add a tool name to select part of the graph. For example, run
+`vp toolchain vite`. Use `--global` to ignore the local `vite-plus` package. Use
+`vp why <package>` to show the package-manager dependency graph.
+
+## Review Checklist
+
+- [ ] Run `vp install` after pulling remote changes and before getting started.
+- [ ] Run `vp check` and `vp test` to format, lint, type check and test changes.
+- [ ] Check if there are `vite.config.ts` tasks or `package.json` scripts necessary for validation, run via `vp run <script>`.
+- [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
+
+<!--VITE PLUS END-->
+
+# Project notes
+
+- Server: `server/` is TypeScript executed directly by Node 24 (type stripping). Use `.ts` import extensions and
+  erasable syntax only (no enums or parameter properties). In dev it runs inside `vp dev` through the
+  `rental-dev-api` plugin in `vite.config.ts`.
+- All business logic lives in `server/services/*`. REST (`server/http/api-routes.ts`) and MCP (`server/http/mcp.ts`)
+  are thin wrappers, so add features there first and expose them in both.
+- Every write goes through a service function that calls `audit()`. Amounts are stored as signed integer cents.
+- Database: Drizzle ORM over better-sqlite3 (synchronous). Tables are defined in `server/db/schema.ts`; queries use the
+  Drizzle query builder, and API responses keep snake_case field names via select aliases.
+- Schema changes: edit `server/db/schema.ts`, then `vp run db:generate --name <change>`, review the SQL in
+  `server/db/migrations/`, and commit both. Never hand-write or edit an applied migration. Migrations apply automatically
+  on startup (`runMigrations` in `server/db.ts`).
+- Use `tx(db, fn)` from `server/db.ts` for multi-statement writes; nested calls join the outer transaction.
+- Recurring-bill detection (`server/services/recurring.ts`) is computed from history on each request; the only stored
+  state is user feedback in `recurring_dismissals` (month = '' means stop tracking the series). Tests in
+  `server/recurring.test.ts` pin the rules with a fixed `today`.
+- Subcategories are free text on transactions (Grist layout, e.g. Management Fee → Acme PM). The `subcategories`
+  table only remembers names for suggestions; rename/remove/merge go through `server/services/categories.ts`.
+- Never write to Grist; `server/grist-import.ts` must stay GET-only.

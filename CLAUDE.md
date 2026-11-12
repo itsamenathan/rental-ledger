@@ -45,4 +45,6 @@ release. Add a tool name to select part of the graph. For example, run
   `server/recurring.test.ts` pin the rules with a fixed `today`.
 - Subcategories are free text on transactions (Grist layout, e.g. Management Fee → Acme PM). The `subcategories`
   table only remembers names for suggestions; rename/remove/merge go through `server/services/categories.ts`.
+- Logging: use `log` from `server/telemetry.ts` (pino), not `console.*` (the CLI's human output is the exception).
+  Tracing is automatic for API/MCP requests and SQL; wrap other slow work in `withSpan(name, attrs, fn)`.
 - Never write to Grist; `server/grist-import.ts` must stay GET-only.

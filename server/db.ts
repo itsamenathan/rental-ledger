@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { instrumentSqlite, log } from "./telemetry.ts";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { mkdirSync } from "node:fs";
@@ -15,7 +16,7 @@ const migrationsFolder = fileURLToPath(new URL("./db/migrations", import.meta.ur
 
 export function openDb(path: string): DB {
   if (path !== ":memory:") mkdirSync(dirname(resolve(path)), { recursive: true });
-  const sqlite = new Database(path);
+  const sqlite = instrumentSqlite(new Database(path));
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
   sqlite.pragma("busy_timeout = 5000");
@@ -40,7 +41,7 @@ function runMigrations(db: DB, path: string) {
   migrate(db, { migrationsFolder });
   const after = applied();
   if (after > before && path !== ":memory:") {
-    console.log(`Database ${path}: applied ${after - before} migration(s); ${after} total.`);
+    log.info({ db: path, applied: after - before, total: after }, "database migrations applied");
   }
 }
 

@@ -6,6 +6,9 @@ import { createApp } from "./app.ts";
 import { config } from "./config.ts";
 import { closeDb, getDb } from "./db.ts";
 import { seedDefaults } from "./seed.ts";
+import { initTelemetry, log, shutdownTelemetry } from "./telemetry.ts";
+
+initTelemetry();
 
 const db = getDb();
 seedDefaults(db);
@@ -23,13 +26,14 @@ app.use("*", serveStatic({ root: dist }));
 app.get("*", (c) => c.html(indexHtml, 200, { "Cache-Control": "no-cache" }));
 
 const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
-  console.log(`Rental ledger listening on :${info.port} (db: ${config.databasePath})`);
+  log.info({ port: info.port, db: config.databasePath }, "rental ledger listening");
 });
 
 const shutdown = () => {
+  log.info("shutting down");
   server.close();
   closeDb(db);
-  process.exit(0);
+  void shutdownTelemetry().finally(() => process.exit(0));
 };
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);

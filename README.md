@@ -127,6 +127,25 @@ back up that volume. Run the CLI inside the container with `docker exec <ctr> no
 | `DISABLE_PASSWORD_LOGIN`                              | `false`                         | SSO only                                                                     |
 | `DEFAULT_PROPERTY_NAME`                               | `My Rental`                     | Name of the property created in an empty database                            |
 
+## Logging and tracing
+
+Logs are JSON lines on stdout (pino). Set `LOG_LEVEL` (`debug`, `info`, `warn`, `error`; default `info`). Every
+request writes one line (method, route, status, duration, user id), and every recorded change writes an `audit` line.
+
+OpenTelemetry is off until you point it at a collector (OTLP over HTTP):
+
+| Variable                      | Effect                                                 |
+| ----------------------------- | ------------------------------------------------------ |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | e.g. `http://otel-collector:4318`. Turns on traces.       |
+| `OTEL_EXPORTER_OTLP_HEADERS`  | e.g. `Authorization=Bearer …`                          |
+| `OTEL_SERVICE_NAME`           | default `rental-ledger`                                |
+| `OTEL_LOGS_EXPORTER=otlp`     | also send logs to the collector (stdout keeps working) |
+| `OTEL_TRACES_EXPORTER=none`   | keep logs but turn traces off                          |
+
+Traces: one span per API/MCP request (named by route, e.g. `GET /api/transactions/:id`), child spans for each SQL
+statement and MCP tool call, and incoming W3C `traceparent` headers are honoured. Log lines inside a request carry
+`trace_id`/`span_id`. Spans carry user ids, not emails, amounts or request bodies; SQL is recorded without values.
+
 ## AI agents
 
 Create a key under **Settings → API keys & agents**, then either:

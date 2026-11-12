@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { log } from "../telemetry.ts";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import * as oidc from "openid-client";
 import { z } from "zod";
@@ -188,7 +189,7 @@ authRoutes.get("/oidc/callback", async (c) => {
     audit(db, webActor(user), "login_sso", "user", user.id);
     return c.redirect("/");
   } catch (e) {
-    console.error("OIDC callback failed", e);
+    log.error({ err: e }, "OIDC callback failed");
     return c.redirect("/login?error=" + encodeURIComponent("SSO sign-in failed"));
   }
 });

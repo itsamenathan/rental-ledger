@@ -13,6 +13,12 @@ services:
       # OIDC_NAME: Pocket ID
       # OIDC_AUTO_CREATE: "false"
       # DISABLE_PASSWORD_LOGIN: "true"
+      # Logs are JSON lines on stdout. Optional OpenTelemetry (OTLP/HTTP):
+      # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318   # turns on traces
+      # OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS?required}
+      # OTEL_SERVICE_NAME: rental-ledger
+      # OTEL_LOGS_EXPORTER: otlp      # also send logs (they still go to stdout)
+      # LOG_LEVEL: info
     volumes:
       - rental-data:/data
     ports:

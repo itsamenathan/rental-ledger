@@ -8,10 +8,13 @@ import { authRoutes } from "./http/auth-routes.ts";
 import { api } from "./http/api-routes.ts";
 import { mcpRoutes } from "./http/mcp.ts";
 import { API_GUIDE } from "./guide.ts";
+import { httpTelemetry } from "./telemetry.ts";
 
 export function createApp() {
   const app = new Hono<Env>();
   app.onError(errorResponse);
+  app.use("/api/*", httpTelemetry);
+  app.use("/mcp", httpTelemetry);
   app.use("*", secureHeaders({ crossOriginResourcePolicy: "same-origin", contentSecurityPolicy: undefined }));
   app.use(
     "/api/*",

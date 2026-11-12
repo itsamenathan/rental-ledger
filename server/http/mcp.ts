@@ -11,6 +11,7 @@ import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
 import { todoSummary } from "../services/todo.ts";
 import { annotate, undoAudit } from "../services/undo.ts";
+import { withSpan } from "../telemetry.ts";
 import * as files from "../services/attachments.ts";
 import { listAudit } from "../services/audit.ts";
 import type { Env } from "./middleware.ts";
@@ -71,6 +72,16 @@ export function buildMcpServer(actor: Actor) {
   const server = new McpServer({ name: "rental-ledger", version: "1.0.0" }, { instructions: INSTRUCTIONS });
   const db = getDb();
   const ro = { readOnlyHint: true, openWorldHint: false };
+  // A span per tool call (name, caller) so agent activity shows up in traces.
+  const register = server.registerTool.bind(server) as (...a: unknown[]) => unknown;
+  (server as unknown as { registerTool: unknown }).registerTool = (
+    name: string,
+    cfg: unknown,
+    cb: (...a: unknown[]) => unknown,
+  ) =>
+    register(name, cfg, (...args: unknown[]) =>
+      withSpan(`mcp.tool ${name}`, { "mcp.tool.name": name, "enduser.id": String(actor.user.id) }, () => cb(...args)),
+    );
 
   server.registerTool(
     "get_overview",

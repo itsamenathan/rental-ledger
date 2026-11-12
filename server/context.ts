@@ -1,5 +1,6 @@
 import type { DB } from "./db.ts";
 import { auditLog } from "./db/schema.ts";
+import { log } from "./telemetry.ts";
 
 export type Role = "admin" | "member" | "viewer";
 export type Via = "web" | "api" | "mcp" | "cli";
@@ -48,6 +49,10 @@ export function audit(
   entityId: number | null,
   changes?: unknown,
 ) {
+  log.info(
+    { audit: { action, entity, entity_id: entityId }, user_id: actor?.user.id, via: actor?.via ?? "cli" },
+    `${action} ${entity}`,
+  );
   db.insert(auditLog)
     .values({
       userId: actor?.user.id ?? null,

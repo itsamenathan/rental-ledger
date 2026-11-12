@@ -2,6 +2,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
 import { z } from "zod";
 import { getDb } from "../db.ts";
+import { log } from "../telemetry.ts";
 import { AppError, type Actor, type Via } from "../context.ts";
 import { API_KEY_PREFIX, roleCanWrite, userForApiKey, userForSession } from "../services/auth.ts";
 
@@ -70,7 +71,7 @@ export function errorResponse(err: Error, c: Context) {
   if (err instanceof SyntaxError && /JSON/.test(err.message)) {
     return c.json({ error: "Malformed JSON body" }, 400);
   }
-  console.error(err);
+  log.error({ err }, "unhandled error");
   return c.json({ error: "Internal server error" }, 500);
 }
 
