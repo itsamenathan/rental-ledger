@@ -391,16 +391,96 @@ function Backup() {
         Download backup
       </a>
       <p className="muted small">
-        To restore: stop the app, unzip into the data folder (<code>/data</code> in Docker) replacing{" "}
-        <code>rental.db</code> and <code>uploads/</code>, then start it again. The file contains password and API key
-        hashes, so keep it somewhere private. From a terminal: <code>node server/cli.ts backup --out backup.zip</code>.
+        The file contains password and API key hashes, so keep it somewhere private. From a terminal:{" "}
+        <code>node server/cli.ts backup --out backup.zip</code>.
       </p>
+      <RestoreBackup />
       <h3>Spreadsheet copy</h3>
       <p className="muted small">Every transaction as a CSV, for Excel, Google Sheets or your tax preparer.</p>
       <a className="btn" href="/api/export/transactions.csv">
         Download all transactions (CSV)
       </a>
     </section>
+  );
+}
+
+interface RestoreResult {
+  transactions: number;
+  users: number;
+  receipts: number;
+  previous_data_saved_as: string;
+}
+
+function RestoreBackup() {
+  const toast = useToast();
+  const [file, setFile] = useState<File | null>(null);
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<RestoreResult | null>(null);
+  const restore = async () => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const r = await api<RestoreResult>("backup/restore", {
+        method: "POST",
+        headers: { "content-type": "application/zip", "x-filename": encodeURIComponent(file.name) },
+        body: file,
+      });
+      setDone(r);
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (done)
+    return (
+      <div className="danger-box">
+        <h3>Restored</h3>
+        <p>
+          Loaded {done.transactions} transactions, {done.users} users and {done.receipts} receipts. Your previous data
+          was saved on the server as <code>{done.previous_data_saved_as}</code>.
+        </p>
+        <button className="btn primary" onClick={() => window.location.reload()}>
+          Reload the app
+        </button>
+        <p className="muted small">You may need to sign in again with an account from the backup.</p>
+      </div>
+    );
+  return (
+    <>
+      <h3>Restore from backup</h3>
+      <p className="muted small">
+        Replaces <strong>all</strong> current data (transactions, categories, users, settings, receipts) with the
+        contents of a backup <code>.zip</code>. The current data is saved on the server first, in <code>backups/</code>{" "}
+        in the data folder, so a restore can itself be undone by restoring that file.
+      </p>
+      <div className="danger-box">
+        <label>
+          Backup file
+          <input
+            type="file"
+            accept=".zip,application/zip"
+            onChange={(e) => {
+              setFile(e.target.files?.[0] ?? null);
+              setSure(false);
+            }}
+          />
+        </label>
+        {file && (
+          <label className="check">
+            <input type="checkbox" checked={sure} onChange={(e) => setSure(e.target.checked)} />
+            Replace everything with {file.name}
+          </label>
+        )}
+        <div className="form-actions">
+          <span className="spacer" />
+          <button className="btn danger-outline" disabled={!file || !sure || busy} onClick={() => void restore()}>
+            {busy ? "Restoring…" : "Restore"}
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
 

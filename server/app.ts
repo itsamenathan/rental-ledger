@@ -16,15 +16,12 @@ export function createApp() {
   app.use("/api/*", httpTelemetry);
   app.use("/mcp", httpTelemetry);
   app.use("*", secureHeaders({ crossOriginResourcePolicy: "same-origin", contentSecurityPolicy: undefined }));
-  app.use(
-    "/api/*",
-    bodyLimit({
-      maxSize: config.maxUploadBytes + 1024 * 1024,
-      onError: () => {
-        throw new AppError(413, "Request too large");
-      },
-    }),
-  );
+  const tooLarge = () => {
+    throw new AppError(413, "Request too large");
+  };
+  const apiLimit = bodyLimit({ maxSize: config.maxUploadBytes + 1024 * 1024, onError: tooLarge });
+  const restoreLimit = bodyLimit({ maxSize: config.maxRestoreBytes, onError: tooLarge });
+  app.use("/api/*", (c, next) => (c.req.path === "/api/backup/restore" ? restoreLimit : apiLimit)(c, next));
   app.use(
     "/mcp",
     bodyLimit({

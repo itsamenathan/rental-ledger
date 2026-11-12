@@ -32,7 +32,7 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
 const shutdown = () => {
   log.info("shutting down");
   server.close();
-  closeDb(db);
+  closeDb(getDb()); // a restore swaps the handle
   void shutdownTelemetry().finally(() => process.exit(0));
 };
 process.on("SIGTERM", shutdown);

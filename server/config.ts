@@ -15,6 +15,8 @@ export const config = {
   cookieSecure: env.COOKIE_SECURE ? env.COOKIE_SECURE === "true" : env.NODE_ENV === "production",
   sessionDays: Number(env.SESSION_DAYS ?? 30),
   maxUploadBytes: Number(env.MAX_UPLOAD_MB ?? 20) * 1024 * 1024,
+  /** Largest backup zip accepted by POST /api/backup/restore. */
+  maxRestoreBytes: Number(env.MAX_RESTORE_MB ?? 1024) * 1024 * 1024,
   /** Disable username/password login (OIDC only). */
   disablePasswordLogin: env.DISABLE_PASSWORD_LOGIN === "true",
   oidc: env.OIDC_ISSUER

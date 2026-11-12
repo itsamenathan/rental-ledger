@@ -9,7 +9,7 @@ import * as reports from "../services/reports.ts";
 import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
 import { todoSummary } from "../services/todo.ts";
-import { createBackup } from "../services/backup.ts";
+import { createBackup, restoreBackup } from "../services/backup.ts";
 import { preparerPackage } from "../services/preparer.ts";
 import { annotate, undoAudit } from "../services/undo.ts";
 import * as files from "../services/attachments.ts";
@@ -215,6 +215,23 @@ api.get("/backup", (c) => {
     "Cache-Control": "no-store",
   });
 });
+
+// Restore (admin): replace all data with a backup zip sent as the raw request body.
+api.post("/backup/restore", async (c) => {
+  const actor = actorOf(c);
+  requireAdmin(actor); // before reading a large body
+  const data = Buffer.from(await c.req.arrayBuffer());
+  if (!data.length) throw badRequest("Send the backup .zip as the request body");
+  return c.json(restoreBackup(getDb(), actor, data, sourceName(c.req.header("x-filename"))));
+});
+
+const sourceName = (h: string | undefined) => {
+  try {
+    return h ? decodeURIComponent(h).slice(0, 200) : "upload";
+  } catch {
+    return "upload";
+  }
+};
 
 function csvResponse(c: Context, csv: string, filename: string) {
   return c.body(csv, 200, {
