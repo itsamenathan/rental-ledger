@@ -1,5 +1,5 @@
 /**
- * One-way, read-only import from a Grist "My Rental Income"-style document.
+ * One-way, read-only import from a Grist income/expense document.
  * Only GET requests are made against Grist. Re-running is safe: rows are matched by
  * external_id (grist:<docId>:<rowId>) and updated in place if they changed in Grist.
  */
@@ -15,7 +15,8 @@ interface GristOpts {
   baseUrl: string;
   apiKey: string;
   docId: string;
-  property: string;
+  /** Property name. Omitted: the only existing property, else "My Rental". */
+  property?: string;
   dryRun: boolean;
   log?: (msg: string) => void;
 }
@@ -89,15 +90,17 @@ export async function importFromGrist(db: DB, o: GristOpts) {
 
   const run = () => {
     // property: reuse by name, or adopt the untouched seeded default
-    let property = listProperties(db).find((p) => p.name.toLowerCase() === o.property.toLowerCase());
+    const existing = listProperties(db);
+    const name = o.property ?? (existing.length === 1 ? existing[0]!.name : "My Rental");
+    let property = existing.find((p) => p.name.toLowerCase() === name.toLowerCase());
     if (!property) {
       const props = listProperties(db);
       const used = db.select({ n: count() }).from(transactions).get()!.n;
       if (props.length === 1 && props[0]!.name === "My Rental" && used === 0) {
-        db.update(properties).set({ name: o.property }).where(eq(properties.id, props[0]!.id)).run();
-        property = { ...props[0]!, name: o.property };
+        db.update(properties).set({ name }).where(eq(properties.id, props[0]!.id)).run();
+        property = { ...props[0]!, name };
       } else {
-        property = createProperty(db, null, { name: o.property });
+        property = createProperty(db, null, { name });
       }
     }
 
@@ -145,15 +148,16 @@ export async function importFromGrist(db: DB, o: GristOpts) {
       }
       const sub = str(f.Sub_Category);
       const notes = str(f.Notes);
-      // Sub_Category is kept as-is (e.g. "Acme PM" under Management Fee), matching the Grist layout.
+      // Sub_Category is kept as-is (e.g. a manager's name under Management Fee), matching the Grist layout.
       const subcategory = sub;
       let vendor = "";
       let account = "";
       let reference = "";
-      const bankImport = notes.match(/^Checking CSV import:\s*(.*)$/i);
+      // "<Bank> CSV import: <bank text>" notes → account <Bank>, bank text as the reference
+      const bankImport = notes.match(/^([A-Za-z][\w &.-]{0,40}?) CSV import:\s*(.*)$/i);
       if (bankImport) {
-        account = "Checking";
-        reference = bankImport[1]!;
+        account = bankImport[1]!;
+        reference = bankImport[2]!;
       }
       if (cat.kind === "income" && !vendor) {
         if (/airbnb/i.test(notes)) vendor = "Airbnb";

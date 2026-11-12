@@ -49,7 +49,7 @@ server/
   db/migrations/    generated SQL migrations (commit these)
   services/         ledger, reports (tax), rental (occupancy/tax inputs), auth, attachments
   http/             routes, middleware, MCP tools
-  grist-import.ts   read-only importer from the Grist "My Rental Income" document
+  grist-import.ts   read-only importer from a Grist income/expense document
   cli.ts            admin CLI
 src/                React SPA
 ```
@@ -96,12 +96,12 @@ Read-only (GET requests only). Re-running updates rows that changed in Grist and
 
 ```sh
 GRIST_BASE_URL=https://grist.example.com GRIST_API_KEY=… \
-  node server/cli.ts import-grist --doc <docId> --property "My Rental" [--dry-run]
+  node server/cli.ts import-grist --doc <docId> [--property "My Rental"] [--dry-run]
 ```
 
-Mapping: `Income` → `Rental Income`, `Managment Fee` → `Management Fee`, Sub_Category `Acme PM` → vendor,
-Direct/Indirect → allocation, the occupancy report table → monthly occupancy, and "Checking CSV import: …"
-notes → account `Checking` plus the bank text as the reference.
+Mapping: `Income` → `Rental Income`, `Managment Fee` → `Management Fee`, Sub_Category kept as the subcategory,
+Direct/Indirect → allocation, the occupancy report table → monthly occupancy, and "<Bank> CSV import: …"
+notes → that account plus the bank text as the reference.
 
 ## Production (Docker)
 
@@ -136,7 +136,7 @@ OpenTelemetry is off until you point it at a collector (OTLP over HTTP):
 
 | Variable                      | Effect                                                 |
 | ----------------------------- | ------------------------------------------------------ |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | e.g. `http://otel-collector:4318`. Turns on traces.       |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | e.g. `http://otel-collector:4318`. Turns on traces.    |
 | `OTEL_EXPORTER_OTLP_HEADERS`  | e.g. `Authorization=Bearer …`                          |
 | `OTEL_SERVICE_NAME`           | default `rental-ledger`                                |
 | `OTEL_LOGS_EXPORTER=otlp`     | also send logs to the collector (stdout keeps working) |

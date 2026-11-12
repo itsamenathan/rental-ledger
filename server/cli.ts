@@ -61,7 +61,7 @@ switch (command) {
       baseUrl,
       apiKey,
       docId: values.doc,
-      property: values.property ?? "My Rental",
+      property: values.property,
       dryRun: !!values["dry-run"],
     });
     console.log(JSON.stringify(result, null, 2));
