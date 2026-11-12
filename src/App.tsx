@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { api, type User } from "./api.ts";
 import { useApi, useSession } from "./hooks.ts";
-import { SessionProvider, ToastProvider } from "./lib.tsx";
+import { Modal, SessionProvider, ToastProvider } from "./lib.tsx";
 import Overview from "./pages/Overview.tsx";
 import MonthPage from "./pages/Month.tsx";
 import Categories from "./pages/Categories.tsx";
@@ -79,7 +79,10 @@ const SIDEBAR: { title?: string; items: string[] }[] = [
   { title: "Money", items: ["/", "/todo", "/transactions", "/categories", "/recurring"] },
   { title: "Taxes", items: ["/reports", "/occupancy"] },
 ];
-const MOBILE_NAV = ["/", "/transactions", "/add", "/todo", "/reports"];
+const MOBILE_NAV = ["/", "/transactions", "/add", "/todo"];
+/** Everything else on a phone lives behind the bottom bar's "More" button. */
+const MOBILE_MORE = ["/reports", "/categories", "/recurring", "/occupancy", "/settings"];
+const MORE_ICON = "M5 12h.01M12 12h.01M19 12h.01";
 
 export function Icon({ d, size = 20 }: { d: string; size?: number }) {
   return (
@@ -104,7 +107,10 @@ function Shell() {
   const todo = useApi<TodoSummary>("todo");
   const loc = useLocation();
   const navigate = useNavigate();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreActive = MOBILE_MORE.some((to) => loc.pathname.startsWith(to));
   useEffect(() => {
+    setMoreOpen(false);
     void todo.reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loc.pathname]);
@@ -215,7 +221,41 @@ function Shell() {
               {badge(n.to)}
             </NavLink>
           ))}
+        <button
+          type="button"
+          className={moreActive ? "active" : undefined}
+          aria-label="More"
+          aria-expanded={moreOpen}
+          onClick={() => setMoreOpen(true)}
+        >
+          <Icon d={MORE_ICON} size={22} />
+          <span>More</span>
+        </button>
       </nav>
+      {moreOpen && (
+        <Modal title="More" onClose={() => setMoreOpen(false)}>
+          <nav className="more-menu">
+            {MOBILE_MORE.map((to) => {
+              const n = NAV.find((x) => x.to === to)!;
+              return (
+                <NavLink key={to} to={to} onClick={() => setMoreOpen(false)}>
+                  <Icon d={n.icon} />
+                  <span>{n.label}</span>
+                </NavLink>
+              );
+            })}
+          </nav>
+          <div className="more-foot">
+            <div className="who" title={user.email}>
+              {user.name || user.email}
+              <small>{user.role}</small>
+            </div>
+            <button className="link" onClick={() => void logout()}>
+              Sign out
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
