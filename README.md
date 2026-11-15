@@ -14,6 +14,12 @@ Income and expense tracking for short-term rental properties, built for year-end
   keys are kept, and users who exist only in the backup come back disabled. CLI: `node server/cli.ts backup --out backup.zip` and
   `node server/cli.ts restore backup.zip` (stop the app before restoring from the CLI). API:
   `POST /api/backup/restore` with the zip as the body (`MAX_RESTORE_MB`, default 1024).
+- **Manager statements** (Manager in the sidebar): drop in your property manager's owner-statement CSVs and invoice
+  PDFs, any number at once. Each is saved under the month it covers (an invoice is placed by matching its management
+  fee to a statement) and can be opened again later. The year view shows each month's status; a month's page matches
+  payouts to deposits (Airbnb deposits, VRBO deposit + balance, Stripe-batched payouts) and invoice lines to expenses,
+  cross-checks fees, and adds only what's missing, attaching the invoice to its entries. Agents use
+  `list_manager_months`, `save_manager_document`, `preview_manager_month` and `apply_manager_month`.
 - **Month by month**: the overview lists every month's income, expenses and net; open a month to see it against
   last month, the same month last year and the 12-month average, with every transaction grouped by category.
 - **Categories by month**: a category × month grid for the year (split by subcategory, e.g. Utilities → Electric,

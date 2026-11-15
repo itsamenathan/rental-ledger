@@ -33,3 +33,37 @@ export const TRANSACTION_COLUMNS = [
 export function transactionsCsv(items: object[]) {
   return toCsv(items as Record<string, unknown>[], TRANSACTION_COLUMNS);
 }
+
+/** RFC 4180-ish CSV parser (quotes, escaped quotes, CRLF). Blank rows are dropped. */
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  const endRow = () => {
+    row.push(field);
+    if (row.some((c) => c.trim() !== "")) rows.push(row);
+    row = [];
+    field = "";
+  };
+  const src = text.replace(/^﻿/, "");
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i]!;
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (ch === '"') quoted = false;
+      else field += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && src[i + 1] === "\n") i++;
+      endRow();
+    } else field += ch;
+  }
+  endRow();
+  return rows;
+}

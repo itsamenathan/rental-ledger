@@ -43,6 +43,17 @@ release. Add a tool name to select part of the graph. For example, run
 - Recurring-bill detection (`server/services/recurring.ts`) is computed from history on each request; the only stored
   state is user feedback in `recurring_dismissals` (month = '' means stop tracking the series). Tests in
   `server/recurring.test.ts` pin the rules with a fixed `today`.
+- Manager paperwork: statements/invoices are saved per month in `manager_documents` (file + text, re-parsed on every
+  review) by `server/services/manager-documents.ts`; reconciliation is in `server/services/manager-statement.ts`.
+  Payout matching runs across every saved statement at once (`managerContext`), so a deposit goes to the stay it
+  belongs to whichever month is viewed. Airbnb = one deposit; VRBO = ~30% deposit + balance, or batched in Stripe
+  transfers (never offered for creation). Invoice lines are matched one-to-one by amount + category (not `bulkCreate`,
+  which would drop equal-amount lines). Never touch `external_id`/`reference` on existing rows; manager names are never
+  hard-coded (CSV columns match by suffix, the subcategory comes from history).
+- Manager warnings can be "marked as explained" (`manager_acknowledgements`, keyed by a hash of the warning text, so
+  changed amounts ask again). Months with entries to add or unexplained warnings count on the To do page.
+- Stored files go through `server/services/storage.ts`: identical bytes share one file across `attachments` and
+  `manager_documents`; delete rows first, then `releaseFile`. Backups include every key from both tables.
 - Subcategories are free text on transactions (Grist layout, e.g. Management Fee → Acme PM). The `subcategories`
   table only remembers names for suggestions; rename/remove/merge go through `server/services/categories.ts`.
 - Never write to Grist; `server/grist-import.ts` must stay GET-only.

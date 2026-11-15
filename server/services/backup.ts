@@ -19,9 +19,10 @@ import { crc32, deflateRawSync, inflateRawSync } from "node:zlib";
 import { eq, sql } from "drizzle-orm";
 import { config } from "../config.ts";
 import { closeDb, migrationsFolder, openDb, setDb, tx, type DB } from "../db.ts";
-import { apiKeys, attachments, sessions, users } from "../db/schema.ts";
+import { apiKeys, sessions, users } from "../db/schema.ts";
 import { AppError, audit, badRequest, requireAdmin, requireWrite, type Actor } from "../context.ts";
 import { log } from "../telemetry.ts";
+import { allStorageKeys } from "./storage.ts";
 
 const README = `Rental Ledger backup
 
@@ -111,7 +112,8 @@ export function createBackup(db: DB, actor: Actor | null) {
     ];
     const root = resolve(config.uploadsDir);
     const missing: string[] = [];
-    for (const { key } of db.select({ key: attachments.storageKey }).from(attachments).all()) {
+    // Receipts and manager documents may share stored files: put each file in the zip once.
+    for (const key of allStorageKeys(db)) {
       const p = resolve(root, key);
       if (!p.startsWith(root + sep)) continue;
       if (existsSync(p)) entries.push({ name: `uploads/${key.split(sep).join("/")}`, data: readFileSync(p) });

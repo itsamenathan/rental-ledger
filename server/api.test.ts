@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vite-plus/test";
@@ -266,5 +266,178 @@ describe("mcp", () => {
       )
     ).json();
     expect(denied.result.isError).toBe(true);
+  });
+});
+
+function textPdf(lines: string[]) {
+  const esc = (s: string) => s.replace(/[()\\]/g, "\\$&");
+  const stream = `BT /F1 12 Tf 50 750 Td 14 TL\n${lines.map((l) => `(${esc(l)}) Tj T*`).join("\n")}\nET`;
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objs.forEach((o, i) => {
+    offsets.push(pdf.length);
+    pdf += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}`;
+  pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new TextEncoder().encode(pdf);
+}
+
+describe("manager statement", () => {
+  const csv = [
+    'Listing,Guest,Channel,"Check-in date","Check-out date",AcmeOwnerPayout,AcmeCleaningFee,AcmeManagementFee,Nights,"Reservation ID"',
+    'Cabin,"Guest A",airbnbOfficial,2027-02-02,2027-02-05,"$1,200.00",$100.00,$90.00,3,R100',
+  ].join("\n");
+  const pdf = textPdf([
+    "Invoice 9",
+    "Issued March 3, 2027",
+    "ITEM QUANTITY PRICE TOTAL",
+    "Management 1 $90.00 $90.00",
+    "Cleaning 1 $100.00 $100.00",
+    "Subtotal:",
+    "Total: $190.00",
+  ]);
+  const upload = async (files: File[], extra: Record<string, string> = {}, key = writeKey) => {
+    const form = new FormData();
+    for (const f of files) form.append("file", f);
+    for (const [k, v] of Object.entries(extra)) form.append(k, v);
+    const res = await app.request("/api/manager/documents", { method: "POST", headers: bearer(key), body: form });
+    return { status: res.status, json: (await res.json()) as any };
+  };
+  const statementFile = (body = csv) => new File([body], "statement.csv", { type: "text/csv" });
+  const invoiceFile = () => new File([pdf], "invoice.pdf", { type: "application/pdf" });
+
+  it("saves uploads under the right month, reviews and applies from them, and attaches the files once", async () => {
+    // Invoice first in the upload: statements are still placed first, so the invoice finds its month by fee.
+    const up = await upload([invoiceFile(), statementFile()]);
+    expect(up.status).toBe(200);
+    expect(up.json.map((r: any) => [r.filename, r.status, r.document.kind, r.document.month])).toEqual([
+      ["statement.csv", "saved", "statement", "2027-02"],
+      ["invoice.pdf", "saved", "invoice", "2027-02"],
+    ]);
+    expect((await upload([statementFile()])).json[0].status).toBe("duplicate");
+
+    const year = await call("GET", "/api/manager/months?year=2027", undefined, bearer(writeKey));
+    const feb = year.json.months.find((m: any) => m.month === "2027-02");
+    expect(feb).toMatchObject({ status: "todo", to_add: 3, statement: { filename: "statement.csv" } });
+    expect(year.json.months.find((m: any) => m.month === "2027-03").status).toBe("empty");
+
+    const p = (await call("GET", "/api/manager/months/2027-02?subcategory=Acme", undefined, bearer(writeKey))).json;
+    expect(p.documents).toHaveLength(2);
+    expect(p.lines.map((l: any) => [l.key, l.category, l.status])).toEqual([
+      ["9#0", "Management Fee", "missing"],
+      ["9#1", "Cleaning", "missing"],
+    ]);
+    const apply = () =>
+      call(
+        "POST",
+        "/api/manager/months/2027-02/apply",
+        { subcategory: "Acme", create_income: ["R100"], create_lines: ["9#0", "9#1"] },
+        bearer(writeKey),
+      );
+    const done = await apply();
+    expect(done.status).toBe(200);
+    expect(done.json.created_expenses).toHaveLength(2);
+    expect(done.json.created_income).toHaveLength(1);
+    const mgmt = done.json.anchor_transaction_id;
+    const names = async (txId: number) =>
+      (await call("GET", `/api/transactions/${txId}/attachments`, undefined, bearer(writeKey))).json.map(
+        (a: any) => a.filename,
+      );
+    expect(await names(mgmt)).toEqual(["invoice.pdf", "statement.csv"]);
+    expect(await names(done.json.created_expenses[1])).toEqual(["invoice.pdf"]);
+    const again = await apply();
+    expect(again.json.created_expenses).toEqual([]);
+    expect(await names(mgmt)).toEqual(["invoice.pdf", "statement.csv"]); // not attached twice
+
+    // The invoice file is shared by the document and the attachments: deleting either keeps the other readable.
+    const atts = (await call("GET", `/api/transactions/${mgmt}/attachments`, undefined, bearer(writeKey))).json;
+    await call("DELETE", `/api/attachments/${atts[0].id}`, undefined, bearer(writeKey));
+    const invDoc = p.documents.find((d: any) => d.kind === "invoice");
+    const file = await app.request(`/api/manager/documents/${invDoc.id}/file`, { headers: bearer(writeKey) });
+    expect(file.status).toBe(200);
+    expect(file.headers.get("content-type")).toBe("application/pdf");
+    expect((await call("DELETE", `/api/manager/documents/${invDoc.id}`, undefined, bearer(writeKey))).status).toBe(200);
+    const other = (
+      await call("GET", `/api/transactions/${done.json.created_expenses[1]}/attachments`, undefined, bearer(writeKey))
+    ).json;
+    expect((await app.request(`/api/attachments/${other[0].id}`, { headers: bearer(writeKey) })).status).toBe(200);
+  });
+
+  it("reports a different file for an occupied month as a conflict, replaces on request, and can move a document", async () => {
+    const changed = csv.replace("$1,200.00", "$1,250.00");
+    const conflict = (await upload([statementFile(changed)])).json[0];
+    expect(conflict).toMatchObject({ status: "conflict", existing: { month: "2027-02" } });
+    const replaced = (await upload([statementFile(changed)], { replace: "true" })).json[0];
+    expect(replaced).toMatchObject({ status: "replaced", document: { month: "2027-02" } });
+    const moved = await call(
+      "PATCH",
+      `/api/manager/documents/${replaced.document.id}`,
+      { month: "2027-04" },
+      bearer(writeKey),
+    );
+    expect(moved.json.month).toBe("2027-04");
+    expect((await upload([new File(["hello"], "notes.txt", { type: "text/plain" })])).json[0].status).toBe("error");
+    expect((await upload([statementFile()], {}, readKey)).status).toBe(403);
+  });
+});
+
+describe("attachment storage", () => {
+  const upload = async (txId: number, name: string, body: string) => {
+    const form = new FormData();
+    form.append("file", new File([body], name, { type: "text/plain" }));
+    const res = await app.request(`/api/transactions/${txId}/attachments`, {
+      method: "POST",
+      headers: bearer(writeKey),
+      body: form,
+    });
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { id: number }[])[0]!;
+  };
+  const storedFiles = () => {
+    const root = join(process.env.DATA_DIR!, "uploads");
+    try {
+      return readdirSync(root, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).length;
+    } catch {
+      return 0;
+    }
+  };
+
+  it("stores identical files once, ignores repeats on one entry, and deletes the file with its last reference", async () => {
+    const mk = async () =>
+      (
+        await call(
+          "POST",
+          "/api/transactions",
+          { date: "2027-05-01", amount: -5, category: "Supplies" },
+          bearer(writeKey),
+        )
+      ).json.id as number;
+    const [a, b] = [await mk(), await mk()];
+    const before = storedFiles();
+
+    const first = await upload(a, "invoice.txt", "same bytes");
+    const again = await upload(a, "invoice-copy.txt", "same bytes");
+    expect(again.id).toBe(first.id); // same entry + same bytes: no new row
+    const other = await upload(b, "invoice.txt", "same bytes");
+    expect(other.id).not.toBe(first.id); // each entry keeps its own attachment row
+    expect(storedFiles()).toBe(before + 1); // ...but only one stored file
+
+    await upload(b, "different.txt", "other bytes");
+    expect(storedFiles()).toBe(before + 2);
+
+    expect((await call("DELETE", `/api/attachments/${first.id}`, undefined, bearer(writeKey))).status).toBe(200);
+    const kept = await app.request(`/api/attachments/${other.id}`, { headers: bearer(writeKey) });
+    expect(await kept.text()).toBe("same bytes"); // still readable through the other entry
+    expect((await call("DELETE", `/api/attachments/${other.id}`, undefined, bearer(writeKey))).status).toBe(200);
+    expect(storedFiles()).toBe(before + 1);
   });
 });

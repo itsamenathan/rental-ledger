@@ -170,11 +170,68 @@ export const attachments = sqliteTable(
     contentType: text("content_type").notNull(),
     size: integer("size").notNull(),
     sha256: text("sha256").notNull(),
-    storageKey: text("storage_key").notNull().unique(),
+    /** Identical files share one stored file, so several rows can point at the same key. */
+    storageKey: text("storage_key").notNull(),
     createdAt: createdAt(),
     createdBy: integer("created_by").references(() => users.id),
   },
-  (t) => [index("attachments_tx").on(t.transactionId)],
+  (t) => [
+    index("attachments_tx").on(t.transactionId),
+    index("attachments_sha").on(t.sha256),
+    index("attachments_key").on(t.storageKey),
+  ],
+);
+
+/**
+ * Property-manager paperwork saved for re-checking later: owner-statement CSVs and invoices, one row per file.
+ * `text` keeps the CSV / extracted invoice text so it's re-parsed on every review (parser fixes apply to old months).
+ * Files live in the uploads folder and may share a stored file with attachments (same sha256).
+ */
+export const managerDocuments = sqliteTable(
+  "manager_documents",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    /** Service month, YYYY-MM */
+    month: text("month").notNull(),
+    kind: text("kind", { enum: ["statement", "invoice"] }).notNull(),
+    filename: text("filename").notNull(),
+    contentType: text("content_type").notNull(),
+    size: integer("size").notNull(),
+    sha256: text("sha256").notNull(),
+    storageKey: text("storage_key").notNull(),
+    text: text("text").notNull(),
+    /** Invoice number, for invoices */
+    reference: text("reference").notNull().default(""),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+  },
+  (t) => [
+    index("manager_documents_month").on(t.propertyId, t.month),
+    uniqueIndex("manager_documents_sha").on(t.propertyId, t.sha256),
+    check("manager_documents_kind_check", sql`${t.kind} IN ('statement','invoice')`),
+    check("manager_documents_month_check", sql`${t.month} GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]'`),
+  ],
+);
+
+/** "Explained" notes on manager-statement checks, so a known difference stops being reported as a to-do. */
+export const managerAcknowledgements = sqliteTable(
+  "manager_acknowledgements",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    month: text("month").notNull(),
+    /** Check.key from services/manager-statement.ts */
+    checkKey: text("check_key").notNull(),
+    note: text("note").notNull().default(""),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+  },
+  (t) => [uniqueIndex("manager_acknowledgements_unique").on(t.propertyId, t.month, t.checkKey)],
 );
 
 export const occupancy = sqliteTable(
