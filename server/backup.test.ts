@@ -80,6 +80,13 @@ describe("restore", () => {
     form.append("file", new File(["receipt bytes"], "r.txt", { type: "text/plain" }));
     const att = (await call("POST", `/api/transactions/${kept}/attachments`, form)).json[0];
     expect(att.id).toBeGreaterThan(0);
+    // A saved manager document is backed up too.
+    const statement =
+      'Channel,"Check-in date","Check-out date",XOwnerPayout,"Reservation ID"\nairbnb,2026-02-01,2026-02-03,$10.00,R1';
+    const docForm = new FormData();
+    docForm.append("file", new File([statement], "statement.csv", { type: "text/csv" }));
+    const doc = (await call("POST", "/api/manager/documents", docForm)).json[0].document;
+    expect(doc.month).toBe("2026-02");
 
     const backup = await call("GET", "/api/backup");
     expect(backup.status).toBe(200);
@@ -95,7 +102,7 @@ describe("restore", () => {
     });
     expect(r.status).toBe(200);
     expect(r.json.transactions).toBe(1);
-    expect(r.json.receipts).toBe(1);
+    expect(r.json.receipts).toBe(2);
     expect(existsSync(r.json.previous_data_saved_as)).toBe(true);
 
     // The restoring admin stays signed in.
@@ -104,6 +111,7 @@ describe("restore", () => {
     expect((await call("GET", `/api/transactions/${kept}`)).json.amount).toBe(-12.5);
     const file = await call("GET", `/api/attachments/${att.id}`);
     expect(file.buf.toString()).toBe("receipt bytes");
+    expect((await call("GET", `/api/manager/documents/${doc.id}/file`)).buf.toString()).toBe(statement);
 
     const auditRows = (await call("GET", "/api/audit?entity=backup")).json;
     const restored = (auditRows.items ?? auditRows).find((a: any) => a.action === "restore");

@@ -13,6 +13,8 @@ import { todoSummary } from "../services/todo.ts";
 import { annotate, undoAudit } from "../services/undo.ts";
 import { withSpan } from "../telemetry.ts";
 import * as files from "../services/attachments.ts";
+import * as manager from "../services/manager-statement.ts";
+import * as docs from "../services/manager-documents.ts";
 import { listAudit } from "../services/audit.ts";
 import type { Env } from "./middleware.ts";
 
@@ -501,6 +503,141 @@ export function buildMcpServer(actor: Actor) {
       inputSchema: { category: ref, name: z.string(), move_to: z.string().optional() },
     },
     wrap((args) => cats.removeSubcategory(db, actor, args)),
+  );
+
+  server.registerTool(
+    "preview_manager_month",
+    {
+      description:
+        "Reconcile the property manager's monthly paperwork against the ledger WITHOUT writing. Pass just `month` to review that month's saved documents (see list_manager_months), or pass the owner-statement CSV text and/or the invoice text (all pages; read the PDF yourself) or parsed invoice lines. Shows which reservation payouts are recorded (Airbnb: one deposit; VRBO: deposit + balance, or batched in Stripe transfers), which invoice lines are missing, and cross-checks (management fee, cleaning, waiver, commission, totals). Run this before apply_manager_month.",
+      inputSchema: {
+        statement_csv: z.string().optional().describe("Owner statement CSV text"),
+        invoice_text: z.string().optional().describe("Invoice text, all pages"),
+        invoice: z
+          .object({
+            number: z.string().optional(),
+            total: z.number().optional(),
+            lines: z.array(
+              z.object({
+                item: z.string(),
+                description: z.string().optional(),
+                quantity: z.number().optional(),
+                amount: z.number().describe("Positive dollars billed for the line"),
+              }),
+            ),
+          })
+          .optional()
+          .describe("Alternative to invoice_text: lines you extracted yourself"),
+        month: z
+          .string()
+          .optional()
+          .describe("Service month YYYY-MM. Alone: use the saved documents. Default: statement check-out month"),
+        subcategory: z.string().optional().describe("Manager name used as subcategory (default: from history)"),
+        property: ref.optional(),
+      },
+      annotations: ro,
+    },
+    wrap((args) => {
+      const { statement, ...r } = manager.previewManagerMonth(db, args);
+      void statement;
+      return r;
+    }),
+  );
+
+  server.registerTool(
+    "apply_manager_month",
+    {
+      description:
+        "Write what preview_manager_month proposed. Takes the same inputs plus which missing income rows (create_income: reservation ids) and invoice lines (create_lines: line keys from the preview) to create; overrides sets a category for a line the preview couldn't categorize. Matched income rows get the reservation id noted in an empty description. Already-recorded items are never duplicated. With only `month`, the saved documents are used and attached to the entries. Ask the user before creating income rows.",
+      inputSchema: {
+        statement_csv: z.string().optional(),
+        invoice_text: z.string().optional(),
+        invoice: z
+          .object({
+            number: z.string().optional(),
+            total: z.number().optional(),
+            lines: z.array(
+              z.object({
+                item: z.string(),
+                description: z.string().optional(),
+                quantity: z.number().optional(),
+                amount: z.number(),
+              }),
+            ),
+          })
+          .optional(),
+        month: z.string().optional(),
+        subcategory: z.string().optional(),
+        property: ref.optional(),
+        tag_income: z.boolean().optional(),
+        create_income: z.array(z.string()).optional(),
+        create_lines: z.array(z.union([z.string(), z.number().int()])).optional(),
+        overrides: z
+          .record(z.string(), z.object({ category: ref.optional(), description: z.string().optional() }))
+          .optional()
+          .describe("Keyed by invoice line key"),
+      },
+    },
+    wrap((args) =>
+      args.statement_csv == null && args.invoice_text == null && args.invoice == null
+        ? docs.applySavedMonth(db, actor, args)
+        : manager.applyManagerMonth(db, actor, args),
+    ),
+  );
+
+  server.registerTool(
+    "explain_manager_check",
+    {
+      description:
+        "Mark a warning from a manager-month review as explained (e.g. the manager confirmed a refund), so it no longer counts as a to-do; the note shows on the month. Pass the check's key from preview_manager_month. undo=true reopens it. Ask the user first.",
+      inputSchema: {
+        month: z.string(),
+        key: z.string(),
+        note: z.string().optional(),
+        undo: z.boolean().optional(),
+        property: ref.optional(),
+      },
+    },
+    wrap(({ undo, ...args }) =>
+      undo ? manager.unacknowledgeCheck(db, actor, args) : manager.acknowledgeCheck(db, actor, args),
+    ),
+  );
+
+  server.registerTool(
+    "list_manager_months",
+    {
+      description:
+        "The manager paperwork saved for a year: per month, the saved owner statement and invoices and a status (done, todo = entries to add, check = something to look at, empty = nothing saved).",
+      inputSchema: { year: z.number().int(), property: ref.optional() },
+      annotations: ro,
+    },
+    wrap(({ year, property }) => manager.managerYear(db, { year, property })),
+  );
+
+  server.registerTool(
+    "save_manager_document",
+    {
+      description:
+        "Save an owner-statement CSV or a manager invoice so its month can be reviewed later. Give the text (CSV, or the invoice's text) or the original file as base64 (a PDF is read automatically). The kind and month are detected; pass month to override. A different file for a month's statement (or the same invoice number) is reported as a conflict unless replace=true.",
+      inputSchema: {
+        filename: z.string(),
+        text: z.string().optional(),
+        base64: z.string().optional(),
+        month: z.string().optional(),
+        replace: z.boolean().optional(),
+        property: ref.optional(),
+      },
+    },
+    wrap(async ({ filename, text, base64, month, replace, property }) => {
+      if (!text && !base64) throw new Error("Give text or base64");
+      const data = base64 ? new Uint8Array(Buffer.from(base64, "base64")) : new TextEncoder().encode(text!);
+      const contentType = /\.pdf$/i.test(filename)
+        ? "application/pdf"
+        : /\.csv$/i.test(filename)
+          ? "text/csv"
+          : "text/plain";
+      return docs.saveDocuments(db, actor, [{ filename, contentType, data }], { month, replace, property });
+    }),
   );
 
   server.registerTool(

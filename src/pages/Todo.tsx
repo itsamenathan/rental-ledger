@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { api, type Recurring, type Transaction, type TxList } from "../api.ts";
 import AttentionList from "../components/AttentionList.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
-import { fmtDate } from "../format.ts";
+import { fmtDate, monthTitle } from "../format.ts";
 import { useApi, useSession, useToast } from "../hooks.ts";
 import { Amount } from "../lib.tsx";
 
@@ -14,6 +14,8 @@ export interface TodoSummary {
   recurring: number;
   recurring_notes: number;
   missing_receipts: number;
+  manager: number;
+  manager_months: { property_id: number; month: string; to_add: number; to_check: number }[];
 }
 
 const year = new Date().getFullYear();
@@ -23,6 +25,8 @@ export default function Todo() {
   const flagged = useApi<TxList>("transactions?needs_review=true&sort=date_asc&limit=500");
   const unallocated = useApi<TxList>("transactions?kind=expense&allocation=none&sort=date_asc&limit=500");
   const rec = useApi<Recurring>("recurring");
+  const summary = useApi<TodoSummary>("todo");
+  const managerMonths = summary.data?.manager_months ?? [];
   const [showReceipts, setShowReceipts] = useState(false);
   const receipts = useApi<TxList>(
     showReceipts
@@ -40,6 +44,7 @@ export default function Todo() {
     void flagged.reload();
     void unallocated.reload();
     void rec.reload();
+    void summary.reload();
     void receiptCount.reload();
     if (showReceipts) void receipts.reload();
     window.dispatchEvent(new Event("todo:changed"));
@@ -57,7 +62,8 @@ export default function Todo() {
   const loaded = flagged.data && unallocated.data && rec.data;
   const warnings = rec.data?.alerts.filter((a) => a.level === "warning") ?? [];
   const notes = rec.data?.alerts.filter((a) => a.level === "info") ?? [];
-  const nothing = loaded && !flagged.data!.total && !unallocated.data!.total && !rec.data!.alerts.length;
+  const nothing =
+    loaded && !flagged.data!.total && !unallocated.data!.total && !rec.data!.alerts.length && !managerMonths.length;
 
   return (
     <div className="page">
@@ -133,6 +139,30 @@ export default function Todo() {
           }
         >
           <AttentionList alerts={[...warnings, ...notes]} series={rec.data.series} onChanged={reloadAll} />
+        </Section>
+      )}
+
+      {managerMonths.length > 0 && (
+        <Section
+          title="Manager statements"
+          count={managerMonths.length}
+          help="Months where the manager's statement or invoice has entries missing from the ledger, or a difference nobody has explained yet."
+        >
+          <ul className="plain-list">
+            {managerMonths.map((m) => (
+              <li key={`${m.property_id}-${m.month}`}>
+                <Link to={`/statement/${m.month}`}>{monthTitle(m.month)}</Link>{" "}
+                <span className="muted">
+                  {[
+                    m.to_add ? `${m.to_add} ${m.to_add === 1 ? "entry" : "entries"} to add` : "",
+                    m.to_check ? `${m.to_check} ${m.to_check === 1 ? "thing" : "things"} to check` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(", ")}
+                </span>
+              </li>
+            ))}
+          </ul>
         </Section>
       )}
 

@@ -13,6 +13,8 @@ import { createBackup, restoreBackup } from "../services/backup.ts";
 import { preparerPackage } from "../services/preparer.ts";
 import { annotate, undoAudit } from "../services/undo.ts";
 import * as files from "../services/attachments.ts";
+import * as manager from "../services/manager-statement.ts";
+import * as docs from "../services/manager-documents.ts";
 import { transactionsCsv } from "../services/csv.ts";
 import { listAudit } from "../services/audit.ts";
 import { actorOf, requireAuth, type Env } from "./middleware.ts";
@@ -137,6 +139,82 @@ api.delete("/attachments/:id", async (c) => {
 });
 
 api.get("/suggestions", (c) => c.json(ledger.suggestions(getDb())));
+
+// ---------------- manager statements + invoices ----------------
+
+const monthParam = (c: Context) => {
+  const m = c.req.param("month") ?? "";
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) throw badRequest("Use YYYY-MM");
+  return m;
+};
+/** Year overview: per month, the saved documents and what still needs doing. */
+api.get("/manager/months", (c) =>
+  c.json(manager.managerYear(getDb(), { year: queryYear(c), property: queryProperty(c) })),
+);
+/** Review a month from its saved documents (?subcategory= overrides the manager name). */
+api.get("/manager/months/:month", (c) =>
+  c.json(
+    manager.previewManagerMonth(getDb(), {
+      month: monthParam(c),
+      property_id: queryProperty(c),
+      subcategory: c.req.query("subcategory") || undefined,
+    }),
+  ),
+);
+api.post("/manager/months/:month/apply", async (c) =>
+  c.json(await docs.applySavedMonth(getDb(), actorOf(c), { ...(await body(c)), month: monthParam(c) })),
+);
+/** Mark a month's warning as explained ({key, note}), or undo that. */
+api.post("/manager/months/:month/explained", async (c) =>
+  c.json(
+    manager.acknowledgeCheck(getDb(), actorOf(c), {
+      ...(await body(c)),
+      month: monthParam(c),
+      property_id: queryProperty(c),
+    }),
+  ),
+);
+api.delete("/manager/months/:month/explained", async (c) =>
+  c.json(
+    manager.unacknowledgeCheck(getDb(), actorOf(c), {
+      ...(await body(c)),
+      month: monthParam(c),
+      property_id: queryProperty(c),
+    }),
+  ),
+);
+/** Upload statements / invoices (multipart, any number of "file" fields). Kind and month are detected. */
+api.post("/manager/documents", async (c) => {
+  const form = await c.req.formData();
+  const uploaded = form.getAll("file").filter((f): f is File => f instanceof File);
+  if (!uploaded.length) throw badRequest('Send multipart/form-data with one or more "file" fields');
+  const files = await Promise.all(
+    uploaded.map(async (f) => ({ filename: f.name, contentType: f.type, data: new Uint8Array(await f.arrayBuffer()) })),
+  );
+  const month = form.get("month");
+  return c.json(
+    await docs.saveDocuments(getDb(), actorOf(c), files, {
+      property: queryProperty(c),
+      replace: form.get("replace") === "true",
+      month: typeof month === "string" && month ? month : undefined,
+    }),
+  );
+});
+api.get("/manager/documents/:id/file", async (c) => {
+  const { meta, data } = await docs.readDocument(getDb(), id(c));
+  const inline = meta.content_type === "application/pdf" && c.req.query("download") == null;
+  return c.body(new Uint8Array(data), 200, {
+    "Content-Type": meta.content_type,
+    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${meta.filename}"`,
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+    "Cache-Control": "private, max-age=3600",
+  });
+});
+api.patch("/manager/documents/:id", async (c) =>
+  c.json(docs.updateDocument(getDb(), actorOf(c), id(c), await body(c))),
+);
+api.delete("/manager/documents/:id", async (c) => c.json(await docs.deleteDocument(getDb(), actorOf(c), id(c))));
 
 // ---------------- occupancy & tax inputs ----------------
 
