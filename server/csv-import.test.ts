@@ -284,3 +284,56 @@ describe("commit with transaction ids", () => {
     });
   });
 });
+
+describe("brokerage-style export", () => {
+  it("uses Action as the description and skips the disclaimer lines", () => {
+    const { db } = setup();
+    const text = [
+      "",
+      "Run Date,Action,Symbol,Description,Type,Price ($),Quantity,Commission ($),Fees ($),Accrued Interest ($),Amount ($),Cash Balance ($),Settlement Date",
+      '11/10/2026,"DIRECT DEPOSIT AIRBNB PAYMENTS (Cash)", ,No Description,Cash,1,0,,,,821.24,460047.53,',
+      '11/03/2026,"DIRECT DEPOSIT AIRBNB PAYMENTS (Cash)", ,No Description,Cash,1,0,,,,132.23,459226.29,',
+      "10/30/2026,REINVESTMENT FIDELITY GOVERNMENT MONEY MARKET (SPAXX) (Cash),SPAXX,FIDELITY GOVERNMENT MONEY MARKET,Cash,1,1350.81,,,,-1350.81,459094.06,",
+      "",
+      '"The data and information in this spreadsheet is provided to you solely for your use and is not for distribution."',
+      '"Date downloaded 11/16/2026 9:41 am"',
+    ].join("\n");
+    const r = imp.inspectCsv(db, { text });
+    expect(r.mapping.columns).toMatchObject({ date: "Run Date", reference: "Action", amount: "Amount ($)" });
+    const p = imp.previewImport(db, { text, mapping: r.mapping });
+    expect(p.rows).toHaveLength(5);
+    expect(p.summary).toMatchObject({ new: 3, error: 2 });
+    expect(p.rows[3]!.errors).toEqual(["Not a transaction: no date or amount on this line"]);
+    expect(p.rows[0]).toMatchObject({
+      date: "2026-11-10",
+      amount: 821.24,
+      reference: "DIRECT DEPOSIT AIRBNB PAYMENTS (Cash)",
+    });
+  });
+});
+
+describe("skip rules", () => {
+  it("skips rows containing a text, in one column or any column, and leaves them out of totals", () => {
+    const { db } = setup();
+    const text = [
+      "Date,Action,Description,Amount",
+      "2026-10-01,DIRECT DEPOSIT AIRBNB,No Description,500",
+      "2026-10-02,REINVESTMENT,FIDELITY GOVERNMENT MONEY MARKET,-100",
+      "2026-10-03,YOU BOUGHT,Fidelity Government Money Market,-50",
+      "2026-10-04,DEBIT CARD,HARDWARE,-20",
+    ].join("\n");
+    const base = { columns: { date: "Date", reference: "Action", amount: "Amount" }, date_format: "YMD" as const };
+    const any = imp.previewImport(db, {
+      text,
+      mapping: { ...base, skip_rules: [{ contains: "money market" }] },
+    });
+    expect(any.rows.map((r) => r.status)).toEqual(["new", "skipped", "skipped", "new"]);
+    expect(any.rows[1]!.skipped_by).toBe("contains “money market”");
+    expect(any.summary).toMatchObject({ skipped: 2, money_in: 500, money_out: -20 });
+    const col = imp.previewImport(db, {
+      text,
+      mapping: { ...base, skip_rules: [{ column: "Action", contains: "reinvest" }] },
+    });
+    expect(col.rows.map((r) => r.status)).toEqual(["new", "skipped", "new", "new"]);
+  });
+});

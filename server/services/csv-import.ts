@@ -55,6 +55,12 @@ export const importMapping = z.object({
   outflow_values: z.array(z.string().max(100)).max(50).default([]),
   /** Account name for every row when no account column is mapped */
   account: z.string().trim().max(100).default(""),
+  /** Rows to leave out, e.g. money-market sweeps: a row is skipped when the column (any column if empty) contains
+   * the text, ignoring case. Saved with the profile so the next file skips them too. */
+  skip_rules: z
+    .array(z.object({ column: z.string().max(200).default(""), contains: z.string().trim().min(1).max(200) }))
+    .max(50)
+    .default([]),
 });
 export type ImportMapping = z.infer<typeof importMapping>;
 
@@ -242,6 +248,7 @@ function columnIndex(sheet: Sheet, ref: string | undefined): number {
 const HEADER_GUESSES: [ImportField, RegExp][] = [
   ["date", /^(transaction|trans\.?|txn|booking|value)?\s*date$|^date\b/i],
   ["date", /^(post(ed|ing)?)\s*date$/i],
+  ["date", /\bdate\b/i],
   // Before money out/in, so "Credit Debit Indicator" or Chase's "Details" (DEBIT/CREDIT) isn't taken as an amount.
   // It is kept only when its values look like debit/credit (see guessMapping).
   ["direction", /indicator|^details$|^(transaction\s*)?type$|^dr\s*\/\s*cr$|^cr\s*\/\s*dr$|^debit\s*\/\s*credit$/i],
@@ -261,6 +268,8 @@ const HEADER_GUESSES: [ImportField, RegExp][] = [
   ["account", /^account(\s*name)?$/i],
   ["property", /^property$/i],
 ];
+
+const REFERENCE_CANDIDATE = /description|^details?$|narrative|^action$|^transaction$|^particulars$|memo/i;
 
 const OUTFLOW_WORDS = /^(debit|dr|d|withdrawal|withdraw|charge|purchase|sale|out|payment sent|fee|-)$/i;
 
@@ -301,6 +310,20 @@ function guessMapping(sheet: Sheet): ImportMapping {
       if (w > width) [widest, width] = [i, w];
     });
     if (widest >= 0) columns.reference = sheet.columns[widest]!.key;
+  }
+  // Several text columns can hold the description (e.g. a brokerage's "Action" next to a "Description" that says
+  // "No Description"): take the one whose values vary most.
+  if (sheet.has_header) {
+    const variety = (i: number) => directionValues(i).length;
+    const taken = new Set(Object.entries(columns).flatMap(([f, k]) => (f === "reference" ? [] : [k])));
+    const cands = sheet.columns
+      .map((c, i) => ({ c, i }))
+      .filter(({ c }) => !taken.has(c.key) && REFERENCE_CANDIDATE.test(c.label));
+    const best = cands.reduce<{ i: number; n: number } | null>((b, { i }) => {
+      const n = variety(i);
+      return !b || n > b.n ? { i, n } : b;
+    }, null);
+    if (best && best.n > 0) columns.reference = sheet.columns[best.i]!.key;
   }
   // A lone "Payee"/"Name" column is the description.
   if (!columns.reference && columns.vendor) {
@@ -472,6 +495,8 @@ export function inspectCsv(db: DB, raw: unknown) {
     ...layout,
     row_count: sheet.rows.length,
     preamble: sheet.preamble,
+    /** the file's rows, so the page can show them before a mapping is complete */
+    rows: sheet.rows.slice(0, 5000),
     columns: sheet.columns.map((c, i) => {
       const vals = sheet.rows.map((r) => r.cells[i] ?? "");
       const uniq = distinct(vals.filter((v) => v.trim()));
@@ -513,7 +538,11 @@ export interface ExistingMatch {
 
 export interface PreviewRow {
   line: number;
-  status: "new" | "duplicate" | "possible" | "error";
+  status: "new" | "duplicate" | "possible" | "error" | "skipped";
+  /** the skip rule that matched, for status "skipped" */
+  skipped_by: string | null;
+  /** the row as it is in the file */
+  cells: string[];
   errors: string[];
   warnings: string[];
   date: string | null;
@@ -567,6 +596,17 @@ export function previewImport(db: DB, raw: unknown) {
   const firstIncome = cats.find((c) => c.kind === "income" && !c.archived) ?? null;
   const outflow = new Set(map.outflow_values.map(norm));
   const propertyIds = new Map<string, number | null>();
+  const rules = map.skip_rules.map((r) => ({
+    ...r,
+    i: r.column ? columnIndex(sheet, r.column) : -1,
+    text: norm(r.contains),
+  }));
+  const skipRule = (cells: string[]) =>
+    rules.find((r) =>
+      r.column && r.i < 0
+        ? false
+        : (r.i >= 0 ? (cells[r.i] ?? "") : cells.join("\u0001")).toLowerCase().includes(r.text),
+    );
 
   const rows: PreviewRow[] = sheet.rows.map(({ line, cells }) => {
     const cell = (f: ImportField) => (idx[f] >= 0 ? (cells[idx[f]] ?? "").trim() : "");
@@ -640,9 +680,16 @@ export function previewImport(db: DB, raw: unknown) {
 
     const rawId = cell("external_id");
     const account = cell("account") || map.account;
+    const rule = errors.length ? undefined : skipRule(cells);
     return {
       line,
-      status: errors.length ? "error" : "new",
+      status: errors.length ? "error" : rule ? "skipped" : "new",
+      skipped_by: rule
+        ? rule.column
+          ? `${rule.column} contains “${rule.contains}”`
+          : `contains “${rule.contains}”`
+        : null,
+      cells,
       errors,
       warnings,
       date,
@@ -661,8 +708,12 @@ export function previewImport(db: DB, raw: unknown) {
     };
   });
 
+  for (const r of rows)
+    if (r.date == null && r.amount == null) r.errors = ["Not a transaction: no date or amount on this line"];
+
   findMatches(db, rows, input.window_days);
   const count = (s: PreviewRow["status"]) => rows.filter((r) => r.status === s).length;
+  const counts = (r: PreviewRow) => r.status !== "error" && r.status !== "skipped";
   return {
     rows,
     summary: {
@@ -671,8 +722,9 @@ export function previewImport(db: DB, raw: unknown) {
       duplicate: count("duplicate"),
       possible: count("possible"),
       error: count("error"),
-      money_in: rows.reduce((n, r) => n + (r.status !== "error" && r.amount! > 0 ? r.amount! : 0), 0),
-      money_out: rows.reduce((n, r) => n + (r.status !== "error" && r.amount! < 0 ? r.amount! : 0), 0),
+      skipped: count("skipped"),
+      money_in: rows.reduce((n, r) => n + (counts(r) && r.amount! > 0 ? r.amount! : 0), 0),
+      money_out: rows.reduce((n, r) => n + (counts(r) && r.amount! < 0 ? r.amount! : 0), 0),
       from: rows.reduce<string | null>((m, r) => (r.date && (!m || r.date < m) ? r.date : m), null),
       to: rows.reduce<string | null>((m, r) => (r.date && (!m || r.date > m) ? r.date : m), null),
     },

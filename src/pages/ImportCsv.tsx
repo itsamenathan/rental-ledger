@@ -23,12 +23,6 @@ const FIELDS = {
   property: { label: "Property", hint: "Matched by name" },
 } as const;
 type Field = keyof typeof FIELDS;
-const FIELD_GROUPS: { label: string; fields: Field[] }[] = [
-  { label: "Required", fields: ["date", "amount", "money_out", "money_in", "direction"] },
-  { label: "Details", fields: ["reference", "vendor", "category", "subcategory", "description"] },
-  { label: "Other", fields: ["external_id", "account", "property"] },
-];
-
 interface Mapping {
   delimiter: "," | ";" | "\t" | "|";
   header_row: number;
@@ -40,6 +34,7 @@ interface Mapping {
   negate: boolean;
   outflow_values: string[];
   account: string;
+  skip_rules: { column: string; contains: string }[];
 }
 
 interface Inspection {
@@ -48,6 +43,7 @@ interface Inspection {
   has_header: boolean;
   row_count: number;
   preamble: string[][];
+  rows: { line: number; cells: string[] }[];
   columns: { key: string; label: string; samples: string[]; values: string[] | null }[];
   headers: string[];
   profile: { id: number; name: string } | null;
@@ -67,11 +63,13 @@ interface Match {
   reason: string;
 }
 
-type Status = "new" | "duplicate" | "possible" | "error";
+type Status = "new" | "duplicate" | "possible" | "error" | "skipped";
 
 interface PreviewRow {
   line: number;
   status: Status;
+  skipped_by: string | null;
+  cells: string[];
   errors: string[];
   warnings: string[];
   date: string | null;
@@ -96,6 +94,7 @@ interface Preview {
     duplicate: number;
     possible: number;
     error: number;
+    skipped: number;
     money_in: number;
     money_out: number;
     from: string | null;
@@ -119,18 +118,14 @@ type Filter = "all" | Status | "uncategorized";
 
 const OUTFLOW = /^(debit|dr|d|withdrawal|withdraw|charge|purchase|sale|out|fee|-)$/i;
 
-/** Recompute amount_mode from which columns are mapped. */
-function withAmountMode(m: Mapping): Mapping {
-  const c = m.columns;
-  const amount_mode = c.amount
-    ? c.direction
-      ? "direction"
-      : "signed"
-    : c.money_out || c.money_in
-      ? "split"
-      : "signed";
-  return { ...m, amount_mode };
-}
+/** "History_for_Account_X123.csv" -> "History for Account X123" */
+const defaultProfileName = (file: string) =>
+  file
+    .replace(/\.[^.]+$/, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s*\(\d+\)$/, "")
+    .trim()
+    .slice(0, 100);
 
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
@@ -147,6 +142,8 @@ export default function ImportCsv() {
   const [propertyId, setPropertyId] = useState(overview.properties.find((p) => !p.archived)?.id ?? 0);
   const [windowDays, setWindowDays] = usePersistentState("csv-window-days", 3);
   const [preview, setPreview] = useState<Preview | null>(null);
+  /** file lines the user unticked in the column step */
+  const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const [previewError, setPreviewError] = useState("");
   const [saveProfile, setSaveProfile] = useState(true);
   const [profileName, setProfileName] = useState("");
@@ -154,14 +151,20 @@ export default function ImportCsv() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
 
-  const inspect = async (t: string, opts: Record<string, unknown> = {}) => {
+  /** `name`: the file name, on first open (a re-read for format changes keeps what the user typed). */
+  const inspect = async (t: string, opts: Record<string, unknown> = {}, name?: string) => {
     setBusy(true);
     try {
       const r = await api<Inspection>("import/inspect", { method: "POST", json: { text: t, ...opts } });
       setInfo(r);
       setMapping(r.mapping);
-      setProfileName(r.profile?.name ?? "");
-      setSaveProfile(!r.profile);
+      if (r.profile) {
+        setProfileName(r.profile.name);
+        setSaveProfile(false);
+      } else if (name != null) {
+        setProfileName(defaultProfileName(name));
+        setSaveProfile(true);
+      }
       setStep("map");
     } catch (e) {
       toast({ text: (e as Error).message, kind: "error" });
@@ -176,10 +179,11 @@ export default function ImportCsv() {
       return toast({ text: "Choose a CSV file (export it from your bank or provider as CSV)", kind: "error" });
     const t = await f.text();
     setFileName(f.name);
+    setExcluded(new Set());
     setText(t);
     setPreview(null);
     setResult(null);
-    await inspect(t);
+    await inspect(t, {}, f.name);
   };
 
   // Live preview while mapping (debounced): the same check the review step uses.
@@ -219,7 +223,12 @@ export default function ImportCsv() {
         toast({ text: `Couldn't save the settings: ${(e as Error).message}`, kind: "error" });
       }
     }
-    setRows(preview.rows.map((r) => ({ ...r, include: r.status === "new" })));
+    // Unreadable, skipped and unticked rows were dealt with on the file view; review only what could be added.
+    setRows(
+      preview.rows
+        .filter((r) => r.status !== "error" && r.status !== "skipped" && !excluded.has(r.line))
+        .map((r) => ({ ...r, include: r.status === "new" })),
+    );
     setStep("review");
   };
 
@@ -258,6 +267,8 @@ export default function ImportCsv() {
           reinspect={(opts) => void inspect(text, opts)}
           preview={preview}
           previewError={previewError}
+          excluded={excluded}
+          setExcluded={setExcluded}
           propertyId={propertyId}
           setPropertyId={setPropertyId}
           windowDays={windowDays}
@@ -409,6 +420,8 @@ interface MapProps {
   reinspect: (opts: Record<string, unknown>) => void;
   preview: Preview | null;
   previewError: string;
+  excluded: Set<number>;
+  setExcluded: (s: Set<number>) => void;
   propertyId: number;
   setPropertyId: (n: number) => void;
   windowDays: number;
@@ -421,70 +434,441 @@ interface MapProps {
   onNext: () => void;
 }
 
+const COLUMN_CHOICES: { label: string; fields: [Field, string][] }[] = [
+  {
+    label: "Needed",
+    fields: [
+      ["date", "Date"],
+      ["reference", "Description"],
+      ["amount", "Amount (+/−)"],
+      ["money_out", "Money out"],
+      ["money_in", "Money in"],
+      ["direction", "In/out type"],
+    ],
+  },
+  {
+    label: "Optional",
+    fields: [
+      ["vendor", "Payee / vendor"],
+      ["category", "Category"],
+      ["subcategory", "Subcategory"],
+      ["description", "Notes"],
+      ["external_id", "Transaction ID"],
+      ["account", "Account"],
+      ["property", "Property"],
+    ],
+  },
+];
+const ROW_LIMIT = 300;
+
+/** Amount style follows the columns chosen: one signed amount, separate in/out, or amount + in/out type. */
+function withAmountMode(m: Mapping): Mapping {
+  const c = m.columns;
+  return {
+    ...m,
+    amount_mode: c.amount ? (c.direction ? "direction" : "signed") : c.money_out || c.money_in ? "split" : "signed",
+  };
+}
+
+type TableFilter = "all" | "import" | "skipped" | "error";
+
 function MapStep(p: MapProps) {
   const { overview } = useSession();
-  const { info, mapping } = p;
+  const { info, mapping, preview } = p;
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<TableFilter>("all");
+  const [showEmpty, setShowEmpty] = useState(false);
+  const [limit, setLimit] = useState(ROW_LIMIT);
+  const set = (patch: Partial<Mapping>) => p.setMapping({ ...mapping, ...patch });
+
   const fieldOf = (key: string) =>
     (Object.entries(mapping.columns).find(([, v]) => v === key)?.[0] as Field | undefined) ?? "";
   const assign = (key: string, field: Field | "") => {
     const columns = { ...mapping.columns };
     for (const [f, v] of Object.entries(columns)) if (v === key) delete columns[f as Field];
-    if (field) columns[field] = key;
+    if (field) {
+      columns[field] = key;
+      // one amount style at a time
+      const drop: Field[] =
+        field === "amount"
+          ? ["money_out", "money_in"]
+          : field === "money_out" || field === "money_in"
+            ? ["amount"]
+            : [];
+      for (const d of drop) delete columns[d];
+    }
+    if (!columns.amount) delete columns.direction;
     let next = withAmountMode({ ...mapping, columns });
-    if (field === "direction" && !next.outflow_values.length) {
+    if (field === "direction") {
       const vals = info.columns.find((c) => c.key === key)?.values ?? [];
       next = { ...next, outflow_values: vals.filter((v) => OUTFLOW.test(v)) };
     }
     p.setMapping(next);
   };
-  const set = (patch: Partial<Mapping>) => p.setMapping({ ...mapping, ...patch });
-  const dirCol = info.columns.find((c) => c.key === mapping.columns.direction);
+
+  // Rows: the checked preview when the mapping is complete, else the file as read.
+  const byLine = new Map((preview?.rows ?? []).map((r) => [r.line, r]));
+  const rows = info.rows.map(({ line, cells }) => ({ line, cells, r: byLine.get(line) }));
+  const q = query.trim().toLowerCase();
+  const isImport = (x: (typeof rows)[number]) =>
+    !!x.r && x.r.status !== "error" && x.r.status !== "skipped" && !p.excluded.has(x.line);
+  const isSkipped = (x: (typeof rows)[number]) =>
+    x.r?.status === "skipped" || (!!x.r && x.r.status !== "error" && p.excluded.has(x.line));
+  const visible = rows.filter(
+    (x) =>
+      (!q || x.cells.join(" ").toLowerCase().includes(q)) &&
+      (filter === "all" ||
+        (filter === "import" && isImport(x)) ||
+        (filter === "skipped" && isSkipped(x)) ||
+        (filter === "error" && x.r?.status === "error")),
+  );
+  const matching = q ? rows.filter((x) => x.cells.join(" ").toLowerCase().includes(q)).length : 0;
+  const nImport = rows.filter(isImport).length;
+  const nSkipped = rows.filter(isSkipped).length;
+  const nError = rows.filter((x) => x.r?.status === "error").length;
+  const importRows = rows.filter(isImport).map((x) => x.r!);
+  const moneyIn = importRows.reduce((n, r) => n + (r.amount! > 0 ? r.amount! : 0), 0);
+  const moneyOut = importRows.reduce((n, r) => n + (r.amount! < 0 ? r.amount! : 0), 0);
+
+  const shownCols = info.columns
+    .map((c, i) => ({ c, i }))
+    .filter(({ c }) => showEmpty || c.samples.length > 0 || fieldOf(c.key));
+  const hiddenEmpty = info.columns.length - shownCols.length;
+
   const missing = [
-    !mapping.columns.date && "the date",
-    !mapping.columns.amount && !mapping.columns.money_out && !mapping.columns.money_in && "the amount",
-    mapping.amount_mode === "direction" && !mapping.outflow_values.length && "which type means money out",
-  ].filter(Boolean);
-  const s = p.preview?.summary;
-  const sample = p.preview?.rows.slice(0, 6) ?? [];
-  const usable = s ? s.total - s.error : 0;
+    !mapping.columns.date && "Date",
+    !mapping.columns.amount && !mapping.columns.money_out && !mapping.columns.money_in && "Amount",
+  ].filter(Boolean) as string[];
+  const dirCol = info.columns.find((c) => c.key === mapping.columns.direction);
+
+  const addRule = () => {
+    const contains = query.trim();
+    if (!contains) return;
+    if (!mapping.skip_rules.some((r) => !r.column && r.contains.toLowerCase() === contains.toLowerCase()))
+      set({ skip_rules: [...mapping.skip_rules, { column: "", contains }] });
+    setQuery("");
+  };
+  const ruleCount = (contains: string, column: string) =>
+    (preview?.rows ?? []).filter(
+      (r) => r.skipped_by && r.skipped_by.endsWith(`“${contains}”`) && (!column || r.skipped_by.startsWith(column)),
+    ).length;
+
+  const toggle = (line: number, on: boolean) => {
+    const next = new Set(p.excluded);
+    if (on) next.delete(line);
+    else next.add(line);
+    p.setExcluded(next);
+  };
+
+  const blocked = missing.length
+    ? `Pick the ${missing.join(" and ")} column${missing.length > 1 ? "s" : ""} using the menus above the columns.`
+    : p.previewError
+      ? p.previewError
+      : !preview
+        ? "Reading…"
+        : nImport === 0
+          ? "No rows to import."
+          : p.saveProfile && !p.profileName.trim()
+            ? "Name the saved settings, or untick “Remember”."
+            : "";
 
   return (
     <>
-      <section className="card">
+      <section className="card imp-headcard">
         <div className="imp-file">
           <div>
             <strong className="ms-fname">{p.fileName}</strong>
             <div className="muted small">
-              {plural(info.row_count, "row")} · {plural(info.columns.length, "column")}
-              {info.preamble.length > 0 && ` · skipped ${plural(info.preamble.length, "line")} above the header`}
+              {plural(info.row_count, "row")}
+              {info.preamble.length > 0 && ` · ${plural(info.preamble.length, "line")} above the header skipped`}
             </div>
           </div>
-          <label className="imp-profile">
-            Saved settings
-            <select
-              value={info.profile?.id ?? ""}
-              onChange={(e) =>
-                p.reinspect(
-                  e.target.value
-                    ? { profile_id: Number(e.target.value) }
-                    : { delimiter: mapping.delimiter, header_row: mapping.header_row, has_header: mapping.has_header },
-                )
-              }
-            >
-              <option value="">{info.profiles.length ? "None (guess from headers)" : "None saved yet"}</option>
-              {info.profiles.map((x) => (
-                <option key={x.id} value={x.id}>
-                  {x.name}
+          {info.profiles.length > 0 && (
+            <label className="imp-profile">
+              Saved settings
+              <select
+                value={info.profile?.id ?? ""}
+                onChange={(e) =>
+                  p.reinspect(
+                    e.target.value
+                      ? { profile_id: Number(e.target.value) }
+                      : {
+                          delimiter: mapping.delimiter,
+                          header_row: mapping.header_row,
+                          has_header: mapping.has_header,
+                        },
+                  )
+                }
+              >
+                <option value="">None</option>
+                {info.profiles.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+        <p className="imp-lead">
+          {info.profile ? (
+            <>
+              Using your saved settings <strong>“{info.profile.name}”</strong>. Check the rows below.
+            </>
+          ) : (
+            <>
+              Use the menus above the columns to say which one is the <strong>date</strong>, the{" "}
+              <strong>description</strong> and the <strong>amount</strong>. The first column shows what each row will
+              become.
+            </>
+          )}
+        </p>
+      </section>
+
+      <section className="card table-card imp-sheet">
+        <div className="imp-toolbar">
+          <div className="segmented imp-filter" role="tablist">
+            {(
+              [
+                ["all", `All ${rows.length}`],
+                ["import", `To import ${nImport}`],
+                ["skipped", `Skipped ${nSkipped}`],
+                ["error", `Can't read ${nError}`],
+              ] as [TableFilter, string][]
+            )
+              .filter(([f]) => f === "all" || f === "import" || (f === "skipped" ? nSkipped : nError) > 0)
+              .map(([f, label]) => (
+                <button
+                  key={f}
+                  role="tab"
+                  aria-selected={filter === f}
+                  className={filter === f ? "on" : ""}
+                  onClick={() => setFilter(f)}
+                >
+                  {label}
+                </button>
+              ))}
+          </div>
+          <span className="spacer" />
+          <div className="imp-search">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && matching > 0 && addRule()}
+              placeholder="Search rows, e.g. money market"
+              aria-label="Search rows"
+            />
+            {q && (
+              <button className="btn" disabled={!matching} onClick={addRule}>
+                Skip {plural(matching, "matching row")}
+              </button>
+            )}
+          </div>
+        </div>
+        {mapping.skip_rules.length > 0 && (
+          <div className="imp-rules">
+            <span className="muted small">Skipping rows that</span>
+            {mapping.skip_rules.map((r, i) => (
+              <span key={i} className="chip small imp-rule">
+                {r.column ? `${r.column} contains` : "contain"} “{r.contains}”
+                {preview && <span className="muted"> · {ruleCount(r.contains, r.column)}</span>}
+                <button
+                  className="imp-rule-x"
+                  aria-label={`Stop skipping rows that contain ${r.contains}`}
+                  onClick={() => set({ skip_rules: mapping.skip_rules.filter((_, j) => j !== i) })}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="imp-scroll">
+          <table className="data-table imp-grid">
+            <thead>
+              <tr>
+                <th className="imp-sticky imp-c-check" />
+                <th className="imp-sticky imp-c-result">Will import as</th>
+                {shownCols.map(({ c }) => {
+                  const f = fieldOf(c.key);
+                  return (
+                    <th key={c.key} className={f ? "imp-mapped" : "imp-ignored"}>
+                      <div className="imp-colname" title={c.label}>
+                        {c.label}
+                      </div>
+                      <select
+                        value={f}
+                        onChange={(e) => assign(c.key, e.target.value as Field | "")}
+                        aria-label={`What is in column ${c.label}`}
+                      >
+                        <option value="">Ignore</option>
+                        {COLUMN_CHOICES.map((g) => (
+                          <optgroup key={g.label} label={g.label}>
+                            {g.fields.map(([x, label]) => (
+                              <option key={x} value={x} disabled={x === "direction" && !mapping.columns.amount}>
+                                {label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.slice(0, limit).map((x) => {
+                const r = x.r;
+                const err = r?.status === "error";
+                const skipped = r?.status === "skipped";
+                const off = !!r && !err && !skipped && p.excluded.has(x.line);
+                return (
+                  <tr key={x.line} className={err ? "imp-err" : skipped || off ? "excluded" : ""}>
+                    <td className="imp-sticky imp-c-check">
+                      <input
+                        type="checkbox"
+                        checked={!!r && !err && !skipped && !off}
+                        disabled={!r || err || skipped}
+                        onChange={(e) => toggle(x.line, e.target.checked)}
+                        aria-label={`Import line ${x.line}`}
+                        title={skipped ? "Skipped by a rule above" : err ? "Can't be read" : ""}
+                      />
+                    </td>
+                    <td className="imp-sticky imp-c-result">
+                      {!r ? (
+                        <span className="muted">—</span>
+                      ) : err ? (
+                        <span className="neg small">{r.errors[0]}</span>
+                      ) : (
+                        <span className="imp-result">
+                          <span className="muted">{fmtDate(r.date!)}</span>
+                          <span className={r.amount! < 0 ? "neg" : "pos"}>{money(r.amount)}</span>
+                          {skipped && <span className="muted small">skipped</span>}
+                        </span>
+                      )}
+                    </td>
+                    {shownCols.map(({ c, i }) => (
+                      <td key={c.key} className={fieldOf(c.key) ? "" : "imp-ignored"} title={x.cells[i]}>
+                        {x.cells[i]}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+              {!visible.length && (
+                <tr>
+                  <td colSpan={shownCols.length + 2} className="empty">
+                    No rows match.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="imp-sheet-foot">
+          {visible.length > limit && (
+            <button className="link small" onClick={() => setLimit(Infinity)}>
+              Show all {visible.length} rows
+            </button>
+          )}
+          {hiddenEmpty > 0 && (
+            <button className="link small" onClick={() => setShowEmpty(!showEmpty)}>
+              {showEmpty ? "Hide empty columns" : `Show ${plural(hiddenEmpty, "empty column")}`}
+            </button>
+          )}
+          <span className="spacer" />
+          <span className="muted small">Line numbers and raw values are kept; nothing is changed in your file.</span>
+        </div>
+      </section>
+
+      <section className="card">
+        {preview && !missing.length && (
+          <div className="imp-totals">
+            <span>
+              <strong>{plural(nImport, "transaction")}</strong> <span className="muted">to import</span>
+            </span>
+            <span>
+              <strong className="pos">{money(moneyIn)}</strong> <span className="muted">in</span>
+            </span>
+            <span>
+              <strong className="neg">{money(moneyOut)}</strong> <span className="muted">out</span>
+            </span>
+          </div>
+        )}
+        <label className="check imp-flip">
+          <input type="checkbox" checked={mapping.negate} onChange={(e) => set({ negate: e.target.checked })} /> Flip
+          signs
+          <span className="muted small">
+            — tick this if money you spent shows in green (common in credit card files)
+          </span>
+        </label>
+        {dirCol && (
+          <fieldset className="field imp-direction">
+            <legend>Which “{dirCol.label}” values mean money out?</legend>
+            <div className="chips">
+              {(dirCol.values ?? []).map((v) => {
+                const on = mapping.outflow_values.some((x) => x.toLowerCase() === v.toLowerCase());
+                return (
+                  <button
+                    key={v}
+                    type="button"
+                    className={`chip${on ? " on" : ""}`}
+                    aria-pressed={on}
+                    onClick={() =>
+                      set({
+                        outflow_values: on
+                          ? mapping.outflow_values.filter((x) => x.toLowerCase() !== v.toLowerCase())
+                          : [...mapping.outflow_values, v],
+                      })
+                    }
+                  >
+                    {v}
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
+        )}
+
+        <div className="imp-options">
+          {!mapping.columns.account && (
+            <label>
+              Account name
+              <input
+                value={mapping.account}
+                onChange={(e) => set({ account: e.target.value })}
+                placeholder="e.g. Fidelity cash, Chase checking"
+              />
+            </label>
+          )}
+          {overview.properties.length > 1 && !mapping.columns.property && (
+            <label>
+              Property
+              <select value={p.propertyId} onChange={(e) => p.setPropertyId(Number(e.target.value))}>
+                {overview.properties.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>
+            Possible duplicate when
+            <select value={p.windowDays} onChange={(e) => p.setWindowDays(Number(e.target.value))}>
+              <option value={0}>Same amount, same day</option>
+              {[1, 2, 3, 5, 7].map((n) => (
+                <option key={n} value={n}>
+                  Same amount within {plural(n, "day")}
                 </option>
               ))}
             </select>
           </label>
         </div>
-        {info.profile && (
-          <p className="alert ok imp-matched">
-            Recognized this layout: using your saved settings <strong>“{info.profile.name}”</strong>.
-          </p>
-        )}
+
         <details className="imp-advanced">
           <summary>File format</summary>
           <div className="imp-format">
@@ -550,202 +934,31 @@ function MapStep(p: MapProps) {
             The file has a header row
           </label>
         </details>
-      </section>
-
-      <section className="card">
-        <div className="section-head">
-          <h2>Match columns</h2>
-          <span className="muted small">Pick what each column holds. Leave the rest as “Don't import”.</span>
-        </div>
-        <div className="imp-cols">
-          {info.columns.map((c) => {
-            const f = fieldOf(c.key);
-            return (
-              <div key={c.key} className={`imp-col${f ? " on" : ""}`}>
-                <div className="imp-col-head" title={c.label}>
-                  {c.label}
-                </div>
-                <ul className="imp-col-samples">
-                  {c.samples.slice(0, 3).map((v, i) => (
-                    <li key={i} title={v}>
-                      {v}
-                    </li>
-                  ))}
-                  {!c.samples.length && <li className="muted">(empty)</li>}
-                </ul>
-                <select
-                  value={f}
-                  onChange={(e) => assign(c.key, e.target.value as Field | "")}
-                  aria-label={`Use column ${c.label} as`}
-                  title={f ? FIELDS[f].hint : ""}
-                >
-                  <option value="">Don't import</option>
-                  {FIELD_GROUPS.map((g) => (
-                    <optgroup key={g.label} label={g.label}>
-                      {g.fields.map((x) => (
-                        <option key={x} value={x}>
-                          {FIELDS[x].label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
-            );
-          })}
-        </div>
-
-        {dirCol && (
-          <fieldset className="field imp-direction">
-            <legend>Which “{dirCol.label}” values mean money out?</legend>
-            <div className="chips">
-              {(dirCol.values ?? []).map((v) => {
-                const on = mapping.outflow_values.some((x) => x.toLowerCase() === v.toLowerCase());
-                return (
-                  <button
-                    key={v}
-                    type="button"
-                    className={`chip${on ? " on" : ""}`}
-                    aria-pressed={on}
-                    onClick={() =>
-                      set({
-                        outflow_values: on
-                          ? mapping.outflow_values.filter((x) => x.toLowerCase() !== v.toLowerCase())
-                          : [...mapping.outflow_values, v],
-                      })
-                    }
-                  >
-                    {v}
-                  </button>
-                );
-              })}
-            </div>
-          </fieldset>
-        )}
-      </section>
-
-      <section className="card">
-        <div className="section-head">
-          <h2>Check the result</h2>
-          {s && <span className="muted small">{s.from && s.to ? `${fmtDate(s.from)} – ${fmtDate(s.to)}` : ""}</span>}
-        </div>
-        {missing.length > 0 ? (
-          <p className="alert warn">Choose {missing.join(" and ")} to continue.</p>
-        ) : p.previewError ? (
-          <p className="alert error">{p.previewError}</p>
-        ) : !p.preview ? (
-          <p className="muted">Reading…</p>
-        ) : (
-          <>
-            <div className="imp-totals">
-              <span>
-                <strong className="pos">{money(s!.money_in)}</strong> <span className="muted">in</span>
-              </span>
-              <span>
-                <strong className="neg">{money(s!.money_out)}</strong> <span className="muted">out</span>
-              </span>
-              <span className="muted">
-                {plural(usable, "row")} ready{s!.error > 0 && <span className="neg"> · {s!.error} can't be read</span>}
-              </span>
-            </div>
-            <table className="data-table imp-sample">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Description</th>
-                  <th className="num">Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sample.map((r) => (
-                  <tr key={r.line}>
-                    <td className="nowrap">{r.date ? fmtDate(r.date) : <span className="neg">?</span>}</td>
-                    <td className="imp-desc">
-                      {r.vendor || r.reference || r.description || <span className="muted">—</span>}
-                    </td>
-                    <td className={`num ${(r.amount ?? 0) < 0 ? "neg" : "pos"}`}>
-                      {r.amount == null ? <span className="neg">?</span> : money(r.amount)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {sample.some((r) => r.errors.length) && (
-              <p className="small neg">{sample.find((r) => r.errors.length)!.errors[0]}</p>
-            )}
-          </>
-        )}
-        <label className="check imp-flip">
-          <input type="checkbox" checked={mapping.negate} onChange={(e) => set({ negate: e.target.checked })} /> Flip
-          signs
-          <span className="muted small">
-            Money spent should show in red. Card exports often list charges as positive.
-          </span>
-        </label>
-
-        <div className="imp-options">
-          {!mapping.columns.account && (
-            <label>
-              Account
-              <input
-                value={mapping.account}
-                onChange={(e) => set({ account: e.target.value })}
-                placeholder="e.g. Checking, Visa"
-              />
-            </label>
-          )}
-          {overview.properties.length > 1 && !mapping.columns.property && (
-            <label>
-              Property
-              <select value={p.propertyId} onChange={(e) => p.setPropertyId(Number(e.target.value))}>
-                {overview.properties.map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {x.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <label>
-            Possible match window
-            <select value={p.windowDays} onChange={(e) => p.setWindowDays(Number(e.target.value))}>
-              <option value={0}>Same day only</option>
-              {[1, 2, 3, 5, 7].map((n) => (
-                <option key={n} value={n}>
-                  ± {plural(n, "day")}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
 
         <div className="imp-save">
           <label className="check">
             <input type="checkbox" checked={p.saveProfile} onChange={(e) => p.setSaveProfile(e.target.checked)} />{" "}
-            {info.profile ? "Update the saved settings" : "Remember these settings for this provider"}
+            {info.profile
+              ? "Update the saved settings"
+              : "Remember these settings (columns and skip rules) for next time"}
           </label>
           {p.saveProfile && (
             <input
               value={p.profileName}
               onChange={(e) => p.setProfileName(e.target.value)}
-              placeholder="Name, e.g. Chase checking"
-              aria-label="Settings name"
+              placeholder="Name, e.g. Fidelity cash"
+              aria-label="Name for the saved settings"
             />
           )}
         </div>
-
         <div className="form-actions">
           <button className="btn" onClick={p.onBack}>
             Back
           </button>
           <span className="spacer" />
-          <button
-            className="btn primary"
-            disabled={!p.preview || missing.length > 0 || usable === 0 || (p.saveProfile && !p.profileName.trim())}
-            onClick={p.onNext}
-            title={p.saveProfile && !p.profileName.trim() ? "Name the saved settings, or untick the box" : ""}
-          >
-            Check {plural(usable, "row")} against the ledger →
+          {blocked && <span className="small muted imp-blocked">{blocked}</span>}
+          <button className="btn primary" disabled={!!blocked} onClick={p.onNext}>
+            Next: check {plural(nImport, "row")} against the ledger →
           </button>
         </div>
       </section>

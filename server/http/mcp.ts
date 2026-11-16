@@ -745,7 +745,8 @@ export function buildMcpServer(actor: Actor) {
     },
     wrap((args) => {
       const r = csvImport.inspectCsv(db, args);
-      return { ...r, columns: r.columns.map((c) => ({ ...c, samples: c.samples.slice(0, 3) })) };
+      const { rows: _rows, ...rest } = r;
+      return { ...rest, columns: r.columns.map((c) => ({ ...c, samples: c.samples.slice(0, 3) })) };
     }),
   );
 
@@ -753,7 +754,7 @@ export function buildMcpServer(actor: Actor) {
     "preview_csv_import",
     {
       description:
-        "Apply a column mapping to a CSV and check each row against the ledger WITHOUT writing. Statuses: new, duplicate (same transaction id, or same day + amount), possible (same amount within window_days: ask the user), error. Each row has a guessed `category` (from the file or vendor history; null = ask). To add rows, pass them to bulk_add_transactions as {date, amount, category, subcategory, vendor, reference, description, account, external_id, property, refund: true} with skip_duplicates=false (the preview already decided).",
+        "Apply a column mapping to a CSV and check each row against the ledger WITHOUT writing. Statuses: new, duplicate (same transaction id, or same day + amount), possible (same amount within window_days: ask the user), error, skipped (matched one of mapping.skip_rules [{column, contains}], e.g. money-market sweeps). Each row has a guessed `category` (from the file or vendor history; null = ask). To add rows, pass them to bulk_add_transactions as {date, amount, category, subcategory, vendor, reference, description, account, external_id, property, refund: true} with skip_duplicates=false (the preview already decided).",
       inputSchema: {
         text: z.string().describe("The CSV file's text"),
         mapping: z.record(z.string(), z.unknown()).describe("The mapping from inspect_csv (or a saved profile)"),
@@ -772,7 +773,7 @@ export function buildMcpServer(actor: Actor) {
         rows: (only_attention
           ? r.rows.filter((x) => x.status !== "new" || x.category_id == null || x.warnings.length)
           : r.rows
-        ).map(({ category_id: _c, property_id, external_id, ...x }) => ({
+        ).map(({ category_id: _c, cells: _cells, property_id, external_id, ...x }) => ({
           ...x,
           property: property_id,
           external_id: external_id ?? undefined,

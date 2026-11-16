@@ -2869,3 +2869,233 @@ select.imp-need {
 .imp-done-actions {
   justify-content: center;
 }
+.imp-h {
+  margin: 1.2rem 0 0.15rem;
+}
+.imp-sub {
+  margin: 0 0 0.9rem;
+}
+.imp-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 1rem;
+}
+.imp-form-3 {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  margin-top: 0.7rem;
+}
+@media (max-width: 640px) {
+  .imp-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.imp-field select {
+  width: 100%;
+}
+.imp-field-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 550;
+  color: var(--text-2);
+}
+.imp-field-hint {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.imp-amounts {
+  margin: 0.2rem 0 0;
+}
+.imp-modes {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 0.8rem;
+}
+.imp-modes button {
+  flex: 1 1 auto;
+}
+.imp-direction {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0 0 0.85rem;
+}
+.imp-sample-wrap {
+  overflow-x: auto;
+}
+.imp-errors {
+  margin-top: 0.6rem;
+}
+.imp-errors summary {
+  cursor: pointer;
+  font-weight: 550;
+}
+.imp-errors ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.85rem;
+}
+.imp-blocked {
+  text-align: right;
+}
+.imp-advanced .badge {
+  margin-left: 0.4rem;
+}
+.imp-lead {
+  margin: 0.7rem 0 0;
+  color: var(--text-2);
+}
+.imp-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.imp-filter {
+  flex-wrap: wrap;
+}
+.imp-search {
+  display: flex;
+  gap: 0.4rem;
+  flex: 1 1 20rem;
+  max-width: 34rem;
+}
+.imp-search input {
+  flex: 1;
+  min-width: 0;
+}
+.imp-search .btn {
+  white-space: nowrap;
+}
+.imp-rules {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.imp-rule {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: default;
+  min-height: 28px;
+  padding: 0.15rem 0.3rem 0.15rem 0.7rem;
+}
+.imp-rule-x {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.3rem;
+}
+.imp-rule-x:hover {
+  color: var(--neg);
+}
+.imp-scroll {
+  overflow: auto;
+  max-height: 65vh;
+}
+.imp-grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: max-content;
+  min-width: 100%;
+  font-size: 0.86rem;
+}
+.imp-grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  vertical-align: bottom;
+}
+.imp-grid td {
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.imp-sticky {
+  position: sticky;
+  background: var(--surface);
+  z-index: 1;
+}
+.imp-grid thead .imp-sticky {
+  z-index: 3;
+}
+.imp-c-check {
+  left: 0;
+  width: 2.4rem;
+  min-width: 2.4rem;
+}
+.imp-c-result {
+  left: 2.4rem;
+  min-width: 11rem;
+  border-right: 2px solid var(--border);
+}
+.imp-result {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+.imp-colname {
+  font-weight: 650;
+  color: var(--text);
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 0.3rem;
+}
+.imp-grid th select {
+  width: 100%;
+  min-width: 8.5rem;
+  min-height: 32px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.84rem;
+}
+.imp-grid th.imp-mapped select {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.imp-grid th.imp-mapped {
+  border-bottom: 2px solid var(--accent);
+}
+.imp-grid td.imp-ignored {
+  color: var(--muted);
+  opacity: 0.6;
+}
+.imp-grid th.imp-ignored .imp-colname {
+  color: var(--text-2);
+}
+.imp-grid tr.imp-err td {
+  background: var(--err-bg);
+}
+.imp-grid tr.excluded td {
+  opacity: 1;
+}
+.imp-grid tr.excluded td:not(.imp-c-check) {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.imp-grid tr.excluded .imp-c-result span {
+  text-decoration: none;
+}
+.imp-sheet-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 1rem;
+  padding: 0.6rem 1rem;
+  border-top: 1px solid var(--border);
+}
