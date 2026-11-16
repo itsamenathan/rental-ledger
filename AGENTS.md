@@ -58,4 +58,21 @@ release. Add a tool name to select part of the graph. For example, run
   to: receipts by their entry's date, manager paperwork by the month it covers. Trashed entries are left out.
 - Subcategories are free text on transactions (Grist layout, e.g. Management Fee → Acme PM). The `subcategories`
   table only remembers names for suggestions; rename/remove/merge go through `server/services/categories.ts`.
+- Logging: use `log` from `server/telemetry.ts` (pino), not `console.*` (the CLI's human output is the exception).
+  Tracing is automatic for API/MCP requests and SQL; wrap other slow work in `withSpan(name, attrs, fn)`.
 - Never write to Grist; `server/grist-import.ts` must stay GET-only.
+
+# Test harness (worktrees)
+
+Each worktree gets its own throwaway `./data` with fictional data (about 3 years of transactions, receipts, occupancy,
+and To do items: a missing bill, a duplicate, a flagged and an unallocated entry) and known logins. T3 Code runs
+`scripts/harness setup` when it creates a worktree.
+
+- `scripts/harness dev` starts `vp dev` on 0.0.0.0 at this worktree's own port (stable per path, printed and stored in
+  `data/harness.json`). `scripts/harness reset` reseeds; stop the dev server first (reset refuses while it runs).
+- Logins: `admin@example.com`, `member@example.com`, `viewer@example.com`, password `password`.
+- `scripts/harness info` prints the URL, a write and a read API key (`Authorization: Bearer …`), an admin session
+  cookie for curl, and `data/sample-bank-export.csv` for trying CSV import.
+- Reset only deletes a data folder the harness created (it has `harness.json`), never a real ledger.
+- Run Node commands through `vp env exec --node 24 …` if `node -p process.features.typescript` prints `false`.
+- When a change needs new kinds of data to test, add it to `generate()` in `server/harness.ts`.
