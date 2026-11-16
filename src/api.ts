@@ -16,6 +16,18 @@ export interface Category {
   description: string;
   sort_order: number;
   archived: boolean;
+  /** when an expense here should have a receipt (server/services/receipts.ts) */
+  receipt_policy: "always" | "threshold" | "never";
+  /** dollar threshold for 'threshold'; null = Overview.receipt_min */
+  receipt_min: number | null;
+}
+
+/** A vendor/subcategory name that never needs a receipt. */
+export interface ReceiptExclusion {
+  id: number;
+  name: string;
+  note: string;
+  matches: number;
 }
 
 export interface Property {
@@ -78,6 +90,8 @@ export interface Overview {
   categories: Category[];
   years: number[];
   schedule_e_lines: Record<string, string>;
+  /** default receipt threshold in dollars */
+  receipt_min: number;
 }
 
 export class ApiError extends Error {
@@ -122,9 +136,6 @@ export const qs = (params: Record<string, string | number | boolean | null | und
   const s = p.toString();
   return s ? `?${s}` : "";
 };
-
-/** Expenses of at least this many dollars should have a receipt (matches the server's RECEIPT_MIN_DOLLARS). */
-export const RECEIPT_MIN = 75;
 
 export interface LibraryFile {
   key: string;

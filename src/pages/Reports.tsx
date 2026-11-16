@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { api, qs, RECEIPT_MIN } from "../api.ts";
+import { api, qs } from "../api.ts";
 import { money, percent, THIS_YEAR } from "../format.ts";
 import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
@@ -324,7 +324,7 @@ function checkLink(code: string, year: number) {
   const q: Record<string, string> = {
     needs_review: `/todo`,
     unallocated: `/transactions?year=${year}&kind=expense&allocation=none`,
-    missing_receipts: `/transactions?year=${year}&kind=expense&has_attachment=false&min_amount=${RECEIPT_MIN}`,
+    missing_receipts: `/transactions?year=${year}&needs_receipt=true`,
     capitalize: `/transactions?year=${year}&kind=expense&min_amount=2500`,
   };
   return q[code] ?? `/transactions?year=${year}`;

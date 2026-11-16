@@ -90,6 +90,16 @@ export const categories = sqliteTable(
     description: text("description").notNull().default(""),
     sortOrder: integer("sort_order").notNull().default(0),
     archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+    /**
+     * When an expense in this category should have a receipt: 'always' (any amount), 'threshold' (at least
+     * receiptMinCents, or the app default) or 'never'. Decided in services/receipts.ts. Validated by zod, not a
+     * CHECK, so adding it didn't rebuild the table.
+     */
+    receiptPolicy: text("receipt_policy", { enum: ["always", "threshold", "never"] })
+      .notNull()
+      .default("threshold"),
+    /** Threshold override for 'threshold'; null = the app default (RECEIPT_MIN_DOLLARS) */
+    receiptMinCents: integer("receipt_min_cents"),
   },
   (t) => [
     uniqueIndex("categories_name_unique").on(sql`lower(${t.name})`),
@@ -305,6 +315,22 @@ export const recurringDismissals = sqliteTable(
     createdBy: integer("created_by").references(() => users.id),
   },
   (t) => [uniqueIndex("recurring_dismissals_unique").on(t.seriesKey, t.month)],
+);
+
+/**
+ * Names that never need a receipt (e.g. Airbnb, Stripe, the sewer utility), whatever the category. Matched
+ * case-insensitively against a transaction's vendor OR subcategory, since payees are often stored as subcategories.
+ */
+export const receiptExclusions = sqliteTable(
+  "receipt_exclusions",
+  {
+    id: integer("id").primaryKey(),
+    name: text("name").notNull(),
+    note: text("note").notNull().default(""),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+  },
+  (t) => [uniqueIndex("receipt_exclusions_name").on(sql`lower(${t.name})`)],
 );
 
 /**

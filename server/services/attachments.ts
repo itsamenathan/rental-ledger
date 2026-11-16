@@ -19,9 +19,6 @@ export const ALLOWED: Record<string, string> = {
   "text/csv": "csv",
 };
 
-/** Expenses of at least this many dollars are expected to have a receipt (To do, tax checks, Files page). */
-export const RECEIPT_MIN_DOLLARS = 75;
-
 /** A filename that is safe in a Content-Disposition header and a zip. */
 export const cleanFilename = (name: string, fallback: string) =>
   name

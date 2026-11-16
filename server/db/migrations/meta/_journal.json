@@ -50,6 +50,20 @@
       "when": 1794767340111,
       "tag": "0006_import_profiles",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1794864537048,
+      "tag": "0007_receipt_policies",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794864541003,
+      "tag": "0008_mortgage_never_needs_receipt",
+      "breakpoints": true
     }
   ]
 }

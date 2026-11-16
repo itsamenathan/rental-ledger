@@ -9,6 +9,7 @@ import * as rental from "../services/rental.ts";
 import * as reports from "../services/reports.ts";
 import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
+import * as receipts from "../services/receipts.ts";
 import { todoSummary } from "../services/todo.ts";
 import { annotate, undoAudit } from "../services/undo.ts";
 import { withSpan } from "../telemetry.ts";
@@ -58,6 +59,20 @@ const wrap =
   };
 
 const ref = z.union([z.number().int(), z.string()]);
+const receiptFields = {
+  receipt_policy: z
+    .enum(["always", "threshold", "never"])
+    .optional()
+    .describe(
+      "When to ask for a receipt: always (any amount), threshold (at least receipt_min, default) or never. New Schedule E line 12 (mortgage) categories default to never.",
+    ),
+  receipt_min: z
+    .number()
+    .positive()
+    .nullable()
+    .optional()
+    .describe("Dollar threshold for 'threshold'; null = app default ($75)"),
+};
 const txShape = {
   date: z.string().describe("YYYY-MM-DD"),
   amount: z.number().describe("Signed dollars: income positive, expenses NEGATIVE"),
@@ -143,6 +158,10 @@ export function buildMcpServer(actor: Actor) {
         q: z.string().optional().describe("Free-text search"),
         needs_review: z.boolean().optional(),
         has_attachment: z.boolean().optional(),
+        needs_receipt: z
+          .boolean()
+          .optional()
+          .describe("true = expenses that should have a receipt and don't (category receipt rules + never-ask names)"),
         amount: z
           .string()
           .optional()
@@ -285,7 +304,7 @@ export function buildMcpServer(actor: Actor) {
     "list_files",
     {
       description:
-        "List stored files (receipts on entries and saved manager statements/invoices) for a month or year, each with the entries it is attached to, plus expenses over the receipt threshold that have no file. One item per stored file even when attached to several entries.",
+        "List stored files (receipts on entries and saved manager statements/invoices) for a month or year, each with the entries it is attached to, plus expenses that should have a receipt and have no file (category receipt rules and never-ask names). One item per stored file even when attached to several entries.",
       inputSchema: {
         month: z.string().optional().describe("YYYY-MM (default: current year if neither is given)"),
         year: z.number().int().optional(),
@@ -422,6 +441,7 @@ export function buildMcpServer(actor: Actor) {
               .join(", ")}`,
           ),
         description: z.string().optional(),
+        ...receiptFields,
       },
     },
     wrap((args) => ledger.createCategory(db, actor, args)),
@@ -489,7 +509,7 @@ export function buildMcpServer(actor: Actor) {
     "get_todo",
     {
       description:
-        "The user's to-do list: counts of flagged entries, expenses with no direct/indirect set, recurring-bill alerts (missing, duplicate, changed), and $75+ expenses without receipts this year, plus the recurring alerts themselves. Use search_transactions (needs_review=true, allocation=none) for the entries.",
+        "The user's to-do list: counts of flagged entries, expenses with no direct/indirect set, recurring-bill alerts (missing, duplicate, changed), and expenses this year that should have a receipt and don't (per category receipt rules and never-ask names; list them with search_transactions needs_receipt=true), plus the recurring alerts themselves. Use search_transactions (needs_review=true, allocation=none) for the entries.",
       inputSchema: {},
       annotations: ro,
     },
@@ -514,7 +534,7 @@ export function buildMcpServer(actor: Actor) {
     "update_category",
     {
       description:
-        "Rename a category or change its default tax treatment / Schedule E line / archived flag. Ask the user first.",
+        "Rename a category or change its default tax treatment / Schedule E line / archived flag / receipt rule. Ask the user first.",
       inputSchema: {
         category: ref.describe("Category name or id"),
         name: z.string().optional(),
@@ -522,9 +542,40 @@ export function buildMcpServer(actor: Actor) {
         schedule_e_line: z.string().nullable().optional(),
         description: z.string().optional(),
         archived: z.boolean().optional(),
+        ...receiptFields,
       },
     },
     wrap(({ category, ...patch }) => ledger.updateCategory(db, actor, ledger.resolveCategory(db, category).id, patch)),
+  );
+
+  server.registerTool(
+    "list_receipt_exclusions",
+    {
+      description:
+        "Vendor/subcategory names that never need a receipt (e.g. Airbnb, Stripe, the sewer utility), with how many expenses each matches.",
+      inputSchema: {},
+      annotations: ro,
+    },
+    wrap(() => receipts.listReceiptExclusions(db)),
+  );
+
+  server.registerTool(
+    "add_receipt_exclusion",
+    {
+      description:
+        "Stop asking for receipts for a vendor or subcategory name (matched case-insensitively against both, in any category). Ask the user first.",
+      inputSchema: { name: z.string(), note: z.string().optional() },
+    },
+    wrap((args) => receipts.addReceiptExclusion(db, actor, args)),
+  );
+
+  server.registerTool(
+    "remove_receipt_exclusion",
+    {
+      description: "Ask for receipts again for a name on the never-ask list. Ask the user first.",
+      inputSchema: { name: ref.describe("Name or id") },
+    },
+    wrap(({ name }) => receipts.removeReceiptExclusion(db, actor, name)),
   );
 
   server.registerTool(

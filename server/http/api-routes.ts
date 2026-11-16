@@ -8,6 +8,7 @@ import * as rental from "../services/rental.ts";
 import * as reports from "../services/reports.ts";
 import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
+import * as receipts from "../services/receipts.ts";
 import { todoSummary } from "../services/todo.ts";
 import { createBackup, restoreBackup } from "../services/backup.ts";
 import { preparerPackage } from "../services/preparer.ts";
@@ -55,6 +56,8 @@ api.get("/overview", (c) => {
     categories: ledger.listCategories(db),
     years: reports.availableYears(db),
     schedule_e_lines: ledger.SCHEDULE_E_LINES,
+    /** default dollar threshold for categories with receipt_policy 'threshold' and no receipt_min */
+    receipt_min: receipts.RECEIPT_MIN_DOLLARS,
   });
 });
 
@@ -80,6 +83,14 @@ api.get("/subcategories", (c) => c.json(cats.listSubcategories(getDb())));
 api.post("/subcategories", async (c) => c.json(cats.addSubcategory(getDb(), actorOf(c), await body(c)), 201));
 api.post("/subcategories/rename", async (c) => c.json(cats.renameSubcategory(getDb(), actorOf(c), await body(c))));
 api.post("/subcategories/remove", async (c) => c.json(cats.removeSubcategory(getDb(), actorOf(c), await body(c))));
+
+// ---------------- receipt rules: names that never need a receipt ----------------
+
+api.get("/receipt-exclusions", (c) => c.json(receipts.listReceiptExclusions(getDb())));
+api.post("/receipt-exclusions", async (c) =>
+  c.json(receipts.addReceiptExclusion(getDb(), actorOf(c), await body(c)), 201),
+);
+api.delete("/receipt-exclusions/:id", (c) => c.json(receipts.removeReceiptExclusion(getDb(), actorOf(c), id(c))));
 
 // ---------------- file library ----------------
 

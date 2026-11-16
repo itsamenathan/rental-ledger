@@ -14,7 +14,7 @@ import { config } from "../config.ts";
 import type { DB } from "../db.ts";
 import { attachments, categories, managerDocuments, properties, transactions } from "../db/schema.ts";
 import { audit, badRequest, type Actor } from "../context.ts";
-import { RECEIPT_MIN_DOLLARS } from "./attachments.ts";
+import { RECEIPT_MIN_DOLLARS } from "./receipts.ts";
 import { zip } from "./backup.ts";
 import { listTransactions, type Transaction } from "./ledger.ts";
 
@@ -244,9 +244,7 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
           ...(p.month ? { month: p.month } : { year: p.year }),
           property_id: q.property_id,
           q: q.q,
-          kind: "expense",
-          has_attachment: "false",
-          min_amount: RECEIPT_MIN_DOLLARS,
+          needs_receipt: true,
           sort: "date_asc",
           limit: 500,
         });
@@ -262,6 +260,7 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
     },
     missing: missing.items,
     missing_total: missing.total,
+    /** the default threshold; categories can override it or ask always/never (services/receipts.ts) */
     receipt_min: RECEIPT_MIN_DOLLARS,
   };
 }

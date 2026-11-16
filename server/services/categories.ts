@@ -9,6 +9,7 @@ import { tx, type DB } from "../db.ts";
 import { categories, recurringDismissals, subcategories, transactions } from "../db/schema.ts";
 import { audit, badRequest, requireAdmin, requireWrite, type Actor } from "../context.ts";
 import { deleteCategory, getCategory, resolveCategory } from "./ledger.ts";
+import { renameReceiptExclusion } from "./receipts.ts";
 
 const t = transactions;
 const ref = z.union([z.number().int(), z.string().min(1)]);
@@ -121,6 +122,7 @@ export function renameSubcategory(db: DB, actor: Actor, raw: unknown) {
       (c, s) => c === String(cat.id) && s === lower(p.from),
       ([pr, c, v]) => [pr!, c!, v!, lower(p.to)],
     );
+    renameReceiptExclusion(db, p.from, p.to);
     audit(db, actor, "rename", "subcategory", cat.id, {
       category: cat.name,
       from: p.from,

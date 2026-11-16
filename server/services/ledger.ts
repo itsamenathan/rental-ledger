@@ -38,6 +38,7 @@ import {
   requireWrite,
   type Actor,
 } from "../context.ts";
+import { defaultReceiptPolicy, needsReceipt, RECEIPT_POLICIES, type ReceiptPolicy } from "./receipts.ts";
 
 // ======================= shared schema bits =======================
 
@@ -181,6 +182,16 @@ export const categoryInput = z.object({
   description: z.string().max(1000).default(""),
   sort_order: z.number().int().default(0),
   archived: z.boolean().default(false),
+  // No zod defaults on these two: updateCategory parses .partial(), and createCategory picks the default.
+  receipt_policy: z
+    .enum(RECEIPT_POLICIES)
+    .optional()
+    .describe("When to ask for a receipt: always (any amount), threshold (default) or never"),
+  receipt_min: money
+    .positive()
+    .nullable()
+    .optional()
+    .describe("Dollar threshold for receipt_policy 'threshold'; null = the app default ($75)"),
 });
 
 export interface Category {
@@ -192,6 +203,9 @@ export interface Category {
   description: string;
   sort_order: number;
   archived: boolean;
+  receipt_policy: ReceiptPolicy;
+  /** dollars; null = the app default */
+  receipt_min: number | null;
 }
 
 const categoryCols = {
@@ -203,6 +217,8 @@ const categoryCols = {
   description: categories.description,
   sort_order: categories.sortOrder,
   archived: categories.archived,
+  receipt_policy: categories.receiptPolicy,
+  receipt_min: sql<number | null>`${categories.receiptMinCents} / 100.0`,
 };
 
 const categoryValues = (c: Partial<z.infer<typeof categoryInput>>) => ({
@@ -213,6 +229,8 @@ const categoryValues = (c: Partial<z.infer<typeof categoryInput>>) => ({
   description: c.description,
   sortOrder: c.sort_order,
   archived: c.archived,
+  receiptPolicy: c.receipt_policy,
+  receiptMinCents: c.receipt_min === undefined ? undefined : c.receipt_min == null ? null : cents(c.receipt_min),
 });
 
 export function listCategories(db: DB, includeArchived = true): Category[] {
@@ -237,7 +255,12 @@ export function createCategory(db: DB, actor: Actor | null, raw: unknown) {
     throw badRequest("Category already exists");
   const { id } = db
     .insert(categories)
-    .values({ ...categoryValues(c), name: c.name, kind: c.kind })
+    .values({
+      ...categoryValues(c),
+      name: c.name,
+      kind: c.kind,
+      receiptPolicy: c.receipt_policy ?? defaultReceiptPolicy(c.schedule_e_line),
+    })
     .returning({ id: categories.id })
     .get();
   audit(db, actor, "create", "category", id, c);
@@ -408,6 +431,10 @@ export const transactionQuery = z.object({
   q: z.string().optional().describe("Search description, vendor, subcategory, reference"),
   needs_review: z.preprocess((v) => (v === "true" ? true : v === "false" ? false : v), z.boolean()).optional(),
   has_attachment: z.preprocess((v) => (v === "true" ? true : v === "false" ? false : v), z.boolean()).optional(),
+  needs_receipt: z
+    .preprocess((v) => (v === "true" ? true : v === "false" ? false : v), z.boolean())
+    .optional()
+    .describe("true = expenses that should have a receipt and don't (per category policy and never-ask names)"),
   amount: z
     .string()
     .optional()
@@ -495,6 +522,7 @@ function transactionFilters(db: DB, q: TransactionQuery): SQL | undefined {
     );
     where.push(q.has_attachment ? has : not(has));
   }
+  if (q.needs_receipt != null) where.push(q.needs_receipt ? needsReceipt() : not(needsReceipt()));
   if (q.amount) {
     const r = parseAmountSearch(q.amount);
     if (!r) throw badRequest("Amount search: use 69.95, 50-100, >500, <20 or ~70");

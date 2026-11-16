@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { api, RECEIPT_MIN, type Recurring, type Transaction, type TxList } from "../api.ts";
+import { api, type Recurring, type Transaction, type TxList } from "../api.ts";
 import AttentionList from "../components/AttentionList.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, monthTitle } from "../format.ts";
@@ -27,9 +27,6 @@ export default function Todo() {
   const rec = useApi<Recurring>("recurring");
   const summary = useApi<TodoSummary>("todo");
   const managerMonths = summary.data?.manager_months ?? [];
-  const receiptCount = useApi<TxList>(
-    `transactions?kind=expense&has_attachment=false&min_amount=${RECEIPT_MIN}&year=${year}&limit=1`,
-  );
   const [editing, setEditing] = useState<number | null>(null);
   const { canWrite } = useSession();
   const toast = useToast();
@@ -39,7 +36,6 @@ export default function Todo() {
     void unallocated.reload();
     void rec.reload();
     void summary.reload();
-    void receiptCount.reload();
     window.dispatchEvent(new Event("todo:changed"));
   };
   const patch = async (id: number, json: Record<string, unknown>, text: string) => {
@@ -159,15 +155,15 @@ export default function Todo() {
         </Section>
       )}
 
-      {receiptCount.data && receiptCount.data.total > 0 && (
+      {!!summary.data?.missing_receipts && (
         <section className="card">
           <Link className="section-toggle" to={`/files?year=${year}&missing=1`}>
             <span>
               Receipts <span className="muted small">optional</span>
             </span>
             <span className="muted small">
-              {receiptCount.data.total} {receiptCount.data.total === 1 ? "expense" : "expenses"} of ${RECEIPT_MIN}+ in{" "}
-              {year} without one →
+              {summary.data.missing_receipts} {summary.data.missing_receipts === 1 ? "expense" : "expenses"} in {year}{" "}
+              without one →
             </span>
           </Link>
         </section>
