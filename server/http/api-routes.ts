@@ -13,6 +13,7 @@ import { createBackup, restoreBackup } from "../services/backup.ts";
 import { preparerPackage } from "../services/preparer.ts";
 import { annotate, undoAudit } from "../services/undo.ts";
 import * as files from "../services/attachments.ts";
+import * as library from "../services/files.ts";
 import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
 import { transactionsCsv } from "../services/csv.ts";
@@ -79,6 +80,19 @@ api.post("/subcategories", async (c) => c.json(cats.addSubcategory(getDb(), acto
 api.post("/subcategories/rename", async (c) => c.json(cats.renameSubcategory(getDb(), actorOf(c), await body(c))));
 api.post("/subcategories/remove", async (c) => c.json(cats.removeSubcategory(getDb(), actorOf(c), await body(c))));
 
+// ---------------- file library ----------------
+
+const fileFilters = (c: Context) => ({ ...c.req.query(), property_id: queryProperty(c) });
+api.get("/files", (c) => c.json(library.listFiles(getDb(), fileFilters(c))));
+api.get("/files.zip", (c) => {
+  const z = library.filesZip(getDb(), actorOf(c), fileFilters(c));
+  return c.body(new Uint8Array(z.data), 200, {
+    "Content-Type": "application/zip",
+    "Content-Disposition": `attachment; filename="${z.filename}"; filename*=UTF-8''${encodeURIComponent(z.filename)}`,
+    "Cache-Control": "no-store",
+  });
+});
+
 // ---------------- transactions ----------------
 
 api.get("/transactions", (c) => c.json(ledger.listTransactions(getDb(), c.req.query())));
@@ -133,6 +147,12 @@ api.get("/attachments/:id", async (c) => {
     "Cache-Control": "private, max-age=3600",
   });
 });
+api.patch("/attachments/:id", async (c) =>
+  c.json(await files.updateAttachment(getDb(), actorOf(c), id(c), await body(c))),
+);
+api.post("/attachments/:id/link", async (c) =>
+  c.json(files.linkAttachment(getDb(), actorOf(c), id(c), await body(c)), 201),
+);
 api.delete("/attachments/:id", async (c) => {
   await files.deleteAttachment(getDb(), actorOf(c), id(c));
   return c.json({ ok: true });

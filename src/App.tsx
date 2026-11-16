@@ -14,6 +14,7 @@ import Occupancy from "./pages/Occupancy.tsx";
 import Reports from "./pages/Reports.tsx";
 import ImportCsv from "./pages/ImportCsv.tsx";
 import ManagerStatement from "./pages/ManagerStatement.tsx";
+import Files from "./pages/Files.tsx";
 import Settings from "./pages/Settings.tsx";
 
 interface Me {
@@ -60,6 +61,11 @@ const NAV = [
   { to: "/", label: "Overview", icon: "M3 13h8V3H3zm10 8h8V11h-8zM3 21h8v-6H3zm10-18v6h8V3z" },
   { to: "/todo", label: "To do", icon: "M9 12l2 2 4-4M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z" },
   { to: "/statement", label: "Manager", icon: "M4 4h16v16H4zM8 9h8M8 13h8M8 17h5" },
+  {
+    to: "/files",
+    label: "Files",
+    icon: "M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48",
+  },
   { to: "/categories", label: "Categories", icon: "M3 3h18v18H3zM3 9h18M3 15h18M9 3v18" },
   { to: "/transactions", label: "Transactions", icon: "M4 6h16M4 12h16M4 18h10" },
   { to: "/add", label: "Add", icon: "M12 5v14M5 12h14", primary: true },
@@ -78,12 +84,12 @@ const NAV = [
 ];
 /** Sidebar groups (Add entry is a button above them; Settings sits at the bottom). */
 const SIDEBAR: { title?: string; items: string[] }[] = [
-  { title: "Money", items: ["/", "/todo", "/transactions", "/statement", "/categories", "/recurring"] },
+  { title: "Money", items: ["/", "/todo", "/transactions", "/files", "/statement", "/categories", "/recurring"] },
   { title: "Taxes", items: ["/reports", "/occupancy"] },
 ];
 const MOBILE_NAV = ["/", "/transactions", "/add", "/todo"];
 /** Everything else on a phone lives behind the bottom bar's "More" button. */
-const MOBILE_MORE = ["/reports", "/statement", "/categories", "/recurring", "/occupancy", "/settings"];
+const MOBILE_MORE = ["/files", "/reports", "/statement", "/categories", "/recurring", "/occupancy", "/settings"];
 const MORE_ICON = "M5 12h.01M12 12h.01M19 12h.01";
 
 export function Icon({ d, size = 20 }: { d: string; size?: number }) {
@@ -203,6 +209,7 @@ function Shell() {
           <Route path="/occupancy" element={<Occupancy />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/import" element={<ImportCsv />} />
+          <Route path="/files" element={<Files />} />
           <Route path="/statement" element={<ManagerStatement />} />
           <Route path="/statement/:month" element={<ManagerStatement />} />
           <Route path="/settings/*" element={<Settings />} />

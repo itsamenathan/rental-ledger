@@ -1,5 +1,6 @@
 /** Everything that needs the user's attention, in one place (the To do page, nav badge and agents). */
 import type { DB } from "../db.ts";
+import { RECEIPT_MIN_DOLLARS } from "./attachments.ts";
 import { listTransactions } from "./ledger.ts";
 import { recurring } from "./recurring.ts";
 import { managerAttention } from "./manager-statement.ts";
@@ -26,7 +27,7 @@ export function todoSummary(db: DB, opts: { propertyId?: number; today?: string 
     manager: manager.length,
     manager_months: manager,
     /** optional: $75+ expenses this year with no receipt (not counted in total) */
-    missing_receipts: count({ kind: "expense", has_attachment: "false", min_amount: 75, year }),
+    missing_receipts: count({ kind: "expense", has_attachment: "false", min_amount: RECEIPT_MIN_DOLLARS, year }),
     alerts: rec.alerts,
   };
 }

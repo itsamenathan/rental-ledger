@@ -28,7 +28,7 @@ Streamable HTTP MCP endpoint: \`POST /mcp\` with the same Bearer key. Example cl
 
 Tools: get_overview, list_categories, search_transactions, get_transaction, add_expense, add_transaction,
 bulk_add_transactions, update_transaction, bulk_update_transactions, delete_transaction, flag_for_review,
-attach_receipt, get_summary, get_tax_report, list_occupancy, set_occupancy, set_tax_year_inputs,
+attach_receipt, list_files, link_attachment, unlink_attachment, update_attachment, get_summary, get_tax_report, list_occupancy, set_occupancy, set_tax_year_inputs,
 add_category, update_category, delete_category, add_subcategory, rename_subcategory,
 remove_subcategory, month_summary, category_by_month, year_totals, get_todo, get_recurring, dismiss_recurring, recent_changes, undo_change.
 
