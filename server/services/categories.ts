@@ -7,9 +7,9 @@ import { and, count, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { categories, recurringDismissals, subcategories, transactions } from "../db/schema.ts";
-import { audit, badRequest, requireAdmin, requireWrite, type Actor } from "../context.ts";
+import { audit, badRequest, cents, dollars, requireAdmin, requireWrite, type Actor } from "../context.ts";
 import { deleteCategory, getCategory, resolveCategory } from "./ledger.ts";
-import { renameReceiptExclusion } from "./receipts.ts";
+import { RECEIPT_POLICIES, type ReceiptPolicy } from "./receipts.ts";
 
 const t = transactions;
 const ref = z.union([z.number().int(), z.string().min(1)]);
@@ -17,8 +17,19 @@ const subName = z.string().trim().min(1, "Name is required").max(60);
 const lower = (s: string) => s.trim().toLowerCase();
 const sameSub = (name: string) => eq(sql`lower(${t.subcategory})`, lower(name));
 
-/** Every subcategory per category: saved ones plus any used on transactions, with transaction counts. */
-export function listSubcategories(db: DB) {
+export interface SubcategoryInfo {
+  category_id: number;
+  name: string;
+  count: number;
+  saved: boolean;
+  /** own receipt rule; null = same as the category */
+  receipt_policy: ReceiptPolicy | null;
+  /** dollars, for 'threshold'; null = the category's amount */
+  receipt_min: number | null;
+}
+
+/** Every subcategory per category: saved ones plus any used on transactions, with transaction counts and rules. */
+export function listSubcategories(db: DB): SubcategoryInfo[] {
   const used = db
     .select({ category_id: t.categoryId, name: t.subcategory, count: count() })
     .from(t)
@@ -26,18 +37,20 @@ export function listSubcategories(db: DB) {
     .groupBy(t.categoryId, t.subcategory)
     .all();
   const saved = db.select().from(subcategories).all();
-  const out = new Map<string, { category_id: number; name: string; count: number; saved: boolean }>();
+  const out = new Map<string, SubcategoryInfo>();
+  const none = { saved: false, receipt_policy: null, receipt_min: null };
   for (const u of used) {
     const k = `${u.category_id}|${lower(u.name)}`;
     const prev = out.get(k);
     // differently-cased variants: keep the most used spelling, add up counts
     if (prev) out.set(k, { ...prev, name: u.count > prev.count ? u.name : prev.name, count: prev.count + u.count });
-    else out.set(k, { category_id: u.category_id, name: u.name, count: u.count, saved: false });
+    else out.set(k, { category_id: u.category_id, name: u.name, count: u.count, ...none });
   }
   for (const s of saved) {
     const k = `${s.categoryId}|${lower(s.name)}`;
     const prev = out.get(k);
-    out.set(k, prev ? { ...prev, saved: true } : { category_id: s.categoryId, name: s.name, count: 0, saved: true });
+    const rule = { saved: true, receipt_policy: s.receiptPolicy, receipt_min: dollars(s.receiptMinCents) };
+    out.set(k, prev ? { ...prev, ...rule } : { category_id: s.categoryId, name: s.name, count: 0, ...rule });
   }
   return [...out.values()].sort(
     (a, b) => a.category_id - b.category_id || b.count - a.count || a.name.localeCompare(b.name),
@@ -122,7 +135,6 @@ export function renameSubcategory(db: DB, actor: Actor, raw: unknown) {
       (c, s) => c === String(cat.id) && s === lower(p.from),
       ([pr, c, v]) => [pr!, c!, v!, lower(p.to)],
     );
-    renameReceiptExclusion(db, p.from, p.to);
     audit(db, actor, "rename", "subcategory", cat.id, {
       category: cat.name,
       from: p.from,
@@ -171,6 +183,60 @@ export function removeSubcategory(db: DB, actor: Actor, raw: unknown) {
   });
 }
 
+export const subcategoryReceiptRuleInput = z.object({
+  category: ref,
+  name: subName,
+  receipt_policy: z
+    .enum([...RECEIPT_POLICIES, "inherit"])
+    .describe("always | threshold | never, or inherit = same as the category"),
+  receipt_min: z
+    .number()
+    .finite()
+    .positive()
+    .max(1e9)
+    .nullable()
+    .optional()
+    .describe("Dollar threshold for 'threshold'; null = the category's"),
+});
+
+/**
+ * Give a subcategory its own receipt rule, or put it back to the category's ("inherit"). A subcategory that's only
+ * used on transactions is saved first, so the rule has somewhere to live.
+ */
+export function setSubcategoryReceiptRule(db: DB, actor: Actor, raw: unknown) {
+  requireWrite(actor);
+  const p = subcategoryReceiptRuleInput.parse(raw);
+  const cat = resolveCategory(db, p.category);
+  if (cat.kind !== "expense") throw badRequest("Receipt rules are for expense categories");
+  const policy = p.receipt_policy === "inherit" ? null : p.receipt_policy;
+  const minCents = policy === "threshold" && p.receipt_min != null ? cents(p.receipt_min) : null;
+  return tx(db, () => {
+    let row = savedRow(db, cat.id, p.name);
+    if (!row) {
+      // keep the spelling used on transactions
+      const used = listSubcategories(db).find((x) => x.category_id === cat.id && lower(x.name) === lower(p.name));
+      row = db
+        .insert(subcategories)
+        .values({ categoryId: cat.id, name: used?.name ?? p.name })
+        .returning()
+        .get();
+    }
+    const before = { receipt_policy: row.receiptPolicy, receipt_min: dollars(row.receiptMinCents) };
+    db.update(subcategories)
+      .set({ receiptPolicy: policy, receiptMinCents: minCents })
+      .where(eq(subcategories.id, row.id))
+      .run();
+    const after = { receipt_policy: policy, receipt_min: dollars(minCents) };
+    audit(db, actor, "update", "subcategory", cat.id, {
+      category: cat.name,
+      name: row.name,
+      receipt_policy: [before.receipt_policy, after.receipt_policy],
+      receipt_min: [before.receipt_min, after.receipt_min],
+    });
+    return { category_id: cat.id, category: cat.name, name: row.name, ...after };
+  });
+}
+
 // ---------- categories ----------
 
 export const deleteCategoryInput = z.object({
@@ -197,8 +263,17 @@ export function deleteCategoryMoving(db: DB, actor: Actor, id: number, raw: unkn
       .returning({ id: t.id })
       .all()
       .map((r) => r.id);
+    // Subcategories (and their receipt rules) come along, unless the target already has one by that name.
     for (const s of db.select().from(subcategories).where(eq(subcategories.categoryId, from.id)).all())
-      if (!savedRow(db, to.id, s.name)) db.insert(subcategories).values({ categoryId: to.id, name: s.name }).run();
+      if (!savedRow(db, to.id, s.name))
+        db.insert(subcategories)
+          .values({
+            categoryId: to.id,
+            name: s.name,
+            receiptPolicy: s.receiptPolicy,
+            receiptMinCents: s.receiptMinCents,
+          })
+          .run();
     rekeyDismissals(
       db,
       (c) => c === String(from.id),

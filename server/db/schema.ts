@@ -121,6 +121,10 @@ export const subcategories = sqliteTable(
       .references(() => categories.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     createdAt: createdAt(),
+    /** Receipt rule for entries in this subcategory; null = same as the category (services/receipts.ts) */
+    receiptPolicy: text("receipt_policy", { enum: ["always", "threshold", "never"] }),
+    /** Threshold for 'threshold'; null = the category's, then the app default */
+    receiptMinCents: integer("receipt_min_cents"),
   },
   (t) => [uniqueIndex("subcategories_category_name").on(t.categoryId, t.name)],
 );
@@ -318,8 +322,8 @@ export const recurringDismissals = sqliteTable(
 );
 
 /**
- * Names that never need a receipt (e.g. Airbnb, Stripe, the sewer utility), whatever the category. Matched
- * case-insensitively against a transaction's vendor OR subcategory, since payees are often stored as subcategories.
+ * Vendors that never need a receipt (e.g. Airbnb, Stripe), whatever the category or subcategory. Matched
+ * case-insensitively against a transaction's vendor. Subcategories have their own rule on `subcategories`.
  */
 export const receiptExclusions = sqliteTable(
   "receipt_exclusions",

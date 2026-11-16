@@ -24,9 +24,9 @@ describe("test harness data", () => {
   });
 
   it("includes receipt-rule scenarios", () => {
-    const { rows, receiptExclusions } = generate(today);
-    expect(receiptExclusions).toEqual(["Sewer"]);
-    expect(rows.some((r) => r.subcategory === "Sewer")).toBe(true);
+    const { rows, subcategoryRules } = generate(today);
+    for (const r of subcategoryRules)
+      expect(rows.some((x) => x.category === r.category && x.subcategory === r.name)).toBe(true);
     expect(rows.some((r) => r.vendor === "Stripe" && r.amount <= -75)).toBe(true);
     expect(rows.some((r) => r.refund && r.amount > 0 && r.category === "Maintenance")).toBe(true);
   });

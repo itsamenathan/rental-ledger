@@ -12,6 +12,7 @@ import * as ledger from "./ledger.ts";
 import { deleteOccupancy, upsertOccupancy } from "./rental.ts";
 import { dismiss, undismiss } from "./recurring.ts";
 import { addReceiptExclusion, listReceiptExclusions, removeReceiptExclusion } from "./receipts.ts";
+import { setSubcategoryReceiptRule } from "./categories.ts";
 
 type Row = typeof auditLog.$inferSelect;
 type Changes = Record<string, unknown>;
@@ -221,6 +222,22 @@ function plan(r: Row): Plan | null {
             },
           }
         : null;
+    case "subcategory:update": {
+      // a subcategory receipt rule change: {name, receipt_policy: [before, after], receipt_min: [before, after]}
+      if (!id || typeof c.name !== "string" || !Array.isArray(c.receipt_policy)) return null;
+      const [policy] = c.receipt_policy as [string | null, string | null];
+      const [min] = (c.receipt_min ?? [null, null]) as [number | null, number | null];
+      return {
+        describe: `Put back the receipt rule on ${c.name}`,
+        run: (db, a) =>
+          setSubcategoryReceiptRule(db, a, {
+            category: id,
+            name: c.name,
+            receipt_policy: policy ?? "inherit",
+            receipt_min: min,
+          }),
+      };
+    }
     case "receipt_exclusion:create":
       return typeof c.name === "string"
         ? {

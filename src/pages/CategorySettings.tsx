@@ -1,13 +1,17 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { api, type Category, type ReceiptExclusion } from "../api.ts";
-import { useApi, useSession, useToast } from "../hooks.ts";
+import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 
+type Policy = Category["receipt_policy"];
 interface Sub {
   name: string;
   count: number;
   saved: boolean;
+  /** own receipt rule; null = same as the category */
+  receipt_policy: Policy | null;
+  receipt_min: number | null;
 }
 interface TreeRow {
   category_id: number;
@@ -17,58 +21,58 @@ interface TreeRow {
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const dollars = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const entries = (n: number) => `${n} ${n === 1 ? "entry" : "entries"}`;
 
-/** Short note for the list when a category's receipt rule isn't the default. */
-function receiptBadge(c: Category) {
-  if (c.kind !== "expense") return null;
-  if (c.receipt_policy === "never") return "no receipts";
-  if (c.receipt_policy === "always") return "receipt always";
-  if (c.receipt_min != null) return `receipt ${dollars(c.receipt_min)}+`;
-  return null;
-}
+/** "always", "never" or "$75+" */
+const ruleText = (policy: Policy, min: number) =>
+  policy === "always" ? "always" : policy === "never" ? "never" : `${dollars(min)}+`;
 
-/** Names (vendor or subcategory) that never need a receipt, and a way to toggle one. */
-interface NeverAsk {
-  has: (name: string) => boolean;
-  toggle: (name: string) => Promise<boolean>;
-}
-
-/** Settings → Categories: a plain list; click a category to manage it and its subcategories. */
+/**
+ * Settings → Categories: categories with their subcategories indented underneath, and when each should ask for a
+ * receipt (server/services/receipts.ts). Click a name to rename, archive, delete or change tax settings.
+ */
 export default function CategorySettings() {
   const { overview, reloadOverview, canWrite } = useSession();
   const tree = useApi<TreeRow[]>("categories/tree");
-  const exclusions = useApi<ReceiptExclusion[]>("receipt-exclusions");
-  const toast = useToast();
   const [openId, setOpenId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [expanded, setExpanded] = usePersistentState<number[]>("categories.expanded", []);
+  const toast = useToast();
   const info = (id: number) => tree.data?.find((t) => t.category_id === id);
   const refresh = async () => {
-    await Promise.all([tree.reload(), exclusions.reload(), reloadOverview()]);
-  };
-  const excluded = (name: string) => exclusions.data?.find((x) => x.name.toLowerCase() === name.trim().toLowerCase());
-  const neverAsk: NeverAsk = {
-    has: (name) => !!excluded(name),
-    toggle: async (name) => {
-      const ex = excluded(name);
-      try {
-        if (ex) await api(`receipt-exclusions/${ex.id}`, { method: "DELETE" });
-        else await api("receipt-exclusions", { method: "POST", json: { name } });
-        toast({ text: ex ? `Receipts asked for ${name} again` : `Won't ask for receipts for ${name}`, kind: "ok" });
-        await exclusions.reload();
-        window.dispatchEvent(new Event("todo:changed"));
-        return true;
-      } catch (err) {
-        toast({ text: (err as Error).message, kind: "error" });
-        return false;
-      }
-    },
+    await Promise.all([tree.reload(), reloadOverview()]);
+    window.dispatchEvent(new Event("todo:changed"));
   };
   const archived = overview.categories.filter((c) => c.archived);
   const open = overview.categories.find((c) => c.id === openId);
-
   const list = (kind: "expense" | "income") =>
     overview.categories.filter((c) => c.kind === kind && (showArchived || !c.archived));
+  const toggle = (id: number) => setExpanded((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
+
+  const save = async (fn: () => Promise<unknown>, ok: string) => {
+    try {
+      await fn();
+      toast({ text: ok, kind: "ok" });
+      await refresh();
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+    }
+  };
+  const setCategoryRule = (c: Category, policy: Policy | "inherit", min: number | null) =>
+    save(
+      () => api(`categories/${c.id}`, { method: "PATCH", json: { receipt_policy: policy, receipt_min: min } }),
+      `Receipts for ${c.name}: ${ruleText(policy as Policy, min ?? overview.receipt_min)}`,
+    );
+  const setSubRule = (c: Category, sub: Sub, policy: Policy | "inherit", min: number | null) =>
+    save(
+      () =>
+        api("subcategories/receipt-rule", {
+          method: "POST",
+          json: { category: c.id, name: sub.name, receipt_policy: policy, receipt_min: min },
+        }),
+      policy === "inherit" ? `${sub.name} follows ${c.name} again` : `Receipt rule saved for ${sub.name}`,
+    );
 
   return (
     <section className="card">
@@ -83,29 +87,84 @@ export default function CategorySettings() {
 
       {(["expense", "income"] as const).map((kind) => (
         <div key={kind} className="cat-list-group">
-          <h3 className="group-title">{kind === "expense" ? "Expenses" : "Income"}</h3>
-          <ul className="cat-list">
+          <div className="cat-tree-head" aria-hidden="true">
+            <span />
+            <span>{kind === "expense" ? "Expenses" : "Income"}</span>
+            <span>Entries</span>
+            <span>{kind === "expense" ? "Ask for a receipt" : ""}</span>
+          </div>
+          <ul className="cat-tree">
             {list(kind).map((c) => {
               const t = info(c.id);
               const subs = t?.subcategories ?? [];
+              const own = subs.filter((s) => s.receipt_policy != null).length;
+              const isOpen = subs.length > 0 && expanded.includes(c.id);
+              const catMin = c.receipt_min ?? overview.receipt_min;
               return (
-                <li key={c.id}>
-                  <button
-                    className={`cat-row ${c.archived ? "archived" : ""}`}
-                    onClick={() => setOpenId(c.id)}
-                    disabled={!canWrite}
-                  >
-                    <span className="cat-row-name">
-                      {c.name}
+                <li key={c.id} className={c.archived ? "archived" : ""}>
+                  <div className="cat-tree-row">
+                    {subs.length ? (
+                      <button
+                        className="tree-toggle"
+                        onClick={() => toggle(c.id)}
+                        aria-expanded={isOpen}
+                        aria-label={`${isOpen ? "Hide" : "Show"} ${c.name} subcategories`}
+                      >
+                        {isOpen ? "▾" : "▸"}
+                      </button>
+                    ) : (
+                      <span />
+                    )}
+                    <span className="cat-tree-name">
+                      <button className="link-plain" onClick={() => setOpenId(c.id)} disabled={!canWrite}>
+                        {c.name}
+                      </button>
                       {c.archived && <span className="badge muted">archived</span>}
-                      {receiptBadge(c) && <span className="badge muted">{receiptBadge(c)}</span>}
+                      {subs.length > 0 && !isOpen && (
+                        <button className="link small muted-link" onClick={() => toggle(c.id)}>
+                          {subs.length} {subs.length === 1 ? "subcategory" : "subcategories"}
+                          {own > 0 && kind === "expense" && ` · ${own} with own rule`}
+                        </button>
+                      )}
                     </span>
-                    <span className="cat-row-subs">{subs.length ? subs.map((s) => s.name).join(", ") : "—"}</span>
-                    <span className="cat-row-count">
-                      {t ? `${t.count} ${t.count === 1 ? "entry" : "entries"}` : ""}
-                    </span>
-                    {canWrite && <span className="cat-row-go">›</span>}
-                  </button>
+                    <span className="cat-row-count">{t ? entries(t.count) : ""}</span>
+                    {kind === "expense" ? (
+                      <ReceiptControl
+                        label={`Receipts for ${c.name}`}
+                        policy={c.receipt_policy}
+                        min={c.receipt_min}
+                        fallbackMin={overview.receipt_min}
+                        canWrite={canWrite}
+                        onChange={(p, m) => setCategoryRule(c, p, m)}
+                      />
+                    ) : (
+                      <span />
+                    )}
+                  </div>
+                  {isOpen && (
+                    <ul className="cat-subtree">
+                      {subs.map((sub) => (
+                        <li key={sub.name} className="cat-tree-row sub">
+                          <span />
+                          <span className="cat-tree-name">{sub.name}</span>
+                          <span className="cat-row-count">{sub.count ? entries(sub.count) : "not used yet"}</span>
+                          {kind === "expense" ? (
+                            <ReceiptControl
+                              label={`Receipts for ${c.name} › ${sub.name}`}
+                              policy={sub.receipt_policy}
+                              min={sub.receipt_min}
+                              fallbackMin={catMin}
+                              inherited={ruleText(c.receipt_policy, catMin)}
+                              canWrite={canWrite}
+                              onChange={(p, m) => setSubRule(c, sub, p, m)}
+                            />
+                          ) : (
+                            <span />
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               );
             })}
@@ -118,19 +177,13 @@ export default function CategorySettings() {
         </button>
       )}
 
-      <NeverAskList
-        items={exclusions.data ?? []}
-        suggestions={[...new Set((tree.data ?? []).flatMap((t) => t.subcategories.map((s) => s.name)))]}
-        canWrite={canWrite}
-        neverAsk={neverAsk}
-      />
+      <VendorList canWrite={canWrite} />
 
       {open && (
         <CategoryPanel
           key={open.id}
           category={open}
           info={info(open.id)}
-          neverAsk={neverAsk}
           onClose={() => setOpenId(null)}
           onChanged={refresh}
         />
@@ -145,6 +198,194 @@ export default function CategorySettings() {
         />
       )}
     </section>
+  );
+}
+
+/**
+ * When to ask for a receipt. One select; an amount box appears only for "Other amount…". `inherited` adds a
+ * "Same as category" choice, shown when `policy` is null.
+ */
+function ReceiptControl({
+  label,
+  policy,
+  min,
+  fallbackMin,
+  inherited,
+  canWrite,
+  onChange,
+}: {
+  label: string;
+  policy: Policy | null;
+  min: number | null;
+  /** what "threshold" with no amount of its own means here */
+  fallbackMin: number;
+  inherited?: string;
+  canWrite: boolean;
+  onChange: (policy: Policy | "inherit", min: number | null) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const cancelled = useRef(false);
+  const [amount, setAmount] = useState(min == null ? "" : String(min));
+  if (!canWrite)
+    return (
+      <span className={`receipt-text ${policy == null ? "muted" : ""}`}>
+        {policy == null ? `Same as category (${inherited})` : ruleText(policy, min ?? fallbackMin)}
+      </span>
+    );
+  const custom = editing || (policy === "threshold" && min != null);
+  const value = custom ? "custom" : (policy ?? "inherit");
+  const pick = (v: string) => {
+    if (v === "custom") {
+      cancelled.current = false;
+      setAmount(min == null ? "" : String(min));
+      setEditing(true);
+      return;
+    }
+    setEditing(false);
+    void onChange(v as Policy | "inherit", null);
+  };
+  const commit = () => {
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
+    const n = Number(amount);
+    setEditing(false);
+    if (amount.trim() === "" || !Number.isFinite(n) || n <= 0) return setAmount(min == null ? "" : String(min));
+    if (n !== min || policy !== "threshold") void onChange("threshold", n);
+  };
+  return (
+    <span className="receipt-control">
+      <select
+        aria-label={label}
+        className={policy == null && !editing ? "inherited" : ""}
+        value={value}
+        onChange={(e) => pick(e.target.value)}
+      >
+        {inherited != null && <option value="inherit">Same as category ({inherited})</option>}
+        <option value="threshold">{dollars(fallbackMin)} or more</option>
+        <option value="custom">{custom ? "At least" : "Other amount…"}</option>
+        <option value="always">Always</option>
+        <option value="never">Never</option>
+      </select>
+      {custom && (
+        <span className="receipt-amount">
+          $
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            inputMode="decimal"
+            autoFocus={editing}
+            value={amount}
+            placeholder={String(fallbackMin)}
+            aria-label={`${label}: at least this many dollars`}
+            onChange={(e) => setAmount(e.target.value)}
+            onFocus={() => {
+              cancelled.current = false;
+            }}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                cancelled.current = true;
+                setAmount(min == null ? "" : String(min));
+                setEditing(false);
+              }
+            }}
+          />
+          or more
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Vendors that never need a receipt, in any category (e.g. Stripe, Airbnb). */
+function VendorList({ canWrite }: { canWrite: boolean }) {
+  const list = useApi<ReceiptExclusion[]>("receipt-exclusions");
+  const sugg = useApi<{ vendors: { vendor: string }[] }>("suggestions");
+  const toast = useToast();
+  const [name, setName] = useState("");
+  const items = list.data ?? [];
+  const has = (n: string) => items.some((x) => x.name.toLowerCase() === n.trim().toLowerCase());
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
+    try {
+      await fn();
+      toast({ text: ok, kind: "ok" });
+      await list.reload();
+      window.dispatchEvent(new Event("todo:changed"));
+      return true;
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+      return false;
+    }
+  };
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    const n = name.trim();
+    if (
+      n &&
+      !has(n) &&
+      (await run(
+        () => api("receipt-exclusions", { method: "POST", json: { name: n } }),
+        `Won't ask for receipts from ${n}`,
+      ))
+    )
+      setName("");
+  };
+  return (
+    <div className="cat-list-group">
+      <h3 className="group-title">Vendors that never need a receipt</h3>
+      <p className="muted small">For payees like Stripe or Airbnb, in whatever category they're entered under.</p>
+      {items.length > 0 && (
+        <ul className="sub-list">
+          {items.map((x) => (
+            <li key={x.id} className="sub-row">
+              <span>
+                {x.name}{" "}
+                <span className="muted small">{x.matches ? plural(x.matches, "expense") : "no matches yet"}</span>
+              </span>
+              {canWrite && (
+                <button
+                  className="link small danger"
+                  onClick={() =>
+                    void run(
+                      () => api(`receipt-exclusions/${x.id}`, { method: "DELETE" }),
+                      `Receipts asked from ${x.name} again`,
+                    )
+                  }
+                >
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {canWrite && (
+        <form onSubmit={(e) => void add(e)} className="inline-form">
+          <input
+            className="grow"
+            list="receipt-vendor-suggestions"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Vendor, e.g. Stripe"
+            aria-label="Vendor that never needs a receipt"
+          />
+          <datalist id="receipt-vendor-suggestions">
+            {(sugg.data?.vendors ?? [])
+              .filter((v) => !has(v.vendor))
+              .map((v) => (
+                <option key={v.vendor} value={v.vendor} />
+              ))}
+          </datalist>
+          <button className="btn" disabled={!name.trim() || has(name)}>
+            Add
+          </button>
+        </form>
+      )}
+    </div>
   );
 }
 
@@ -225,13 +466,11 @@ function TaxChoice({
 function CategoryPanel({
   category: c,
   info,
-  neverAsk,
   onClose,
   onChanged,
 }: {
   category: Category;
   info: TreeRow | undefined;
-  neverAsk: NeverAsk;
   onClose: () => void;
   onChanged: () => Promise<void>;
 }) {
@@ -302,14 +541,7 @@ function CategoryPanel({
       {subs.length === 0 && <p className="muted small">None yet.</p>}
       <ul className="sub-list">
         {subs.map((s) => (
-          <SubRow
-            key={s.name}
-            category={c}
-            sub={s}
-            siblings={subs.filter((x) => x !== s)}
-            run={run}
-            neverAsk={c.kind === "expense" ? neverAsk : undefined}
-          />
+          <SubRow key={s.name} category={c} sub={s} siblings={subs.filter((x) => x !== s)} run={run} />
         ))}
       </ul>
       <form onSubmit={(e) => void addSub(e)} className="inline-form">
@@ -324,13 +556,6 @@ function CategoryPanel({
           Add
         </button>
       </form>
-
-      {c.kind === "expense" && (
-        <>
-          <hr className="sep" />
-          <ReceiptRule category={c} patch={patch} />
-        </>
-      )}
 
       <hr className="sep" />
       {!showTax ? (
@@ -395,19 +620,7 @@ function CategoryPanel({
 
 type Run = (fn: () => Promise<unknown>, ok: string) => Promise<boolean>;
 
-function SubRow({
-  category,
-  sub,
-  siblings,
-  run,
-  neverAsk,
-}: {
-  category: Category;
-  sub: Sub;
-  siblings: Sub[];
-  run: Run;
-  neverAsk?: NeverAsk;
-}) {
+function SubRow({ category, sub, siblings, run }: { category: Category; sub: Sub; siblings: Sub[]; run: Run }) {
   const [mode, setMode] = useState<"view" | "rename" | "remove">("view");
   const [name, setName] = useState(sub.name);
   const [moveTo, setMoveTo] = useState("");
@@ -493,22 +706,8 @@ function SubRow({
     <li className="sub-row">
       <span>
         {sub.name} <span className="muted small">{sub.count ? uses : "not used yet"}</span>
-        {neverAsk?.has(sub.name) && <span className="badge muted">no receipts</span>}
       </span>
       <span className="sub-actions">
-        {neverAsk && (
-          <button
-            className="link small"
-            onClick={() => void neverAsk.toggle(sub.name)}
-            title={
-              neverAsk.has(sub.name)
-                ? "Ask for receipts for this again"
-                : "Never ask for receipts for this name, in any category"
-            }
-          >
-            {neverAsk.has(sub.name) ? "Ask for receipts" : "No receipts"}
-          </button>
-        )}
         <button className="link small" onClick={() => setMode("rename")}>
           Rename
         </button>
@@ -571,139 +770,6 @@ function DeleteCategory({
           {count ? "Move and delete" : "Delete"}
         </button>
       </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-/** When expenses in this category should have a receipt (To do, Files and the tax report all follow it). */
-function ReceiptRule({
-  category: c,
-  patch,
-}: {
-  category: Category;
-  patch: (json: Partial<Category>, ok: string) => Promise<boolean>;
-}) {
-  const { overview } = useSession();
-  const [min, setMin] = useState(c.receipt_min == null ? "" : String(c.receipt_min));
-  const effective = c.receipt_min ?? overview.receipt_min;
-  const minValue = min.trim() === "" ? null : Number(min);
-  const minValid = minValue == null || (Number.isFinite(minValue) && minValue > 0);
-  return (
-    <div>
-      <div className="panel-label">Receipts</div>
-      <label>
-        Ask for a receipt
-        <select
-          value={c.receipt_policy}
-          onChange={(e) =>
-            void patch({ receipt_policy: e.target.value as Category["receipt_policy"] }, "Receipt rule updated")
-          }
-        >
-          <option value="threshold">When it's {dollars(effective)} or more</option>
-          <option value="always">For every expense</option>
-          <option value="never">Never</option>
-        </select>
-      </label>
-      {c.receipt_policy === "threshold" && (
-        <form
-          className="inline-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (minValid) void patch({ receipt_min: minValue }, "Receipt amount updated");
-          }}
-        >
-          <input
-            className="grow"
-            type="number"
-            min="0.01"
-            step="0.01"
-            inputMode="decimal"
-            value={min}
-            onChange={(e) => setMin(e.target.value)}
-            placeholder={`${overview.receipt_min} (default)`}
-            aria-label="Receipt amount in dollars"
-          />
-          <button className="btn" disabled={!minValid || minValue === c.receipt_min}>
-            Save
-          </button>
-        </form>
-      )}
-      <p className="muted small">
-        Expenses that need one show up on To do, under Files → Needs a receipt, and in the tax report check. To skip a
-        payee like Airbnb or the sewer bill in every category, use "No receipts" on its subcategory or the never-ask
-        list on the Categories page.
-      </p>
-    </div>
-  );
-}
-
-/** Settings → Categories footer: vendor/subcategory names that never need a receipt. */
-function NeverAskList({
-  items,
-  suggestions,
-  canWrite,
-  neverAsk,
-}: {
-  items: ReceiptExclusion[];
-  suggestions: string[];
-  canWrite: boolean;
-  neverAsk: NeverAsk;
-}) {
-  const [name, setName] = useState("");
-  const add = async (e: FormEvent) => {
-    e.preventDefault();
-    const n = name.trim();
-    if (n && !neverAsk.has(n) && (await neverAsk.toggle(n))) setName("");
-  };
-  return (
-    <div className="cat-list-group">
-      <h3 className="group-title">Never ask for a receipt</h3>
-      <p className="muted small">
-        Payees that never need a receipt, in any category (e.g. Airbnb, Stripe, the sewer utility). Each name matches an
-        entry's vendor or its subcategory, ignoring case.
-      </p>
-      {items.length === 0 && <p className="muted small">None yet.</p>}
-      <ul className="sub-list">
-        {items.map((x) => (
-          <li key={x.id} className="sub-row">
-            <span>
-              {x.name}{" "}
-              <span className="muted small">{x.matches ? plural(x.matches, "expense") : "no matches yet"}</span>
-            </span>
-            {canWrite && (
-              <span className="sub-actions">
-                <button className="link small danger" onClick={() => void neverAsk.toggle(x.name)}>
-                  Remove
-                </button>
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-      {canWrite && (
-        <form onSubmit={(e) => void add(e)} className="inline-form">
-          <input
-            className="grow"
-            list="never-ask-suggestions"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Vendor or subcategory, e.g. Sewer"
-            aria-label="Name that never needs a receipt"
-          />
-          <datalist id="never-ask-suggestions">
-            {suggestions
-              .filter((s) => !neverAsk.has(s))
-              .map((s) => (
-                <option key={s} value={s} />
-              ))}
-          </datalist>
-          <button className="btn" disabled={!name.trim() || neverAsk.has(name)}>
-            Add
-          </button>
-        </form>
-      )}
     </div>
   );
 }

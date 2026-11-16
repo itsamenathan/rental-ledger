@@ -1,6 +1,6 @@
 {
-  "id": "3717a20c-8407-4142-992e-48b45ec0bbe2",
-  "prevId": "821ffd49-4cbd-49d8-adc7-3ce1d315b8b7",
+  "id": "b0a6a829-b106-4972-9ad3-825e7579a661",
+  "prevId": "07e1e7ad-9c2e-477d-acf5-fc2538b64768",
   "version": "6",
   "dialect": "sqlite",
   "tables": {
@@ -1090,6 +1090,20 @@
           "notNull": true,
           "autoincrement": false,
           "default": "(strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+        },
+        "receipt_policy": {
+          "name": "receipt_policy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "receipt_min_cents": {
+          "name": "receipt_min_cents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {

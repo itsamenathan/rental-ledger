@@ -552,7 +552,7 @@ export function buildMcpServer(actor: Actor) {
     "list_receipt_exclusions",
     {
       description:
-        "Vendor/subcategory names that never need a receipt (e.g. Airbnb, Stripe, the sewer utility), with how many expenses each matches.",
+        "Vendors that never need a receipt in any category (e.g. Airbnb, Stripe), with how many expenses each matches. Subcategories have their own rules (set_subcategory_receipt_rule).",
       inputSchema: {},
       annotations: ro,
     },
@@ -563,7 +563,7 @@ export function buildMcpServer(actor: Actor) {
     "add_receipt_exclusion",
     {
       description:
-        "Stop asking for receipts for a vendor or subcategory name (matched case-insensitively against both, in any category). Ask the user first.",
+        "Stop asking for receipts from a vendor (matched case-insensitively against the vendor field, in any category). For a subcategory use set_subcategory_receipt_rule. Ask the user first.",
       inputSchema: { name: z.string(), note: z.string().optional() },
     },
     wrap((args) => receipts.addReceiptExclusion(db, actor, args)),
@@ -572,10 +572,25 @@ export function buildMcpServer(actor: Actor) {
   server.registerTool(
     "remove_receipt_exclusion",
     {
-      description: "Ask for receipts again for a name on the never-ask list. Ask the user first.",
+      description: "Ask for receipts from a vendor on the never-ask list again. Ask the user first.",
       inputSchema: { name: ref.describe("Name or id") },
     },
     wrap(({ name }) => receipts.removeReceiptExclusion(db, actor, name)),
+  );
+
+  server.registerTool(
+    "set_subcategory_receipt_rule",
+    {
+      description:
+        "Give a subcategory its own receipt rule (always / threshold with receipt_min / never), or receipt_policy=inherit to use the category's again. Rules show in list_categories. Ask the user first.",
+      inputSchema: {
+        category: ref.describe("Category name or id"),
+        name: z.string().describe("Subcategory name"),
+        receipt_policy: z.enum(["always", "threshold", "never", "inherit"]),
+        receipt_min: z.number().positive().nullable().optional().describe("Dollars, for threshold; null = category's"),
+      },
+    },
+    wrap((args) => cats.setSubcategoryReceiptRule(db, actor, args)),
   );
 
   server.registerTool(

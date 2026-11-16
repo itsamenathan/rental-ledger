@@ -177,7 +177,8 @@ export function generate(today: Date) {
       add(22, { amount: -120, category: "Services", subcategory: "Lawn", vendor: "GreenCut Lawn" });
 
     // Receipt rules (fixed amounts, so the random sequence for everything below stays the same):
-    // a quarterly sewer bill on the never-ask list, and a Stripe fee that isn't on it yet (try adding it).
+    // a quarterly sewer bill whose subcategory never asks, and Stripe fees whose vendor isn't on the never-ask list
+    // yet (try adding it).
     if (m % 3 === 2)
       add(24, { amount: -168.5, category: "Utilities", subcategory: "Sewer", vendor: "Springfield Sewer District" });
     if (m % 2 === 0) add(26, { amount: -86.4, category: "Platform Fees", vendor: "Stripe", description: "Card fees" });
@@ -267,12 +268,17 @@ export function generate(today: Date) {
     rows: rows.sort((a, b) => a.date.localeCompare(b.date)),
     occupancy,
     years: [ty - 2, ty - 1, ty],
-    /** names that never need a receipt (services/receipts.ts); Stripe is left off to try adding it */
-    receiptExclusions: ["Sewer"],
+    /** vendors that never need a receipt (services/receipts.ts); Stripe is left off to try adding it */
+    receiptExclusions: [] as string[],
     /** category receipt rules: Supplies asks at any amount, Cleaning only from $200 */
     receiptRules: [
       { category: "Supplies", receipt_policy: "always" as const },
       { category: "Cleaning", receipt_policy: "threshold" as const, receipt_min: 200 },
+    ],
+    /** subcategory rules: Sewer never asks, Electric only from $200 */
+    subcategoryRules: [
+      { category: "Utilities", name: "Sewer", receipt_policy: "never" as const },
+      { category: "Utilities", name: "Electric", receipt_policy: "threshold" as const, receipt_min: 200 },
     ],
   };
 }
@@ -303,6 +309,7 @@ async function reset() {
   const rental = await import("./services/rental.ts");
   const { addAttachment } = await import("./services/attachments.ts");
   const { addReceiptExclusion } = await import("./services/receipts.ts");
+  const { setSubcategoryReceiptRule } = await import("./services/categories.ts");
   const db = getDb();
 
   const property = ledger.createProperty(db, null, {
@@ -333,6 +340,7 @@ async function reset() {
       if (receipt) receipts.push({ id: t.id, row: r });
       if (trash) ledger.deleteTransaction(db, admin, t.id);
     }
+    for (const r of data.subcategoryRules) setSubcategoryReceiptRule(db, admin, r);
     for (const o of data.occupancy) rental.upsertOccupancy(db, admin, { ...o, property_id: property.id });
     for (const year of data.years.slice(0, 2)) {
       rental.setTaxYear(db, admin, { property_id: property.id, year, mortgage_interest: 11240.55 - (year % 10) * 180 });

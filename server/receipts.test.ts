@@ -98,43 +98,128 @@ describe("receipt policy", () => {
   });
 });
 
-describe("never-ask names", () => {
-  it("skips expenses whose vendor or subcategory matches, in any category, ignoring case", () => {
+describe("subcategory rules", () => {
+  const rule = (category: string, name: string, receipt_policy: string, receipt_min?: number | null) =>
+    ({ category, name, receipt_policy, receipt_min }) as const;
+
+  it("inherit the category's rule until a subcategory has its own", () => {
     const { db, actor, add, needing } = setup();
-    add("Utilities", -168.5, { subcategory: "Sewer" });
-    add("Platform Fees", -120, { vendor: "STRIPE" });
-    add("Maintenance", -300, { vendor: "Stripe", subcategory: "Wolfman" });
-    const electric = add("Utilities", -150, { subcategory: "Electric" });
-    expect(needing()).toHaveLength(4);
+    const sewer = add("Utilities", -168.5, { subcategory: "Sewer" });
+    const electric = add("Utilities", -60, { subcategory: "Electric" });
+    const gas = add("Utilities", -150, { subcategory: "Gas" });
+    expect(needing()).toEqual([sewer, gas]);
 
-    receipts.addReceiptExclusion(db, actor, { name: "sewer" });
-    receipts.addReceiptExclusion(db, actor, { name: " Stripe " });
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "sewer", "never"));
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Electric", "always"));
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Gas", "threshold", 200));
     expect(needing()).toEqual([electric]);
-    expect(receipts.listReceiptExclusions(db).map((x) => [x.name, x.matches])).toEqual([
-      ["sewer", 1],
-      ["Stripe", 2],
-    ]);
 
-    // adding the same name again is a no-op; removing it asks again
-    receipts.addReceiptExclusion(db, actor, { name: "SEWER" });
-    expect(receipts.listReceiptExclusions(db)).toHaveLength(2);
-    receipts.removeReceiptExclusion(db, actor, "Sewer");
-    expect(needing()).toHaveLength(2);
+    // back to the category's rule
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Sewer", "inherit"));
+    expect(needing()).toEqual([sewer, electric]);
   });
 
-  it("follows a subcategory rename, unless the old name is still used elsewhere", () => {
+  it("a subcategory threshold with no amount uses the category's amount", () => {
+    const { db, actor, add, cat, needing } = setup();
+    ledger.updateCategory(db, actor, cat("Utilities").id, { receipt_policy: "never", receipt_min: 100 });
+    add("Utilities", -90, { subcategory: "Water" });
+    const big = add("Utilities", -110, { subcategory: "Water" });
+    add("Utilities", -500, { subcategory: "Gas" });
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Water", "threshold"));
+    expect(needing()).toEqual([big]);
+  });
+
+  it("is per category: the same name elsewhere keeps its own rule", () => {
     const { db, actor, add, needing } = setup();
-    add("Utilities", -168.5, { subcategory: "Sewer" });
-    receipts.addReceiptExclusion(db, actor, { name: "Sewer" });
+    add("Utilities", -100, { subcategory: "Trash" });
+    const services = add("Services", -100, { subcategory: "Trash" });
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Trash", "never"));
+    expect(needing()).toEqual([services]);
+  });
+
+  it("saves a used-only subcategory with its spelling and lists the rule", () => {
+    const { db, actor, add } = setup();
+    add("Utilities", -100, { subcategory: "Sewer" });
+    const r = cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "SEWER", "threshold", 150));
+    expect(r).toMatchObject({ name: "Sewer", receipt_policy: "threshold", receipt_min: 150 });
+    const listed = cats.listSubcategories(db).filter((x) => x.name === "Sewer");
+    expect(listed).toEqual([
+      expect.objectContaining({ count: 1, saved: true, receipt_policy: "threshold", receipt_min: 150 }),
+    ]);
+    // an amount only means something for threshold
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Sewer", "always", 150));
+    expect(cats.listSubcategories(db).find((x) => x.name === "Sewer")?.receipt_min).toBeNull();
+  });
+
+  it("refuses income categories and bad input", () => {
+    const { db, actor } = setup();
+    expect(() => cats.setSubcategoryReceiptRule(db, actor, rule("Rental Income", "Airbnb", "never"))).toThrow();
+    expect(() => cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Sewer", "sometimes"))).toThrow();
+    expect(() => cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Sewer", "threshold", 0))).toThrow();
+  });
+
+  it("keeps the rule through a rename, the target's on a merge, and copies it when a category is merged", () => {
+    const { db, actor, add, needing, cat } = setup();
+    const sewer = add("Utilities", -168.5, { subcategory: "Sewer" });
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Sewer", "never"));
     cats.renameSubcategory(db, actor, { category: "Utilities", from: "Sewer", to: "Sewer district" });
-    expect(receipts.listReceiptExclusions(db).map((x) => x.name)).toEqual(["Sewer district"]);
     expect(needing()).toEqual([]);
 
-    add("Services", -90, { subcategory: "Trash" });
-    add("Utilities", -90, { subcategory: "Trash" });
-    receipts.addReceiptExclusion(db, actor, { name: "Trash" });
-    cats.renameSubcategory(db, actor, { category: "Utilities", from: "Trash", to: "Garbage" });
-    expect(receipts.listReceiptExclusions(db).map((x) => x.name)).toEqual(["Sewer district", "Trash"]);
+    const water = add("Utilities", -90, { subcategory: "Water" });
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Water", "always"));
+    cats.renameSubcategory(db, actor, { category: "Utilities", from: "Sewer district", to: "Water" });
+    // merged into Water, so the Sewer entry now follows Water's "always"
+    expect(needing()).toEqual([sewer, water]);
+
+    const svc = ledger.createCategory(db, actor, { name: "Home services", kind: "expense", schedule_e_line: "19" });
+    add("Home services", -20, { subcategory: "Window cleaning" });
+    cats.setSubcategoryReceiptRule(db, actor, rule("Home services", "Window cleaning", "always"));
+    cats.deleteCategoryMoving(db, actor, svc.id, { move_to: "Services" });
+    const moved = cats
+      .listSubcategories(db)
+      .find((x) => x.category_id === cat("Services").id && x.name === "Window cleaning");
+    expect(moved?.receipt_policy).toBe("always");
+    expect(needing()).toHaveLength(3);
+  });
+
+  it("undo puts back the previous subcategory rule", () => {
+    const { db, actor, add, needing } = setup();
+    const sewer = add("Utilities", -168.5, { subcategory: "Sewer" });
+    cats.setSubcategoryReceiptRule(db, actor, rule("Utilities", "Sewer", "never"));
+    expect(needing()).toEqual([]);
+    const last = db.get<{ id: number }>(
+      "SELECT id FROM audit_log WHERE entity = 'subcategory' AND action = 'update' ORDER BY id DESC LIMIT 1" as never,
+    )!.id;
+    undoAudit(db, actor, last);
+    expect(needing()).toEqual([sewer]);
+  });
+});
+
+describe("vendors that never need a receipt", () => {
+  it("skips expenses from a listed vendor in any category, ignoring case, but not by subcategory", () => {
+    const { db, actor, add, needing } = setup();
+    add("Platform Fees", -120, { vendor: "STRIPE" });
+    add("Maintenance", -300, { vendor: " Stripe " });
+    const named = add("Utilities", -150, { subcategory: "Stripe" });
+    expect(needing()).toHaveLength(3);
+
+    receipts.addReceiptExclusion(db, actor, { name: "stripe" });
+    expect(needing()).toEqual([named]);
+    expect(receipts.listReceiptExclusions(db).map((x) => [x.name, x.matches])).toEqual([["stripe", 2]]);
+
+    // adding the same name again is a no-op; removing it asks again
+    receipts.addReceiptExclusion(db, actor, { name: "STRIPE" });
+    expect(receipts.listReceiptExclusions(db)).toHaveLength(1);
+    receipts.removeReceiptExclusion(db, actor, "Stripe");
+    expect(needing()).toHaveLength(3);
+  });
+
+  it("wins over an 'always' rule", () => {
+    const { db, actor, add, cat, needing } = setup();
+    ledger.updateCategory(db, actor, cat("Platform Fees").id, { receipt_policy: "always" });
+    add("Platform Fees", -3, { vendor: "Stripe" });
+    receipts.addReceiptExclusion(db, actor, { name: "Stripe" });
+    expect(needing()).toEqual([]);
   });
 
   it("records adds and removes in the audit log", () => {
@@ -147,7 +232,7 @@ describe("never-ask names", () => {
     expect(rows.map((r) => r.action)).toEqual(["create", "delete"]);
   });
 
-  it("undo puts back a removed name and a changed category rule", () => {
+  it("undo puts back a removed vendor and a changed category rule", () => {
     const { db, actor, cat } = setup();
     receipts.addReceiptExclusion(db, actor, { name: "Airbnb" });
     receipts.removeReceiptExclusion(db, actor, "Airbnb");
@@ -169,17 +254,21 @@ describe("one list everywhere", () => {
     const { db, actor, add, cat, needing } = setup();
     ledger.updateCategory(db, actor, cat("Supplies").id, { receipt_policy: "always" });
     ledger.updateCategory(db, actor, cat("Cleaning").id, { receipt_min: 200 });
-    receipts.addReceiptExclusion(db, actor, { name: "Sewer" });
+    receipts.addReceiptExclusion(db, actor, { name: "Stripe" });
+    cats.setSubcategoryReceiptRule(db, actor, { category: "Utilities", name: "Sewer", receipt_policy: "never" });
+    cats.setSubcategoryReceiptRule(db, actor, { category: "Utilities", name: "Water", receipt_policy: "always" });
 
     const expected = [
       add("Maintenance", -80),
       add("Supplies", -4),
       add("Cleaning", -250),
       add("Utilities", -120, { subcategory: "Electric" }),
+      add("Utilities", -12, { subcategory: "Water" }), // subcategory: always
     ];
     add("Mortgage", -2766.37); // line 12: never
     add("Cleaning", -150); // under its $200 threshold
-    add("Utilities", -168.5, { subcategory: "Sewer" }); // never-ask name
+    add("Utilities", -168.5, { subcategory: "Sewer" }); // subcategory: never
+    add("Platform Fees", -120, { vendor: "Stripe" }); // never-ask vendor
     add("Maintenance", 300, { refund: true }); // money back
     add("Maintenance", -40); // under $75
     const withReceipt = add("Furnishings", -900);

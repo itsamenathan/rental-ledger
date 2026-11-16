@@ -83,8 +83,11 @@ api.get("/subcategories", (c) => c.json(cats.listSubcategories(getDb())));
 api.post("/subcategories", async (c) => c.json(cats.addSubcategory(getDb(), actorOf(c), await body(c)), 201));
 api.post("/subcategories/rename", async (c) => c.json(cats.renameSubcategory(getDb(), actorOf(c), await body(c))));
 api.post("/subcategories/remove", async (c) => c.json(cats.removeSubcategory(getDb(), actorOf(c), await body(c))));
+api.post("/subcategories/receipt-rule", async (c) =>
+  c.json(cats.setSubcategoryReceiptRule(getDb(), actorOf(c), await body(c))),
+);
 
-// ---------------- receipt rules: names that never need a receipt ----------------
+// ---------------- receipt rules: vendors that never need a receipt ----------------
 
 api.get("/receipt-exclusions", (c) => c.json(receipts.listReceiptExclusions(getDb())));
 api.post("/receipt-exclusions", async (c) =>

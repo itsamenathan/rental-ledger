@@ -9,4 +9,6 @@ CREATE TABLE `receipt_exclusions` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `receipt_exclusions_name` ON `receipt_exclusions` (lower("name"));--> statement-breakpoint
 ALTER TABLE `categories` ADD `receipt_policy` text DEFAULT 'threshold' NOT NULL;--> statement-breakpoint
-ALTER TABLE `categories` ADD `receipt_min_cents` integer;
+ALTER TABLE `categories` ADD `receipt_min_cents` integer;--> statement-breakpoint
+ALTER TABLE `subcategories` ADD `receipt_policy` text;--> statement-breakpoint
+ALTER TABLE `subcategories` ADD `receipt_min_cents` integer;
