@@ -306,3 +306,21 @@ export const recurringDismissals = sqliteTable(
   },
   (t) => [uniqueIndex("recurring_dismissals_unique").on(t.seriesKey, t.month)],
 );
+
+/**
+ * Saved CSV column mappings, one per bank/card/provider export layout. `headers` is the file's header row (JSON
+ * array) so a new upload with the same columns picks its profile automatically; `mapping` is the JSON ImportMapping
+ * from services/csv-import.ts, with columns referenced by header name.
+ */
+export const importProfiles = sqliteTable(
+  "import_profiles",
+  {
+    id: integer("id").primaryKey(),
+    name: text("name").notNull(),
+    headers: text("headers").notNull().default("[]"),
+    mapping: text("mapping").notNull(),
+    createdAt: createdAt(),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => [uniqueIndex("import_profiles_name").on(sql`lower(${t.name})`)],
+);

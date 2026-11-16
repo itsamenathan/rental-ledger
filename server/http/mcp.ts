@@ -16,6 +16,7 @@ import * as files from "../services/attachments.ts";
 import * as library from "../services/files.ts";
 import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
+import * as csvImport from "../services/csv-import.ts";
 import { listAudit } from "../services/audit.ts";
 import type { Env } from "./middleware.ts";
 
@@ -31,6 +32,9 @@ Rental property bookkeeping. Data model:
 - occupancy: per-month nights booked, owner (personal) nights, check-ins; drives the rental-use % for taxes.
 Guidance for agents:
 - Before importing, call bulk_add_transactions with dry_run=true and inspect duplicates/errors.
+- For a bank/card/provider CSV, use inspect_csv (suggests a column mapping, or a saved profile) then
+  preview_csv_import, which flags rows already in the ledger (duplicate) or probably there (possible: same amount
+  within a few days). Show possible matches to the user before adding them.
 - When unsure of a category or allocation, still record the transaction but set needs_review=true with a
   review_note explaining the doubt. Never guess silently.
 - Recurring bills are learned from history (get_recurring). When the user says a flagged gap is fine or a
@@ -727,6 +731,75 @@ export function buildMcpServer(actor: Actor) {
         api_key: api_key_name,
       })),
     ),
+  );
+
+  server.registerTool(
+    "inspect_csv",
+    {
+      description:
+        "Look at a CSV export (any bank, card or provider) before importing: delimiter, header row, a sample of each column, and a suggested column mapping (a saved import profile with the same headers when there is one). Pass the mapping, adjusted if needed, to preview_csv_import.",
+      inputSchema: {
+        text: z.string().describe("The CSV file's text"),
+        profile_id: z.number().int().optional().describe("Use this saved profile instead of auto-detecting"),
+      },
+    },
+    wrap((args) => {
+      const r = csvImport.inspectCsv(db, args);
+      const { rows: _rows, ...rest } = r;
+      return { ...rest, columns: r.columns.map((c) => ({ ...c, samples: c.samples.slice(0, 3) })) };
+    }),
+  );
+
+  server.registerTool(
+    "preview_csv_import",
+    {
+      description:
+        "Apply a column mapping to a CSV and check each row against the ledger WITHOUT writing. Statuses: new, duplicate (same transaction id, or same day + amount), possible (same amount within window_days: ask the user), error, skipped (matched one of mapping.skip_rules [{column, contains}], e.g. money-market sweeps). Each row has a guessed `category` (from the file or vendor history; null = ask). To add rows, pass them to bulk_add_transactions as {date, amount, category, subcategory, vendor, reference, description, account, external_id, property, refund: true} with skip_duplicates=false (the preview already decided).",
+      inputSchema: {
+        text: z.string().describe("The CSV file's text"),
+        mapping: z.record(z.string(), z.unknown()).describe("The mapping from inspect_csv (or a saved profile)"),
+        property: ref.optional(),
+        window_days: z.number().int().min(0).max(14).optional(),
+        only_attention: z
+          .boolean()
+          .default(false)
+          .describe("Leave out plain new rows that already have a category (to keep a long file short)"),
+      },
+    },
+    wrap(({ only_attention, ...args }) => {
+      const r = csvImport.previewImport(db, args);
+      return {
+        summary: r.summary,
+        rows: (only_attention
+          ? r.rows.filter((x) => x.status !== "new" || x.category_id == null || x.warnings.length)
+          : r.rows
+        ).map(({ category_id: _c, cells: _cells, property_id, external_id, ...x }) => ({
+          ...x,
+          property: property_id,
+          external_id: external_id ?? undefined,
+        })),
+      };
+    }),
+  );
+
+  server.registerTool(
+    "list_import_profiles",
+    { description: "Saved CSV column mappings, one per bank/provider export layout.", inputSchema: {} },
+    wrap(() => csvImport.listProfiles(db)),
+  );
+
+  server.registerTool(
+    "save_import_profile",
+    {
+      description:
+        "Save a CSV column mapping under a name (replaces a profile with the same name). `headers` is the file's header row, used to pick the profile automatically next time.",
+      inputSchema: {
+        name: z.string(),
+        headers: z.array(z.string()),
+        mapping: z.record(z.string(), z.unknown()),
+      },
+    },
+    wrap((args) => csvImport.saveProfile(db, actor, args)),
   );
 
   return server;

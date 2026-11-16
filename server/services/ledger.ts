@@ -738,7 +738,12 @@ export function bulkCreate(db: DB, actor: Actor | null, raw: unknown, opts: Crea
             (!s.reference || !row.reference || s.reference === row.reference) &&
             (s.externalId == null || row.externalId == null || s.externalId === row.externalId),
         );
-        if ((dupes.length && input.skip_duplicates) || (row.externalId && dupes.length)) {
+        // A repeated external_id is always refused (it's unique); look-alikes only when skipping duplicates.
+        const sameId =
+          row.externalId != null &&
+          (seen.some((s) => s.externalId === row.externalId) ||
+            db.select({ id: t.id }).from(t).where(eq(t.externalId, row.externalId)).get() != null);
+        if (sameId || (dupes.length && input.skip_duplicates)) {
           results.push({ index, status: "duplicate", duplicate_of: dupes });
           return;
         }

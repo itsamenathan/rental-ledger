@@ -17,6 +17,7 @@ import * as library from "../services/files.ts";
 import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
 import { transactionsCsv } from "../services/csv.ts";
+import * as csvImport from "../services/csv-import.ts";
 import { listAudit } from "../services/audit.ts";
 import { actorOf, requireAuth, type Env } from "./middleware.ts";
 
@@ -159,6 +160,15 @@ api.delete("/attachments/:id", async (c) => {
 });
 
 api.get("/suggestions", (c) => c.json(ledger.suggestions(getDb())));
+
+// ---------------- CSV import (any bank / card / provider export) ----------------
+
+api.post("/import/inspect", async (c) => c.json(csvImport.inspectCsv(getDb(), await body(c))));
+api.post("/import/preview", async (c) => c.json(csvImport.previewImport(getDb(), await body(c))));
+api.post("/import/commit", async (c) => c.json(csvImport.commitImport(getDb(), actorOf(c), await body(c))));
+api.get("/import/profiles", (c) => c.json(csvImport.listProfiles(getDb())));
+api.post("/import/profiles", async (c) => c.json(csvImport.saveProfile(getDb(), actorOf(c), await body(c))));
+api.delete("/import/profiles/:id", (c) => c.json(csvImport.deleteProfile(getDb(), actorOf(c), id(c))));
 
 // ---------------- manager statements + invoices ----------------
 
