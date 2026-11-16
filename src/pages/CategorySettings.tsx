@@ -38,6 +38,8 @@ export default function CategorySettings() {
   const [creating, setCreating] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [expanded, setExpanded] = usePersistentState<number[]>("categories.expanded", []);
+  // the category whose "Add a subcategory" box should take focus when it opens
+  const [focusAdd, setFocusAdd] = useState<number | null>(null);
   const toast = useToast();
   const info = (id: number) => tree.data?.find((t) => t.category_id === id);
   const refresh = async () => {
@@ -98,12 +100,13 @@ export default function CategorySettings() {
               const t = info(c.id);
               const subs = t?.subcategories ?? [];
               const own = subs.filter((s) => s.receipt_policy != null).length;
-              const isOpen = subs.length > 0 && expanded.includes(c.id);
+              const isOpen = expanded.includes(c.id);
+              const canOpen = subs.length > 0 || canWrite;
               const catMin = c.receipt_min ?? overview.receipt_min;
               return (
                 <li key={c.id} className={c.archived ? "archived" : ""}>
                   <div className="cat-tree-row">
-                    {subs.length ? (
+                    {canOpen ? (
                       <button
                         className="tree-toggle"
                         onClick={() => toggle(c.id)}
@@ -126,6 +129,17 @@ export default function CategorySettings() {
                           {own > 0 && kind === "expense" && ` · ${own} with own rule`}
                         </button>
                       )}
+                      {subs.length === 0 && canWrite && !isOpen && (
+                        <button
+                          className="link small muted-link"
+                          onClick={() => {
+                            setFocusAdd(c.id);
+                            toggle(c.id);
+                          }}
+                        >
+                          + subcategory
+                        </button>
+                      )}
                     </span>
                     <span className="cat-row-count">{t ? entries(t.count) : ""}</span>
                     {kind === "expense" ? (
@@ -141,7 +155,7 @@ export default function CategorySettings() {
                       <span />
                     )}
                   </div>
-                  {isOpen && (
+                  {isOpen && canOpen && (
                     <ul className="cat-subtree">
                       {subs.map((sub) => (
                         <li key={sub.name} className="cat-tree-row sub">
@@ -163,6 +177,12 @@ export default function CategorySettings() {
                           )}
                         </li>
                       ))}
+                      {canWrite && (
+                        <li className="cat-tree-row sub add">
+                          <span />
+                          <AddSubcategory category={c} autoFocus={focusAdd === c.id} onAdded={refresh} />
+                        </li>
+                      )}
                     </ul>
                   )}
                 </li>
@@ -191,9 +211,12 @@ export default function CategorySettings() {
       {creating && (
         <NewCategory
           onClose={() => setCreating(false)}
-          onCreated={async () => {
+          onCreated={async (id) => {
             setCreating(false);
             await refresh();
+            // open it with the subcategory box ready
+            setFocusAdd(id);
+            setExpanded((xs) => (xs.includes(id) ? xs : [...xs, id]));
           }}
         />
       )}
@@ -301,6 +324,48 @@ function ReceiptControl({
   );
 }
 
+/** The last row of an open category: type a name to add a subcategory under it. */
+function AddSubcategory({
+  category: c,
+  autoFocus,
+  onAdded,
+}: {
+  category: Category;
+  autoFocus: boolean;
+  onAdded: () => Promise<void>;
+}) {
+  const toast = useToast();
+  const [name, setName] = useState("");
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    const n = name.trim();
+    if (!n) return;
+    try {
+      await api("subcategories", { method: "POST", json: { category: c.id, name: n } });
+      toast({ text: `Added ${n} under ${c.name}`, kind: "ok" });
+      setName("");
+      await onAdded();
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+    }
+  };
+  return (
+    <form className="inline-form add-sub" onSubmit={(e) => void add(e)}>
+      <input
+        className="grow"
+        autoFocus={autoFocus}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder={`Add a subcategory to ${c.name}`}
+        aria-label={`New subcategory in ${c.name}`}
+      />
+      <button className="btn small" disabled={!name.trim()}>
+        Add
+      </button>
+    </form>
+  );
+}
+
 /** Vendors that never need a receipt, in any category (e.g. Stripe, Airbnb). */
 function VendorList({ canWrite }: { canWrite: boolean }) {
   const list = useApi<ReceiptExclusion[]>("receipt-exclusions");
@@ -391,7 +456,7 @@ function VendorList({ canWrite }: { canWrite: boolean }) {
 
 // ---------------------------------------------------------------------------
 
-function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: () => Promise<void> }) {
+function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: (id: number) => Promise<void> }) {
   const toast = useToast();
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"expense" | "income">("expense");
@@ -399,7 +464,7 @@ function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const save = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await api("categories", {
+      const created = await api<Category>("categories", {
         method: "POST",
         json: {
           name,
@@ -409,7 +474,7 @@ function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: (
         },
       });
       toast({ text: `Added ${name}`, kind: "ok" });
-      await onCreated();
+      await onCreated(created.id);
     } catch (err) {
       toast({ text: (err as Error).message, kind: "error" });
     }
@@ -429,7 +494,10 @@ function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: (
           ))}
         </div>
         {kind === "expense" && <TaxChoice value={allocation} onChange={setAllocation} />}
-        <p className="muted small">You can set the Schedule E line later; it defaults to "Other".</p>
+        <p className="muted small">
+          You can set the Schedule E line later; it defaults to "Other". Add subcategories in the list once it's
+          created.
+        </p>
         <div className="form-actions">
           <span className="spacer" />
           <button className="btn primary">Add</button>

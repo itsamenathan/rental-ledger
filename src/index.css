@@ -1837,6 +1837,18 @@ tr.dirty td {
   padding-left: 1.5rem;
   border-top: 1px dashed var(--grid);
 }
+.cat-tree-row.sub.add {
+  min-height: 0;
+}
+.cat-tree-row .add-sub {
+  grid-column: 2 / -1;
+  margin: 0;
+}
+.cat-tree-row .add-sub input {
+  padding-top: 0.3rem;
+  padding-bottom: 0.3rem;
+  font-size: 0.88rem;
+}
 .cat-tree-row.sub .cat-tree-name {
   font-weight: 400;
   color: var(--text-2);
