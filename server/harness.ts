@@ -6,6 +6,7 @@
  *   scripts/harness setup   install dependencies, then reset
  *   scripts/harness reset   wipe ./data and seed it again (stop the dev server first)
  *   scripts/harness dev     start `vp dev` on this worktree's own port
+ *   scripts/harness preview build, then run the production server on that port (needed for the service worker)
  *   scripts/harness info    print logins, API key and URL (data/harness.json)
  *
  * Reset only ever deletes a data folder that the harness created (it holds harness.json) or one that doesn't

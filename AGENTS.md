@@ -82,6 +82,8 @@ and To do items: a missing bill, a duplicate, a flagged and an unallocated entry
 
 - `scripts/harness dev` starts `vp dev` on 0.0.0.0 at this worktree's own port (stable per path, printed and stored in
   `data/harness.json`). `scripts/harness reset` reseeds; stop the dev server first (reset refuses while it runs).
+- `scripts/harness preview` builds and runs the production server on the same port and data. Use it for anything
+  that needs the service worker (installing, offline mode, the outbox); `vp dev` doesn't register one.
 - Logins: `admin@example.com`, `member@example.com`, `viewer@example.com`, password `password`.
 - `scripts/harness info` prints the URL, a write and a read API key (`Authorization: Bearer …`), an admin session
   cookie for curl, and `data/sample-bank-export.csv` for trying CSV import.

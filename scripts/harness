@@ -3,6 +3,7 @@
 #   scripts/harness setup   install dependencies and seed ./data with fictional data + logins
 #   scripts/harness reset   wipe ./data and seed it again (stop the dev server first)
 #   scripts/harness dev     run `vp dev` on this worktree's own port, listening on all interfaces
+#   scripts/harness preview build and run the production server on that port (service worker / offline mode)
 #   scripts/harness info    print data/harness.json (logins, API keys, URL)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -28,11 +29,17 @@ case "${1:-}" in
     port="$(seed port)"
     exec vp env exec --node "$node_version" vp dev --host 0.0.0.0 --port "$port" --strictPort
     ;;
+  preview)
+    [ -f data/harness.json ] || seed reset
+    port="$(seed port)"
+    with_node vp build
+    PORT="$port" LOG_LEVEL="${LOG_LEVEL:-warn}" exec vp env exec --node "$node_version" node server/main.ts
+    ;;
   info)
     cat data/harness.json
     ;;
   *)
-    sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac

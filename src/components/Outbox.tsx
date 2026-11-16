@@ -48,7 +48,7 @@ export function OutboxProvider({ children }: { children: ReactNode }) {
         window.dispatchEvent(new Event("todo:changed"));
       }
       if (r.failed)
-        toast({ text: `${r.failed} offline ${r.failed === 1 ? "entry" : "entries"} need a look`, kind: "error" });
+        toast({ text: `${r.failed} offline ${r.failed === 1 ? "entry needs" : "entries need"} a look`, kind: "error" });
       // navigator.onLine can't be trusted either way (captive wifi, no signal but "connected"); results can.
       if (r.offline) setOnline(false);
       else if (r.synced) setOnline(true);
