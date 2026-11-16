@@ -28,6 +28,7 @@ import {
   users,
 } from "../db/schema.ts";
 import {
+  AppError,
   audit,
   badRequest,
   cents,
@@ -337,6 +338,14 @@ const txFields = {
     .nullable()
     .optional()
     .describe("Stable id from the source system; duplicates are rejected"),
+  client_id: z
+    .string()
+    .trim()
+    .min(8)
+    .max(100)
+    .nullable()
+    .optional()
+    .describe("Idempotency key from the client; sending the same client_id again returns the entry already saved"),
   refund: z
     .boolean()
     .default(false)
@@ -364,7 +373,18 @@ export const transactionPatch = z.object({
   needs_review: z.boolean().optional(),
   review_note: z.string().max(2000).optional(),
   refund: z.boolean().default(false),
+  expected_updated_at: z
+    .string()
+    .optional()
+    .describe("The entry's updated_at when it was read; if it has changed since, the update is refused (409)"),
 });
+
+/** Refuse a change made against an older copy of the entry (409 with the current entry as `details.current`). */
+function assertUnchanged(current: Transaction, expected: string | null | undefined) {
+  if (expected && current.updated_at !== expected) {
+    throw new AppError(409, "This entry was changed since it was opened", { current });
+  }
+}
 
 const createdByUser = alias(users, "created_by_user");
 const updatedByUser = alias(users, "updated_by_user");
@@ -609,6 +629,7 @@ function prepareRow(db: DB, raw: unknown, opts: CreateOptions) {
     needsReview: v.needs_review,
     reviewNote: v.review_note,
     externalId: v.external_id ?? null,
+    clientId: v.client_id ?? null,
   } satisfies Partial<typeof transactions.$inferInsert>;
 }
 type PreparedRow = ReturnType<typeof prepareRow>;
@@ -626,6 +647,16 @@ const nowIso = sql`strftime('%Y-%m-%dT%H:%M:%fZ','now')`;
 
 export function createTransaction(db: DB, actor: Actor | null, raw: unknown, opts: CreateOptions = {}): Transaction {
   if (actor) requireWrite(actor);
+  // A retried save (offline outbox, lost response) returns the entry the first attempt created. Checked before
+  // validation so a replay still succeeds if, say, the category was archived in between.
+  const clientId = (raw as { client_id?: unknown } | null)?.client_id;
+  if (typeof clientId === "string" && clientId.trim()) {
+    const prior = db.select({ id: t.id }).from(t).where(eq(t.clientId, clientId.trim())).get();
+    if (prior) {
+      const row = selectTx(db).where(eq(transactions.id, prior.id)).get();
+      if (row) return row;
+    }
+  }
   const row = prepareRow(db, raw, opts);
   if (row.externalId && db.select({ id: t.id }).from(t).where(eq(t.externalId, row.externalId)).get()) {
     throw badRequest(`A transaction with external_id ${row.externalId} already exists`);
@@ -642,6 +673,7 @@ export function updateTransaction(db: DB, actor: Actor, id: number, raw: unknown
   requireWrite(actor);
   const p = transactionPatch.parse(raw);
   const before = getTransaction(db, id);
+  assertUnchanged(before, p.expected_updated_at);
   const category =
     p.category_id != null || p.category != null
       ? resolveCategory(db, (p.category_id ?? p.category)!)
@@ -686,9 +718,10 @@ export function updateTransaction(db: DB, actor: Actor, id: number, raw: unknown
   });
 }
 
-export function deleteTransaction(db: DB, actor: Actor, id: number) {
+export function deleteTransaction(db: DB, actor: Actor, id: number, expectedUpdatedAt?: string | null) {
   requireWrite(actor);
   const before = getTransaction(db, id);
+  assertUnchanged(before, expectedUpdatedAt);
   db.update(t).set({ deletedAt: nowIso, updatedBy: actor.user.id }).where(eq(t.id, id)).run();
   audit(db, actor, "delete", "transaction", id, before);
   return { id, deleted: true };

@@ -85,6 +85,10 @@ const txShape = {
   account: z.string().optional(),
   reference: z.string().optional().describe("Bank description / transaction id"),
   external_id: z.string().optional().describe("Stable unique id from the source; prevents double import"),
+  client_id: z
+    .string()
+    .optional()
+    .describe("Idempotency key: retrying with the same client_id returns the entry already saved"),
   needs_review: z.boolean().optional(),
   review_note: z.string().optional(),
   refund: z.boolean().optional().describe("true if the sign intentionally differs from the category kind"),
@@ -234,9 +238,13 @@ export function buildMcpServer(actor: Actor) {
         id: z.number().int(),
         ...Object.fromEntries(
           Object.entries(txShape)
-            .filter(([k]) => k !== "external_id")
+            .filter(([k]) => k !== "external_id" && k !== "client_id")
             .map(([k, v]) => [k, (v as z.ZodType).optional()]),
         ),
+        expected_updated_at: z
+          .string()
+          .optional()
+          .describe("updated_at from when you read it; refused if the entry changed since"),
       },
     },
     wrap(({ id, ...patch }) => ledger.updateTransaction(db, actor, id as number, patch)),
@@ -264,10 +272,16 @@ export function buildMcpServer(actor: Actor) {
     "delete_transaction",
     {
       description: "Soft-delete a transaction (restorable from the audit log).",
-      inputSchema: { id: z.number().int() },
+      inputSchema: {
+        id: z.number().int(),
+        expected_updated_at: z
+          .string()
+          .optional()
+          .describe("updated_at from when you read it; refused if the entry changed since"),
+      },
       annotations: { destructiveHint: true },
     },
-    wrap(({ id }) => ledger.deleteTransaction(db, actor, id)),
+    wrap(({ id, expected_updated_at }) => ledger.deleteTransaction(db, actor, id, expected_updated_at)),
   );
 
   server.registerTool(

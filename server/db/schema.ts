@@ -153,6 +153,8 @@ export const transactions = sqliteTable(
     reviewNote: text("review_note").notNull().default(""),
     source: text("source").notNull().default("web"),
     externalId: text("external_id").unique(),
+    /** Random id the app generates when an entry is saved (offline outbox); a replay returns the existing row. */
+    clientId: text("client_id").unique(),
     createdAt: createdAt(),
     createdBy: integer("created_by").references(() => users.id),
     updatedAt: text("updated_at").notNull().default(now),

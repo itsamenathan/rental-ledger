@@ -66,6 +66,13 @@ release. Add a tool name to select part of the graph. For example, run
 - Logging: use `log` from `server/telemetry.ts` (pino), not `console.*` (the CLI's human output is the exception).
   Tracing is automatic for API/MCP requests and SQL; wrap other slow work in `withSpan(name, attrs, fn)`.
 - Never write to Grist; `server/grist-import.ts` must stay GET-only.
+- Installed app / offline: `pwa/service-worker.js` is emitted as `dist/sw.js` by the `rental-service-worker` plugin in
+  `vite.config.ts` (production builds only, so test it with `scripts/harness preview`, not `dev`). It caches the app
+  shell, `auth/me`, `overview`, `suggestions` and the last 150 transaction list/entry responses; it never handles
+  writes. Work saved without a connection waits in IndexedDB (`src/outbox.ts`): new entries replay with a `client_id`
+  (`createTransaction` returns the existing row), edits send only changed fields plus `expected_updated_at`, and the
+  server answers 409 with the current row in `details.current` when the entry changed since ("Keep mine" / "Keep
+  theirs" in the outbox list).
 
 # Test harness (worktrees)
 
@@ -75,6 +82,8 @@ and To do items: a missing bill, a duplicate, a flagged and an unallocated entry
 
 - `scripts/harness dev` starts `vp dev` on 0.0.0.0 at this worktree's own port (stable per path, printed and stored in
   `data/harness.json`). `scripts/harness reset` reseeds; stop the dev server first (reset refuses while it runs).
+- `scripts/harness preview` builds and runs the production server on the same port and data. Use it for anything
+  that needs the service worker (installing, offline mode, the outbox); `vp dev` doesn't register one.
 - Logins: `admin@example.com`, `member@example.com`, `viewer@example.com`, password `password`.
 - `scripts/harness info` prints the URL, a write and a read API key (`Authorization: Bearer …`), an admin session
   cookie for curl, and `data/sample-bank-export.csv` for trying CSV import.

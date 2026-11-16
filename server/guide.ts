@@ -44,6 +44,8 @@ month_summary, category_by_month, year_totals, get_todo, get_recurring, dismiss_
   use). Indirect expenses are prorated by rental-use % in the tax report.
 - **vendor** — payee for expenses, payer for income (Airbnb, VRBO, …). Used for 1099-K reconciliation.
 - **reference / external_id** — source identifiers used for duplicate detection.
+- **client_id** — optional idempotency key for a single create: retrying with the same client_id returns the entry
+  already saved instead of adding another (the app's offline outbox uses it).
 - **needs_review / review_note** — flag anything uncertain for a human.
 - **receipts** — an expense "needs a receipt" by its subcategory's rule if it has one, else its category's
   \`receipt_policy\` (\`always\`, \`threshold\`: at least \`receipt_min\` dollars, default $75, or \`never\`, e.g.

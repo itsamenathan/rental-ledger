@@ -131,7 +131,9 @@ api.get("/transactions/:id", (c) => {
 api.patch("/transactions/:id", async (c) =>
   c.json(ledger.updateTransaction(getDb(), actorOf(c), id(c), await body(c))),
 );
-api.delete("/transactions/:id", (c) => c.json(ledger.deleteTransaction(getDb(), actorOf(c), id(c))));
+api.delete("/transactions/:id", (c) =>
+  c.json(ledger.deleteTransaction(getDb(), actorOf(c), id(c), c.req.query("expected_updated_at"))),
+);
 api.post("/transactions/:id/restore", (c) => c.json(ledger.restoreTransaction(getDb(), actorOf(c), id(c))));
 
 api.get("/transactions/:id/attachments", (c) => c.json(files.listAttachments(getDb(), id(c))));

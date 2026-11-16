@@ -96,9 +96,12 @@ export interface Overview {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The error body's `details` (e.g. the current entry on a 409 conflict). */
+  details?: unknown;
+  constructor(status: number, message: string, details?: unknown) {
     super(message);
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -115,9 +118,10 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
   const text = await res.text();
   const data = text ? safeJson(text) : null;
   if (!res.ok) {
-    const msg = (data as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`;
+    const body = data as { error?: string; details?: unknown } | null;
+    const msg = body?.error ?? `${res.status} ${res.statusText}`;
     if (res.status === 401 && !path.includes("/auth/")) window.dispatchEvent(new Event("auth:expired"));
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, body?.details);
   }
   return data as T;
 }
@@ -170,12 +174,6 @@ export interface FileLibrary {
   missing: Transaction[];
   missing_total: number;
   receipt_min: number;
-}
-
-export async function uploadAttachments(txId: number, files: File[]) {
-  const form = new FormData();
-  for (const f of files) form.append("file", f);
-  return api<Attachment[]>(`transactions/${txId}/attachments`, { method: "POST", body: form });
 }
 
 // ---------------- reports ----------------
