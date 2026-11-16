@@ -89,6 +89,9 @@ export function generate(today: Date) {
   const todayIso = today.toISOString().slice(0, 10);
   const rows: Row[] = [];
   const occupancy: { month: string; nights_booked: number; owner_nights: number; check_ins: number }[] = [];
+  /** booking calendar: platform stays, and owner stays the owner blocks on both platforms; end is the checkout day */
+  const stayList: { platform: "airbnb" | "vrbo"; start: string; end: string }[] = [];
+  const ownerStays: { start: string; end: string }[] = [];
 
   const months: [number, number][] = [];
   for (let y = ty - 2; y <= ty; y++) for (let m = 1; m <= 12; m++) if (y < ty || m <= tm) months.push([y, m]);
@@ -115,6 +118,11 @@ export function generate(today: Date) {
     for (let i = 0; i < stays && day < last; i++) {
       const nights = 2 + Math.floor(rand() * 4);
       booked += Math.min(nights, last - day);
+      stayList.push({
+        platform: i === 1 ? "vrbo" : "airbnb",
+        start: at(day),
+        end: at(day + Math.min(nights, last - day)),
+      });
       const payout = Math.round(nights * between(summer ? 210 : 150, summer ? 290 : 210) * 100) / 100;
       income += payout;
       // The second stay each month is VRBO, so both platforms are steady monthly series.
@@ -136,6 +144,8 @@ export function generate(today: Date) {
       day += nights + 1 + Math.floor(rand() * 3);
     }
     const ownerNights = m === 7 || m === 12 ? 3 + Math.floor(rand() * 3) : 0;
+    // on the calendar where the month has room after the last stay (Airbnb shows it as "Not available")
+    if (ownerNights && day + ownerNights <= last) ownerStays.push({ start: at(day), end: at(day + ownerNights) });
     const monthDone = y < ty || m < tm;
     if (monthDone)
       occupancy.push({ month: ymOf(y, m), nights_booked: booked, owner_nights: ownerNights, check_ins: stays });
@@ -265,9 +275,29 @@ export function generate(today: Date) {
     },
   );
 
+  // Upcoming reservations for the next three months (own seed, so the history above doesn't change), with one
+  // owner block next month.
+  const ahead = rng(1116);
+  for (let k = 1; k <= 3; k++) {
+    const y = ty + Math.floor((tm - 1 + k) / 12);
+    const m = ((tm - 1 + k) % 12) + 1;
+    const last = daysIn(y, m);
+    const at = (d: number) => `${y}-${pad(m)}-${pad(d)}`;
+    let day = 3 + Math.floor(ahead() * 4);
+    for (let i = 0; day + 2 < last && i < 4 - k; i++) {
+      const nights = 2 + Math.floor(ahead() * 4);
+      const end = Math.min(day + nights, last);
+      stayList.push({ platform: i === 1 ? "vrbo" : "airbnb", start: at(day), end: at(end) });
+      day = end + 2 + Math.floor(ahead() * 5);
+    }
+    if (k === 1 && day + 3 <= last) ownerStays.push({ start: at(day), end: at(day + 3) });
+  }
+
   return {
     rows: rows.sort((a, b) => a.date.localeCompare(b.date)),
     occupancy,
+    stays: stayList,
+    ownerStays,
     years: [ty - 2, ty - 1, ty],
     /** vendors that never need a receipt (services/receipts.ts); Stripe is left off to try adding it */
     receiptExclusions: [] as string[],
@@ -282,6 +312,57 @@ export function generate(today: Date) {
       { category: "Utilities", name: "Electric", receipt_policy: "threshold" as const, receipt_min: 200 },
     ],
   };
+}
+
+/**
+ * An iCal export as a platform writes it: its own stays as reservations, the other platform's stays and owner
+ * stays as blocks (calendars synced between platforms look like that).
+ */
+export function sampleIcs(data: ReturnType<typeof generate>, platform: "airbnb" | "vrbo", extra: string[] = []) {
+  const ymd = (d: string) => d.replace(/-/g, "");
+  const ev = (uid: string, start: string, end: string, summary: string, description = "") =>
+    [
+      "BEGIN:VEVENT",
+      `DTEND;VALUE=DATE:${ymd(end)}`,
+      `DTSTART;VALUE=DATE:${ymd(start)}`,
+      `UID:${uid}`,
+      ...(description ? [`DESCRIPTION:${description}`] : []),
+      `SUMMARY:${summary}`,
+      "END:VEVENT",
+    ].join("\r\n");
+  const code = (s: string) => "HM" + createHash("sha256").update(s).digest("hex").slice(0, 8).toUpperCase();
+  const events = data.stays.map((st) => {
+    const uid = `${platform}-${st.start}@harness.example`;
+    if (st.platform !== platform)
+      return ev(uid, st.start, st.end, platform === "airbnb" ? "Airbnb (Not available)" : "Blocked");
+    return platform === "airbnb"
+      ? ev(
+          uid,
+          st.start,
+          st.end,
+          "Reserved",
+          `Reservation URL: https://www.airbnb.com/hosting/reservations/details/${code(st.start)}`,
+        )
+      : ev(uid, st.start, st.end, "Reserved - Guest");
+  });
+  for (const o of data.ownerStays)
+    events.push(
+      ev(
+        `${platform}-block-${o.start}@harness.example`,
+        o.start,
+        o.end,
+        platform === "airbnb" ? "Airbnb (Not available)" : "Blocked",
+      ),
+    );
+  return [
+    "BEGIN:VCALENDAR",
+    "PRODID:-//Harness//Sample Calendar//EN",
+    "VERSION:2.0",
+    ...events,
+    ...extra,
+    "END:VCALENDAR",
+    "",
+  ].join("\r\n");
 }
 
 // ---------- reset ----------
@@ -311,6 +392,7 @@ async function reset() {
   const { addAttachment } = await import("./services/attachments.ts");
   const { addReceiptExclusion } = await import("./services/receipts.ts");
   const { setSubcategoryReceiptRule } = await import("./services/categories.ts");
+  const calendar = await import("./services/calendar.ts");
   const db = getDb();
 
   const property = ledger.createProperty(db, null, {
@@ -343,6 +425,15 @@ async function reset() {
     }
     for (const r of data.subcategoryRules) setSubcategoryReceiptRule(db, admin, r);
     for (const o of data.occupancy) rental.upsertOccupancy(db, admin, { ...o, property_id: property.id });
+    // Booking calendar: two platform feeds from "files" (no link, so nothing hits the network).
+    const todayIso = today.toISOString().slice(0, 10);
+    for (const platform of ["airbnb", "vrbo"] as const) {
+      const feed = calendar.createFeed(db, admin, {
+        property_id: property.id,
+        name: platform === "airbnb" ? "Airbnb (sample file)" : "VRBO (sample file)",
+      });
+      calendar.syncFeedText(db, admin, feed.id, sampleIcs(data, platform), todayIso);
+    }
     for (const year of data.years.slice(0, 2)) {
       rental.setTaxYear(db, admin, { property_id: property.id, year, mortgage_interest: 11240.55 - (year % 10) * 180 });
     }
@@ -366,6 +457,20 @@ async function reset() {
   ].join("\n");
   writeFileSync(join(config.dataDir, "sample-bank-export.csv"), csv + "\n");
 
+  // An updated Airbnb export with one new reservation, for trying "Import .ics file" on the Calendar page.
+  const lastStay = data.stays.at(-1)!;
+  const newStart = new Date(Date.parse(`${lastStay.end}T00:00:00Z`) + 4 * 86_400_000).toISOString().slice(0, 10);
+  const newEnd = new Date(Date.parse(`${newStart}T00:00:00Z`) + 3 * 86_400_000).toISOString().slice(0, 10);
+  const newStay = [
+    "BEGIN:VEVENT",
+    `DTEND;VALUE=DATE:${newEnd.replace(/-/g, "")}`,
+    `DTSTART;VALUE=DATE:${newStart.replace(/-/g, "")}`,
+    "UID:airbnb-new@harness.example",
+    "SUMMARY:Reserved",
+    "END:VEVENT",
+  ].join("\r\n");
+  writeFileSync(join(config.dataDir, "sample-airbnb.ics"), sampleIcs(data, "airbnb", [newStay]));
+
   const port = harnessPort();
   const info = {
     url: `http://localhost:${port}`,
@@ -378,6 +483,7 @@ async function reset() {
     transactions: data.rows.length,
     receipts: receipts.length,
     sample_csv: join(config.dataDir, "sample-bank-export.csv"),
+    sample_ics: join(config.dataDir, "sample-airbnb.ics"),
     seeded_for: today.toISOString().slice(0, 10),
   };
   writeFileSync(join(config.dataDir, MARKER), JSON.stringify(info, null, 2) + "\n");

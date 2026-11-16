@@ -5,6 +5,7 @@ import { AppError, badRequest, requireAdmin } from "../context.ts";
 import * as auth from "../services/auth.ts";
 import * as ledger from "../services/ledger.ts";
 import * as rental from "../services/rental.ts";
+import * as calendar from "../services/calendar.ts";
 import * as reports from "../services/reports.ts";
 import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
@@ -281,6 +282,37 @@ api.put("/occupancy", async (c) => {
 api.delete("/occupancy/:id", (c) => {
   rental.deleteOccupancy(getDb(), actorOf(c), id(c));
   return c.json({ ok: true });
+});
+
+// ---------------- booking calendar ----------------
+
+api.get("/calendar", (c) =>
+  c.json(
+    calendar.getCalendar(getDb(), actorOf(c), {
+      from_month: c.req.query("from") ?? new Date().toISOString().slice(0, 7),
+      to_month: c.req.query("to"),
+      property_id: queryProperty(c),
+    }),
+  ),
+);
+api.get("/calendar/feeds", (c) => c.json(calendar.listFeeds(getDb(), actorOf(c), { property_id: queryProperty(c) })));
+api.post("/calendar/feeds", async (c) => c.json(calendar.createFeed(getDb(), actorOf(c), await body(c)), 201));
+api.patch("/calendar/feeds/:id", async (c) => c.json(calendar.updateFeed(getDb(), actorOf(c), id(c), await body(c))));
+api.delete("/calendar/feeds/:id", (c) => {
+  calendar.deleteFeed(getDb(), actorOf(c), id(c));
+  return c.json({ ok: true });
+});
+/** Download one linked feed now. */
+api.post("/calendar/feeds/:id/refresh", async (c) => c.json(await calendar.refreshFeed(getDb(), actorOf(c), id(c))));
+/** Import an .ics file into a feed: the body is the file's text. */
+api.post("/calendar/feeds/:id/import", async (c) =>
+  c.json(calendar.syncFeedText(getDb(), actorOf(c), id(c), await c.req.text())),
+);
+/** Refresh every linked feed; {stale_minutes} skips feeds synced more recently. */
+api.post("/calendar/refresh", async (c) => {
+  const raw = (await c.req.text()) ? await body(c) : {};
+  const o = z.object({ stale_minutes: z.number().int().min(0).optional() }).parse(raw);
+  return c.json(await calendar.refreshFeeds(getDb(), actorOf(c), { ...o, property_id: queryProperty(c) }));
 });
 
 api.get("/tax-years/:year", (c) => {

@@ -636,6 +636,7 @@ const VERB: Record<string, string> = {
   login: "Signed in",
   logout: "Signed out",
   change_password: "Changed password",
+  sync: "Synced",
 };
 const NOUN: Record<string, string> = {
   transaction: "transaction",
@@ -643,6 +644,7 @@ const NOUN: Record<string, string> = {
   preparer_package: "preparer package",
   api_key: "API key",
   tax_year: "tax-year inputs",
+  calendar_feed: "calendar",
   audit: "change",
 };
 
@@ -671,6 +673,8 @@ function details(r: AuditRow) {
     return `${show(c.category ?? "")} ${show(c.name)}${c.moved_to ? ` → ${show(c.moved_to)}` : ""}`.trim();
   if (r.entity === "occupancy")
     return `${show(c.month ?? "")} · ${show(c.nights_booked ?? "")} nights booked`.replace(/^ · /, "");
+  if (r.entity === "calendar_feed" && r.action === "sync")
+    return `${show(c.name)}: ${show(c.added)} added, ${show(c.updated)} changed, ${show(c.removed)} cancelled`;
   if (r.action === "undo") return `${VERB[String(c.action)] ?? show(c.action)} ${show(c.entity)} #${show(c.entity_id)}`;
   if (Array.isArray(c.ids)) return `${c.ids.length} transactions`;
   if (Array.isArray(c.transactions)) return `${c.transactions.length} transactions`;
