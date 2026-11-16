@@ -2553,3 +2553,319 @@ a.section-toggle:hover span:last-child {
   flex: 1 1 14rem;
   min-width: 0;
 }
+/* ---------- CSV import ---------- */
+.imp-steps {
+  display: flex;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: step;
+}
+.imp-steps li {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 550;
+  padding-bottom: 0.55rem;
+  border-bottom: 3px solid var(--border);
+  min-width: 0;
+}
+.imp-steps li.current {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.imp-steps li.done {
+  color: var(--text-2);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.imp-step-num {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 0.8rem;
+}
+.imp-steps li.current .imp-step-num,
+.imp-steps li.done .imp-step-num {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.imp-step-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 520px) {
+  .imp-steps li:not(.current) .imp-step-label {
+    display: none;
+  }
+}
+.imp-drop {
+  position: relative;
+  padding: 2.4rem 1rem;
+  margin: 0;
+}
+.imp-drop strong {
+  font-size: 1.05rem;
+  color: var(--text);
+}
+.imp-drop-icon {
+  font-size: 1.8rem;
+  line-height: 1;
+  color: var(--accent);
+}
+.imp-points {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.6rem 1.2rem;
+  list-style: none;
+  padding: 0;
+  margin: 1.1rem 0 0;
+  font-size: 0.88rem;
+  color: var(--text-2);
+}
+.imp-points strong {
+  display: block;
+  color: var(--text);
+}
+.imp-file {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+}
+.imp-profile {
+  margin: 0;
+  min-width: min(100%, 15rem);
+}
+.imp-matched {
+  margin: 0.8rem 0 0;
+}
+.imp-advanced {
+  margin-top: 0.8rem;
+}
+.imp-advanced summary {
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 550;
+  color: var(--text-2);
+}
+.imp-format {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0 0.9rem;
+  margin-top: 0.7rem;
+}
+.imp-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+.imp-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.65rem;
+  background: var(--surface-2);
+  min-width: 0;
+}
+.imp-col.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.imp-col-head {
+  font-weight: 650;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.imp-col-samples {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.8rem;
+  color: var(--text-2);
+  flex: 1;
+}
+.imp-col-samples li {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.imp-col select {
+  width: 100%;
+  background: var(--surface);
+}
+.imp-direction {
+  margin: 1rem 0 0;
+}
+.imp-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.4rem;
+  margin: 0.4rem 0 0.6rem;
+  font-size: 0.95rem;
+}
+.imp-sample {
+  width: 100%;
+}
+.imp-desc {
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.imp-flip {
+  flex-wrap: wrap;
+  margin: 0.9rem 0 0.4rem;
+}
+.imp-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0 0.9rem;
+  margin-top: 0.6rem;
+}
+.imp-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.8rem;
+}
+.imp-save label {
+  margin: 0;
+}
+.imp-save input:not([type="checkbox"]) {
+  flex: 1 1 14rem;
+  width: auto;
+}
+.imp-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.6rem;
+}
+.imp-tile {
+  font: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+.imp-tile.ok {
+  border-left-color: var(--good);
+}
+.imp-tile.warn {
+  border-left-color: var(--warning);
+}
+.imp-tile.err {
+  border-left-color: var(--critical);
+}
+.imp-tile.muted {
+  border-left-color: var(--series-other);
+}
+.imp-tile.on {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+.imp-tile-value {
+  font-size: 1.4rem;
+  font-weight: 650;
+}
+.imp-tile-label {
+  font-size: 0.8rem;
+  color: var(--text-2);
+  font-weight: 550;
+}
+.imp-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.imp-bulk label {
+  margin: 0;
+}
+.imp-table td {
+  vertical-align: top;
+}
+.imp-table td:first-child {
+  padding-top: 0.75rem;
+}
+.imp-table .imp-desc {
+  min-width: 12rem;
+}
+.imp-table .imp-desc .cell-input {
+  width: 100%;
+}
+.imp-ref {
+  margin-top: 0.2rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 22rem;
+}
+.imp-table select {
+  max-width: 12rem;
+  min-height: 32px;
+  padding: 0.25rem 0.4rem;
+}
+select.imp-need {
+  border-color: var(--warning);
+  background: var(--warn-bg);
+}
+.imp-status {
+  min-width: 10rem;
+}
+.imp-status .badge:first-child {
+  margin-left: 0;
+}
+.imp-match {
+  margin-top: 0.2rem;
+  max-width: 18rem;
+}
+.imp-flag {
+  margin: 0;
+}
+.imp-done {
+  text-align: center;
+  padding: 2rem 1.2rem;
+}
+.imp-done h2 {
+  margin: 0.6rem 0 0.3rem;
+}
+.imp-done-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 999px;
+  background: var(--ok-bg);
+  color: var(--pos);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+.imp-done-actions {
+  justify-content: center;
+}

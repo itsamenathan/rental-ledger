@@ -35,7 +35,7 @@ export function transactionsCsv(items: object[]) {
 }
 
 /** RFC 4180-ish CSV parser (quotes, escaped quotes, CRLF). Blank rows are dropped. */
-export function parseCsv(text: string): string[][] {
+export function parseCsv(text: string, delimiter = ","): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -56,7 +56,7 @@ export function parseCsv(text: string): string[][] {
       } else if (ch === '"') quoted = false;
       else field += ch;
     } else if (ch === '"') quoted = true;
-    else if (ch === ",") {
+    else if (ch === delimiter) {
       row.push(field);
       field = "";
     } else if (ch === "\n" || ch === "\r") {

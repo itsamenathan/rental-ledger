@@ -43,6 +43,13 @@
       "when": 1794765360904,
       "tag": "0005_manager_acknowledgements",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794767340111,
+      "tag": "0006_import_profiles",
+      "breakpoints": true
     }
   ]
 }
