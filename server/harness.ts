@@ -74,6 +74,7 @@ interface Row {
   review_note?: string;
   receipt?: boolean;
   trash?: boolean;
+  refund?: boolean;
 }
 
 /** Every month from January two years ago through today; the current month stops at today's date. */
@@ -175,6 +176,12 @@ export function generate(today: Date) {
     if (m >= 4 && m <= 10)
       add(22, { amount: -120, category: "Services", subcategory: "Lawn", vendor: "GreenCut Lawn" });
 
+    // Receipt rules (fixed amounts, so the random sequence for everything below stays the same):
+    // a quarterly sewer bill on the never-ask list, and a Stripe fee that isn't on it yet (try adding it).
+    if (m % 3 === 2)
+      add(24, { amount: -168.5, category: "Utilities", subcategory: "Sewer", vendor: "Springfield Sewer District" });
+    if (m % 2 === 0) add(26, { amount: -86.4, category: "Platform Fees", vendor: "Stripe", description: "Card fees" });
+
     // Yearly and twice-yearly bills.
     if (m === 3) add(10, { amount: -1864, category: "Insurance", vendor: "Example Mutual", receipt: true });
     if (m === 4 || m === 10) {
@@ -245,9 +252,29 @@ export function generate(today: Date) {
       description: "Entered by mistake",
       trash: true,
     },
+    // Money back on an expense category: never asks for a receipt.
+    {
+      date: `${py}-${pad(pm)}-23`,
+      amount: 140,
+      category: "Maintenance",
+      vendor: "Coastal Plumbing",
+      description: "Refund for cancelled visit",
+      refund: true,
+    },
   );
 
-  return { rows: rows.sort((a, b) => a.date.localeCompare(b.date)), occupancy, years: [ty - 2, ty - 1, ty] };
+  return {
+    rows: rows.sort((a, b) => a.date.localeCompare(b.date)),
+    occupancy,
+    years: [ty - 2, ty - 1, ty],
+    /** names that never need a receipt (services/receipts.ts); Stripe is left off to try adding it */
+    receiptExclusions: ["Sewer"],
+    /** category receipt rules: Supplies asks at any amount, Cleaning only from $200 */
+    receiptRules: [
+      { category: "Supplies", receipt_policy: "always" as const },
+      { category: "Cleaning", receipt_policy: "threshold" as const, receipt_min: 200 },
+    ],
+  };
 }
 
 // ---------- reset ----------
@@ -275,6 +302,7 @@ async function reset() {
   const auth = await import("./services/auth.ts");
   const rental = await import("./services/rental.ts");
   const { addAttachment } = await import("./services/attachments.ts");
+  const { addReceiptExclusion } = await import("./services/receipts.ts");
   const db = getDb();
 
   const property = ledger.createProperty(db, null, {
@@ -296,6 +324,9 @@ async function reset() {
   const data = generate(today);
   const receipts: { id: number; row: Row }[] = [];
   tx(db, () => {
+    for (const { category, ...rule } of data.receiptRules)
+      ledger.updateCategory(db, admin, ledger.resolveCategory(db, category).id, rule);
+    for (const name of data.receiptExclusions) addReceiptExclusion(db, admin, { name });
     for (const r of data.rows) {
       const { receipt, trash, ...input } = r;
       const t = ledger.createTransaction(db, admin, { ...input, property_id: property.id });

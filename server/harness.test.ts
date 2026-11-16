@@ -23,6 +23,14 @@ describe("test harness data", () => {
     expect(rows.some((r) => r.trash)).toBe(true);
   });
 
+  it("includes receipt-rule scenarios", () => {
+    const { rows, receiptExclusions } = generate(today);
+    expect(receiptExclusions).toEqual(["Sewer"]);
+    expect(rows.some((r) => r.subcategory === "Sewer")).toBe(true);
+    expect(rows.some((r) => r.vendor === "Stripe" && r.amount <= -75)).toBe(true);
+    expect(rows.some((r) => r.refund && r.amount > 0 && r.category === "Maintenance")).toBe(true);
+  });
+
   it("gives each worktree a stable port", () => {
     const p = harnessPort();
     expect(p).toBe(harnessPort());
