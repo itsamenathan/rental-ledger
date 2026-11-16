@@ -4,6 +4,7 @@ import { api, type Property } from "../api.ts";
 import { useApi, useSession, useToast } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 import CategorySettings from "./CategorySettings.tsx";
+import { PropertyCalendars } from "../components/CalendarFeeds.tsx";
 
 export default function Settings() {
   const { user } = useSession();
@@ -24,7 +25,15 @@ export default function Settings() {
       <Routes>
         <Route path="account" element={<Account />} />
         <Route path="api-keys" element={<ApiKeys />} />
-        <Route path="properties" element={<Properties />} />
+        <Route
+          path="properties"
+          element={
+            <>
+              <Properties />
+              <PropertyCalendars />
+            </>
+          }
+        />
         <Route path="categories" element={<CategorySettings />} />
         <Route path="users" element={<Users />} />
         <Route path="backup" element={<Backup />} />

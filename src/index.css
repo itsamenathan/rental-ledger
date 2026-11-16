@@ -3412,6 +3412,7 @@ table.conflict thead th {
   background: var(--surface-2);
 }
 .cal-feeds-head {
+  display: flex;
   align-items: center;
   gap: 0.5rem;
 }
@@ -3454,4 +3455,14 @@ table.conflict thead th {
 }
 .cal-feeds li .grow {
   min-width: 12rem;
+}
+.cal-prop + .cal-prop {
+  margin-top: 1rem;
+}
+.cal-prop h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.cal-sources {
+  margin: -0.25rem 0 0;
 }
