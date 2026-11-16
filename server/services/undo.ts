@@ -11,6 +11,8 @@ import { audit, AppError, badRequest, notFound, requireWrite, type Actor } from 
 import * as ledger from "./ledger.ts";
 import { deleteOccupancy, upsertOccupancy } from "./rental.ts";
 import { dismiss, undismiss } from "./recurring.ts";
+import { addReceiptExclusion, listReceiptExclusions, removeReceiptExclusion } from "./receipts.ts";
+import { setSubcategoryReceiptRule } from "./categories.ts";
 
 type Row = typeof auditLog.$inferSelect;
 type Changes = Record<string, unknown>;
@@ -38,6 +40,8 @@ const CATEGORY_FIELDS = [
   "description",
   "sort_order",
   "archived",
+  "receipt_policy",
+  "receipt_min",
 ];
 const PROPERTY_FIELDS = [
   "name",
@@ -216,6 +220,38 @@ function plan(r: Row): Plan | null {
               )
                 undismiss(db, a, id);
             },
+          }
+        : null;
+    case "subcategory:update": {
+      // a subcategory receipt rule change: {name, receipt_policy: [before, after], receipt_min: [before, after]}
+      if (!id || typeof c.name !== "string" || !Array.isArray(c.receipt_policy)) return null;
+      const [policy] = c.receipt_policy as [string | null, string | null];
+      const [min] = (c.receipt_min ?? [null, null]) as [number | null, number | null];
+      return {
+        describe: `Put back the receipt rule on ${c.name}`,
+        run: (db, a) =>
+          setSubcategoryReceiptRule(db, a, {
+            category: id,
+            name: c.name,
+            receipt_policy: policy ?? "inherit",
+            receipt_min: min,
+          }),
+      };
+    }
+    case "receipt_exclusion:create":
+      return typeof c.name === "string"
+        ? {
+            describe: `Ask for receipts for ${c.name} again`,
+            run: (db, a) => {
+              if (listReceiptExclusions(db).some((x) => x.id === id)) removeReceiptExclusion(db, a, id!);
+            },
+          }
+        : null;
+    case "receipt_exclusion:delete":
+      return typeof c.name === "string"
+        ? {
+            describe: `Stop asking for receipts for ${c.name} again`,
+            run: (db, a) => addReceiptExclusion(db, a, { name: c.name, note: c.note ?? "" }),
           }
         : null;
     case "recurring_dismissal:delete":

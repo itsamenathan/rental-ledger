@@ -30,7 +30,8 @@ Tools: get_overview, list_categories, search_transactions, get_transaction, add_
 bulk_add_transactions, update_transaction, bulk_update_transactions, delete_transaction, flag_for_review,
 attach_receipt, list_files, link_attachment, unlink_attachment, update_attachment, get_summary, get_tax_report, list_occupancy, set_occupancy, set_tax_year_inputs,
 add_category, update_category, delete_category, add_subcategory, rename_subcategory,
-remove_subcategory, month_summary, category_by_month, year_totals, get_todo, get_recurring, dismiss_recurring, recent_changes, undo_change.
+remove_subcategory, set_subcategory_receipt_rule, list_receipt_exclusions, add_receipt_exclusion, remove_receipt_exclusion,
+month_summary, category_by_month, year_totals, get_todo, get_recurring, dismiss_recurring, recent_changes, undo_change.
 
 ## Data model
 
@@ -44,6 +45,10 @@ remove_subcategory, month_summary, category_by_month, year_totals, get_todo, get
 - **vendor** — payee for expenses, payer for income (Airbnb, VRBO, …). Used for 1099-K reconciliation.
 - **reference / external_id** — source identifiers used for duplicate detection.
 - **needs_review / review_note** — flag anything uncertain for a human.
+- **receipts** — an expense "needs a receipt" by its subcategory's rule if it has one, else its category's
+  \`receipt_policy\` (\`always\`, \`threshold\`: at least \`receipt_min\` dollars, default $75, or \`never\`, e.g.
+  mortgage), unless its vendor is on the never-ask list (list_receipt_exclusions). To do, Files, the tax report and
+  \`needs_receipt=true\` share this rule.
 - **property** — name or id; may be omitted when only one property exists.
 
 ## REST endpoints (JSON)
@@ -66,6 +71,8 @@ remove_subcategory, month_summary, category_by_month, year_totals, get_todo, get
     GET    /api/subcategories                  saved + used subcategories with counts; POST {category, name}
     POST   /api/subcategories/rename           {category, from, to}  updates every transaction; merges if "to" exists
     POST   /api/subcategories/remove           {category, name, move_to?}
+    POST   /api/subcategories/receipt-rule     {category, name, receipt_policy: always|threshold|never|inherit, receipt_min?}
+    GET    /api/receipt-exclusions             vendors that never need a receipt; POST {name, note?}; DELETE /:id
     GET    /api/properties | POST | PATCH /:id
     GET    /api/occupancy?year=                PUT /api/occupancy {month, nights_booked, owner_nights, check_ins}
     GET    /api/tax-years/:year                PUT {mortgage_interest, rental_days_override, personal_days_override}

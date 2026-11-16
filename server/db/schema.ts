@@ -90,6 +90,16 @@ export const categories = sqliteTable(
     description: text("description").notNull().default(""),
     sortOrder: integer("sort_order").notNull().default(0),
     archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+    /**
+     * When an expense in this category should have a receipt: 'always' (any amount), 'threshold' (at least
+     * receiptMinCents, or the app default) or 'never'. Decided in services/receipts.ts. Validated by zod, not a
+     * CHECK, so adding it didn't rebuild the table.
+     */
+    receiptPolicy: text("receipt_policy", { enum: ["always", "threshold", "never"] })
+      .notNull()
+      .default("threshold"),
+    /** Threshold override for 'threshold'; null = the app default (RECEIPT_MIN_DOLLARS) */
+    receiptMinCents: integer("receipt_min_cents"),
   },
   (t) => [
     uniqueIndex("categories_name_unique").on(sql`lower(${t.name})`),
@@ -111,6 +121,10 @@ export const subcategories = sqliteTable(
       .references(() => categories.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     createdAt: createdAt(),
+    /** Receipt rule for entries in this subcategory; null = same as the category (services/receipts.ts) */
+    receiptPolicy: text("receipt_policy", { enum: ["always", "threshold", "never"] }),
+    /** Threshold for 'threshold'; null = the category's, then the app default */
+    receiptMinCents: integer("receipt_min_cents"),
   },
   (t) => [uniqueIndex("subcategories_category_name").on(t.categoryId, t.name)],
 );
@@ -305,6 +319,22 @@ export const recurringDismissals = sqliteTable(
     createdBy: integer("created_by").references(() => users.id),
   },
   (t) => [uniqueIndex("recurring_dismissals_unique").on(t.seriesKey, t.month)],
+);
+
+/**
+ * Vendors that never need a receipt (e.g. Airbnb, Stripe), whatever the category or subcategory. Matched
+ * case-insensitively against a transaction's vendor. Subcategories have their own rule on `subcategories`.
+ */
+export const receiptExclusions = sqliteTable(
+  "receipt_exclusions",
+  {
+    id: integer("id").primaryKey(),
+    name: text("name").notNull(),
+    note: text("note").notNull().default(""),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+  },
+  (t) => [uniqueIndex("receipt_exclusions_name").on(sql`lower(${t.name})`)],
 );
 
 /**

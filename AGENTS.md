@@ -56,6 +56,11 @@ release. Add a tool name to select part of the graph. For example, run
   `manager_documents`; delete rows first, then `releaseFile`. Backups include every key from both tables.
 - The Files page (`server/services/files.ts`) lists one item per stored file (sha256) with every entry it's attached
   to: receipts by their entry's date, manager paperwork by the month it covers. Trashed entries are left out.
+- "Needs a receipt" is decided only by `needsReceipt()` in `server/services/receipts.ts`: the subcategory's rule
+  (`subcategories.receipt_policy`/`receipt_min`, null = same as the category) else the category's
+  (always/threshold/never + optional `receipt_min`), minus vendors on the `receipt_exclusions` never-ask list. To do,
+  Files, the tax report check and the `needs_receipt` transaction filter all use it; don't add another amount filter
+  for receipts. Setting a rule on a used-only subcategory saves its `subcategories` row first.
 - Subcategories are free text on transactions (Grist layout, e.g. Management Fee → Acme PM). The `subcategories`
   table only remembers names for suggestions; rename/remove/merge go through `server/services/categories.ts`.
 - Logging: use `log` from `server/telemetry.ts` (pino), not `console.*` (the CLI's human output is the exception).

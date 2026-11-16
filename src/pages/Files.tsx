@@ -221,14 +221,14 @@ export default function Files() {
               {missingOpen ? "▾" : "▸"} Needs a receipt <span className="muted small">optional</span>
             </span>
             <span className="muted small">
-              {d.missing_total} {d.missing_total === 1 ? "expense" : "expenses"} of{" "}
-              {money(d.receipt_min).replace(/\.00$/, "")}+ without one
+              {d.missing_total} {d.missing_total === 1 ? "expense" : "expenses"} without one
             </span>
           </button>
           {missingOpen && (
             <div id="needs-receipt">
               <p className="muted small">
-                Not required, but handy if your preparer asks.
+                Not required, but handy if your preparer asks. Expenses of {money(d.receipt_min).replace(/\.00$/, "")}+
+                by default; <Link to="/settings/categories">choose per category or vendor</Link>.
                 {canWrite && " Drop a file on a row, or use Attach."}
               </p>
               <ul className="file-missing">
@@ -243,9 +243,7 @@ export default function Files() {
                     to={`/transactions${qs({
                       year: month ? undefined : y,
                       month: month ?? undefined,
-                      kind: "expense",
-                      has_attachment: "false",
-                      min_amount: d.receipt_min,
+                      needs_receipt: "true",
                       property_id: property,
                     })}`}
                   >

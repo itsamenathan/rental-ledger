@@ -17,6 +17,7 @@ const FILTER_KEYS = [
   "amount",
   "needs_review",
   "has_attachment",
+  "needs_receipt",
   "vendor",
   "property_id",
 ] as const;
@@ -187,13 +188,24 @@ export default function Transactions() {
           <option value="none">Not set</option>
         </select>
         <select
-          value={filters.has_attachment}
-          onChange={(e) => set("has_attachment", e.target.value)}
+          value={filters.needs_receipt === "true" ? "needs" : filters.has_attachment}
+          onChange={(e) => {
+            // "Needs a receipt" uses the category/vendor receipt rules (same list as To do, Files and the tax check)
+            const v = e.target.value;
+            const next = new URLSearchParams(params);
+            next.delete("has_attachment");
+            next.delete("needs_receipt");
+            if (v === "needs") next.set("needs_receipt", "true");
+            else if (v) next.set("has_attachment", v);
+            next.delete("offset");
+            setParams(next, { replace: true });
+          }}
           aria-label="Receipts"
         >
           <option value="">Any receipt status</option>
           <option value="true">Has receipt</option>
           <option value="false">No receipt</option>
+          <option value="needs">Needs a receipt</option>
         </select>
         {overview.properties.length > 1 && (
           <select

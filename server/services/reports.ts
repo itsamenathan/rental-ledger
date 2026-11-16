@@ -1,21 +1,7 @@
-import {
-  and,
-  asc,
-  between,
-  count,
-  desc,
-  eq,
-  exists,
-  isNull,
-  like,
-  not,
-  sql,
-  type AnyColumn,
-  type SQL,
-} from "drizzle-orm";
+import { and, asc, between, count, desc, eq, isNull, like, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import type { DB } from "../db.ts";
-import { attachments, categories, occupancy as occupancyTable, transactions } from "../db/schema.ts";
-import { RECEIPT_MIN_DOLLARS } from "./attachments.ts";
+import { categories, occupancy as occupancyTable, transactions } from "../db/schema.ts";
+import { needsReceipt } from "./receipts.ts";
 import { getProperty, resolvePropertyId, SCHEDULE_E_LINES } from "./ledger.ts";
 import { getTaxYear } from "./rental.ts";
 import { monthChecklist } from "./recurring.ts";
@@ -524,13 +510,6 @@ export function taxReport(db: DB, year: number, propertyRef?: number | string) {
       .orderBy(t.date)
       .all()
       .map((r) => r.id);
-  const hasReceipt = exists(
-    db
-      .select({ x: sql`1` })
-      .from(attachments)
-      .where(eq(attachments.transactionId, t.id)),
-  );
-
   const review = idsWhere(eq(t.needsReview, true));
   if (review.length)
     checks.push({
@@ -547,19 +526,12 @@ export function taxReport(db: DB, year: number, propertyRef?: number | string) {
       message: `${unalloc.length} expense(s) are not marked direct or indirect and are excluded from the totals below.`,
       ids: unalloc,
     });
-  const noReceipt = idsWhere(
-    and(
-      isExpense,
-      sql`${t.amountCents} <= ${-RECEIPT_MIN_DOLLARS * 100}`,
-      not(hasReceipt),
-      sql`${c.scheduleELine} IS NOT '12'`,
-    ),
-  );
+  const noReceipt = idsWhere(needsReceipt());
   if (noReceipt.length)
     checks.push({
       level: "warning",
       code: "missing_receipts",
-      message: `${noReceipt.length} expense(s) of $${RECEIPT_MIN_DOLLARS} or more have no receipt attached.`,
+      message: `${noReceipt.length} expense(s) that should have a receipt have none attached (receipt rules are set per category in Settings → Categories).`,
       ids: noReceipt,
     });
   const missingMonths = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`).filter(

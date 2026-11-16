@@ -1,13 +1,17 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
-import { api, type Category } from "../api.ts";
-import { useApi, useSession, useToast } from "../hooks.ts";
+import { api, type Category, type ReceiptExclusion } from "../api.ts";
+import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 
+type Policy = Category["receipt_policy"];
 interface Sub {
   name: string;
   count: number;
   saved: boolean;
+  /** own receipt rule; null = same as the category */
+  receipt_policy: Policy | null;
+  receipt_min: number | null;
 }
 interface TreeRow {
   category_id: number;
@@ -16,23 +20,61 @@ interface TreeRow {
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const dollars = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+const entries = (n: number) => `${n} ${n === 1 ? "entry" : "entries"}`;
 
-/** Settings → Categories: a plain list; click a category to manage it and its subcategories. */
+/** "always", "never" or "$75+" */
+const ruleText = (policy: Policy, min: number) =>
+  policy === "always" ? "always" : policy === "never" ? "never" : `${dollars(min)}+`;
+
+/**
+ * Settings → Categories: categories with their subcategories indented underneath, and when each should ask for a
+ * receipt (server/services/receipts.ts). Click a name to rename, archive, delete or change tax settings.
+ */
 export default function CategorySettings() {
   const { overview, reloadOverview, canWrite } = useSession();
   const tree = useApi<TreeRow[]>("categories/tree");
   const [openId, setOpenId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [expanded, setExpanded] = usePersistentState<number[]>("categories.expanded", []);
+  // the category whose "Add a subcategory" box should take focus when it opens
+  const [focusAdd, setFocusAdd] = useState<number | null>(null);
+  const toast = useToast();
   const info = (id: number) => tree.data?.find((t) => t.category_id === id);
   const refresh = async () => {
     await Promise.all([tree.reload(), reloadOverview()]);
+    window.dispatchEvent(new Event("todo:changed"));
   };
   const archived = overview.categories.filter((c) => c.archived);
   const open = overview.categories.find((c) => c.id === openId);
-
   const list = (kind: "expense" | "income") =>
     overview.categories.filter((c) => c.kind === kind && (showArchived || !c.archived));
+  const toggle = (id: number) => setExpanded((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
+
+  const save = async (fn: () => Promise<unknown>, ok: string) => {
+    try {
+      await fn();
+      toast({ text: ok, kind: "ok" });
+      await refresh();
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+    }
+  };
+  const setCategoryRule = (c: Category, policy: Policy | "inherit", min: number | null) =>
+    save(
+      () => api(`categories/${c.id}`, { method: "PATCH", json: { receipt_policy: policy, receipt_min: min } }),
+      `Receipts for ${c.name}: ${ruleText(policy as Policy, min ?? overview.receipt_min)}`,
+    );
+  const setSubRule = (c: Category, sub: Sub, policy: Policy | "inherit", min: number | null) =>
+    save(
+      () =>
+        api("subcategories/receipt-rule", {
+          method: "POST",
+          json: { category: c.id, name: sub.name, receipt_policy: policy, receipt_min: min },
+        }),
+      policy === "inherit" ? `${sub.name} follows ${c.name} again` : `Receipt rule saved for ${sub.name}`,
+    );
 
   return (
     <section className="card">
@@ -47,28 +89,102 @@ export default function CategorySettings() {
 
       {(["expense", "income"] as const).map((kind) => (
         <div key={kind} className="cat-list-group">
-          <h3 className="group-title">{kind === "expense" ? "Expenses" : "Income"}</h3>
-          <ul className="cat-list">
+          <div className="cat-tree-head" aria-hidden="true">
+            <span />
+            <span>{kind === "expense" ? "Expenses" : "Income"}</span>
+            <span>Entries</span>
+            <span>{kind === "expense" ? "Ask for a receipt" : ""}</span>
+          </div>
+          <ul className="cat-tree">
             {list(kind).map((c) => {
               const t = info(c.id);
               const subs = t?.subcategories ?? [];
+              const own = subs.filter((s) => s.receipt_policy != null).length;
+              const isOpen = expanded.includes(c.id);
+              const canOpen = subs.length > 0 || canWrite;
+              const catMin = c.receipt_min ?? overview.receipt_min;
               return (
-                <li key={c.id}>
-                  <button
-                    className={`cat-row ${c.archived ? "archived" : ""}`}
-                    onClick={() => setOpenId(c.id)}
-                    disabled={!canWrite}
-                  >
-                    <span className="cat-row-name">
-                      {c.name}
+                <li key={c.id} className={c.archived ? "archived" : ""}>
+                  <div className="cat-tree-row">
+                    {canOpen ? (
+                      <button
+                        className="tree-toggle"
+                        onClick={() => toggle(c.id)}
+                        aria-expanded={isOpen}
+                        aria-label={`${isOpen ? "Hide" : "Show"} ${c.name} subcategories`}
+                      >
+                        {isOpen ? "▾" : "▸"}
+                      </button>
+                    ) : (
+                      <span />
+                    )}
+                    <span className="cat-tree-name">
+                      <button className="link-plain" onClick={() => setOpenId(c.id)} disabled={!canWrite}>
+                        {c.name}
+                      </button>
                       {c.archived && <span className="badge muted">archived</span>}
+                      {subs.length > 0 && !isOpen && (
+                        <button className="link small muted-link" onClick={() => toggle(c.id)}>
+                          {subs.length} {subs.length === 1 ? "subcategory" : "subcategories"}
+                          {own > 0 && kind === "expense" && ` · ${own} with own rule`}
+                        </button>
+                      )}
+                      {subs.length === 0 && canWrite && !isOpen && (
+                        <button
+                          className="link small muted-link"
+                          onClick={() => {
+                            setFocusAdd(c.id);
+                            toggle(c.id);
+                          }}
+                        >
+                          + subcategory
+                        </button>
+                      )}
                     </span>
-                    <span className="cat-row-subs">{subs.length ? subs.map((s) => s.name).join(", ") : "—"}</span>
-                    <span className="cat-row-count">
-                      {t ? `${t.count} ${t.count === 1 ? "entry" : "entries"}` : ""}
-                    </span>
-                    {canWrite && <span className="cat-row-go">›</span>}
-                  </button>
+                    <span className="cat-row-count">{t ? entries(t.count) : ""}</span>
+                    {kind === "expense" ? (
+                      <ReceiptControl
+                        label={`Receipts for ${c.name}`}
+                        policy={c.receipt_policy}
+                        min={c.receipt_min}
+                        fallbackMin={overview.receipt_min}
+                        canWrite={canWrite}
+                        onChange={(p, m) => setCategoryRule(c, p, m)}
+                      />
+                    ) : (
+                      <span />
+                    )}
+                  </div>
+                  {isOpen && canOpen && (
+                    <ul className="cat-subtree">
+                      {subs.map((sub) => (
+                        <li key={sub.name} className="cat-tree-row sub">
+                          <span />
+                          <span className="cat-tree-name">{sub.name}</span>
+                          <span className="cat-row-count">{sub.count ? entries(sub.count) : "not used yet"}</span>
+                          {kind === "expense" ? (
+                            <ReceiptControl
+                              label={`Receipts for ${c.name} › ${sub.name}`}
+                              policy={sub.receipt_policy}
+                              min={sub.receipt_min}
+                              fallbackMin={catMin}
+                              inherited={ruleText(c.receipt_policy, catMin)}
+                              canWrite={canWrite}
+                              onChange={(p, m) => setSubRule(c, sub, p, m)}
+                            />
+                          ) : (
+                            <span />
+                          )}
+                        </li>
+                      ))}
+                      {canWrite && (
+                        <li className="cat-tree-row sub add">
+                          <span />
+                          <AddSubcategory category={c} autoFocus={focusAdd === c.id} onAdded={refresh} />
+                        </li>
+                      )}
+                    </ul>
+                  )}
                 </li>
               );
             })}
@@ -80,6 +196,8 @@ export default function CategorySettings() {
           {showArchived ? "Hide archived" : `Show ${archived.length} archived`}
         </button>
       )}
+
+      <VendorList canWrite={canWrite} />
 
       {open && (
         <CategoryPanel
@@ -93,9 +211,12 @@ export default function CategorySettings() {
       {creating && (
         <NewCategory
           onClose={() => setCreating(false)}
-          onCreated={async () => {
+          onCreated={async (id) => {
             setCreating(false);
             await refresh();
+            // open it with the subcategory box ready
+            setFocusAdd(id);
+            setExpanded((xs) => (xs.includes(id) ? xs : [...xs, id]));
           }}
         />
       )}
@@ -103,9 +224,239 @@ export default function CategorySettings() {
   );
 }
 
+/**
+ * When to ask for a receipt. One select; an amount box appears only for "Other amount…". `inherited` adds a
+ * "Same as category" choice, shown when `policy` is null.
+ */
+function ReceiptControl({
+  label,
+  policy,
+  min,
+  fallbackMin,
+  inherited,
+  canWrite,
+  onChange,
+}: {
+  label: string;
+  policy: Policy | null;
+  min: number | null;
+  /** what "threshold" with no amount of its own means here */
+  fallbackMin: number;
+  inherited?: string;
+  canWrite: boolean;
+  onChange: (policy: Policy | "inherit", min: number | null) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const cancelled = useRef(false);
+  const [amount, setAmount] = useState(min == null ? "" : String(min));
+  if (!canWrite)
+    return (
+      <span className={`receipt-text ${policy == null ? "muted" : ""}`}>
+        {policy == null ? `Same as category (${inherited})` : ruleText(policy, min ?? fallbackMin)}
+      </span>
+    );
+  const custom = editing || (policy === "threshold" && min != null);
+  const value = custom ? "custom" : (policy ?? "inherit");
+  const pick = (v: string) => {
+    if (v === "custom") {
+      cancelled.current = false;
+      setAmount(min == null ? "" : String(min));
+      setEditing(true);
+      return;
+    }
+    setEditing(false);
+    void onChange(v as Policy | "inherit", null);
+  };
+  const commit = () => {
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
+    const n = Number(amount);
+    setEditing(false);
+    if (amount.trim() === "" || !Number.isFinite(n) || n <= 0) return setAmount(min == null ? "" : String(min));
+    if (n !== min || policy !== "threshold") void onChange("threshold", n);
+  };
+  return (
+    <span className="receipt-control">
+      <select
+        aria-label={label}
+        className={policy == null && !editing ? "inherited" : ""}
+        value={value}
+        onChange={(e) => pick(e.target.value)}
+      >
+        {inherited != null && <option value="inherit">Same as category ({inherited})</option>}
+        <option value="threshold">{dollars(fallbackMin)} or more</option>
+        <option value="custom">{custom ? "At least" : "Other amount…"}</option>
+        <option value="always">Always</option>
+        <option value="never">Never</option>
+      </select>
+      {custom && (
+        <span className="receipt-amount">
+          $
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            inputMode="decimal"
+            autoFocus={editing}
+            value={amount}
+            placeholder={String(fallbackMin)}
+            aria-label={`${label}: at least this many dollars`}
+            onChange={(e) => setAmount(e.target.value)}
+            onFocus={() => {
+              cancelled.current = false;
+            }}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") {
+                cancelled.current = true;
+                setAmount(min == null ? "" : String(min));
+                setEditing(false);
+              }
+            }}
+          />
+          or more
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The last row of an open category: type a name to add a subcategory under it. */
+function AddSubcategory({
+  category: c,
+  autoFocus,
+  onAdded,
+}: {
+  category: Category;
+  autoFocus: boolean;
+  onAdded: () => Promise<void>;
+}) {
+  const toast = useToast();
+  const [name, setName] = useState("");
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    const n = name.trim();
+    if (!n) return;
+    try {
+      await api("subcategories", { method: "POST", json: { category: c.id, name: n } });
+      toast({ text: `Added ${n} under ${c.name}`, kind: "ok" });
+      setName("");
+      await onAdded();
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+    }
+  };
+  return (
+    <form className="inline-form add-sub" onSubmit={(e) => void add(e)}>
+      <input
+        className="grow"
+        autoFocus={autoFocus}
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder={`Add a subcategory to ${c.name}`}
+        aria-label={`New subcategory in ${c.name}`}
+      />
+      <button className="btn small" disabled={!name.trim()}>
+        Add
+      </button>
+    </form>
+  );
+}
+
+/** Vendors that never need a receipt, in any category (e.g. Stripe, Airbnb). */
+function VendorList({ canWrite }: { canWrite: boolean }) {
+  const list = useApi<ReceiptExclusion[]>("receipt-exclusions");
+  const sugg = useApi<{ vendors: { vendor: string }[] }>("suggestions");
+  const toast = useToast();
+  const [name, setName] = useState("");
+  const items = list.data ?? [];
+  const has = (n: string) => items.some((x) => x.name.toLowerCase() === n.trim().toLowerCase());
+  const run = async (fn: () => Promise<unknown>, ok: string) => {
+    try {
+      await fn();
+      toast({ text: ok, kind: "ok" });
+      await list.reload();
+      window.dispatchEvent(new Event("todo:changed"));
+      return true;
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+      return false;
+    }
+  };
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    const n = name.trim();
+    if (
+      n &&
+      !has(n) &&
+      (await run(
+        () => api("receipt-exclusions", { method: "POST", json: { name: n } }),
+        `Won't ask for receipts from ${n}`,
+      ))
+    )
+      setName("");
+  };
+  return (
+    <div className="cat-list-group">
+      <h3 className="group-title">Vendors that never need a receipt</h3>
+      <p className="muted small">For payees like Stripe or Airbnb, in whatever category they're entered under.</p>
+      {items.length > 0 && (
+        <ul className="sub-list">
+          {items.map((x) => (
+            <li key={x.id} className="sub-row">
+              <span>
+                {x.name}{" "}
+                <span className="muted small">{x.matches ? plural(x.matches, "expense") : "no matches yet"}</span>
+              </span>
+              {canWrite && (
+                <button
+                  className="link small danger"
+                  onClick={() =>
+                    void run(
+                      () => api(`receipt-exclusions/${x.id}`, { method: "DELETE" }),
+                      `Receipts asked from ${x.name} again`,
+                    )
+                  }
+                >
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {canWrite && (
+        <form onSubmit={(e) => void add(e)} className="inline-form">
+          <input
+            className="grow"
+            list="receipt-vendor-suggestions"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Vendor, e.g. Stripe"
+            aria-label="Vendor that never needs a receipt"
+          />
+          <datalist id="receipt-vendor-suggestions">
+            {(sugg.data?.vendors ?? [])
+              .filter((v) => !has(v.vendor))
+              .map((v) => (
+                <option key={v.vendor} value={v.vendor} />
+              ))}
+          </datalist>
+          <button className="btn" disabled={!name.trim() || has(name)}>
+            Add
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 
-function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: () => Promise<void> }) {
+function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: (id: number) => Promise<void> }) {
   const toast = useToast();
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"expense" | "income">("expense");
@@ -113,7 +464,7 @@ function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const save = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await api("categories", {
+      const created = await api<Category>("categories", {
         method: "POST",
         json: {
           name,
@@ -123,7 +474,7 @@ function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: (
         },
       });
       toast({ text: `Added ${name}`, kind: "ok" });
-      await onCreated();
+      await onCreated(created.id);
     } catch (err) {
       toast({ text: (err as Error).message, kind: "error" });
     }
@@ -143,7 +494,10 @@ function NewCategory({ onClose, onCreated }: { onClose: () => void; onCreated: (
           ))}
         </div>
         {kind === "expense" && <TaxChoice value={allocation} onChange={setAllocation} />}
-        <p className="muted small">You can set the Schedule E line later; it defaults to "Other".</p>
+        <p className="muted small">
+          You can set the Schedule E line later; it defaults to "Other". Add subcategories in the list once it's
+          created.
+        </p>
         <div className="form-actions">
           <span className="spacer" />
           <button className="btn primary">Add</button>
