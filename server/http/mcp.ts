@@ -6,6 +6,7 @@ import { getDb } from "../db.ts";
 import { AppError, type Actor } from "../context.ts";
 import * as ledger from "../services/ledger.ts";
 import * as rental from "../services/rental.ts";
+import * as calendar from "../services/calendar.ts";
 import * as reports from "../services/reports.ts";
 import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
@@ -31,6 +32,8 @@ Rental property bookkeeping. Data model:
   prorated by rental-use % at tax time. Each expense category has a default allocation; follow it unless the
   user says otherwise.
 - occupancy: per-month nights booked, owner (personal) nights, check-ins; drives the rental-use % for taxes.
+- booking calendar: read-only availability imported from Airbnb/VRBO iCal feeds (reservations and blocked dates).
+  Feeds don't show private bookings or owner stays, so don't treat it as the occupancy record.
 Guidance for agents:
 - Before importing, call bulk_add_transactions with dry_run=true and inspect duplicates/errors.
 - For a bank/card/provider CSV, use inspect_csv (suggests a column mapping, or a saved profile) then
@@ -419,6 +422,55 @@ export function buildMcpServer(actor: Actor) {
       },
     },
     wrap((args) => rental.upsertOccupancy(db, actor, args)),
+  );
+
+  server.registerTool(
+    "get_calendar",
+    {
+      description:
+        "Booking calendar for whole months, read-only from the imported iCal feeds: reservations and blocks, which " +
+        "event holds each night (a reservation beats a block), and per-month booked/blocked/free nights and check-ins.",
+      inputSchema: {
+        from_month: z.string().describe("YYYY-MM"),
+        to_month: z.string().optional().describe("YYYY-MM, default from_month"),
+        property_id: z.number().int().optional(),
+      },
+      annotations: ro,
+    },
+    wrap((args) => calendar.getCalendar(db, actor, args)),
+  );
+
+  server.registerTool(
+    "list_calendar_feeds",
+    {
+      description: "iCal feeds imported into the booking calendar, with last sync and error.",
+      inputSchema: {},
+      annotations: ro,
+    },
+    wrap(() => calendar.listFeeds(db, actor)),
+  );
+
+  server.registerTool(
+    "add_calendar_feed",
+    {
+      description: "Add an iCal export link (Airbnb/VRBO) to import into the booking calendar, then sync it.",
+      inputSchema: { name: z.string(), url: z.string(), property: ref.optional() },
+    },
+    wrap(async (args) => {
+      const feed = calendar.createFeed(db, actor, args);
+      return { feed, sync: await calendar.refreshFeed(db, actor, feed.id) };
+    }),
+  );
+
+  server.registerTool(
+    "refresh_calendar_feeds",
+    {
+      description: "Download linked iCal feeds now and update the calendar (one feed by id, or all).",
+      inputSchema: { feed_id: z.number().int().optional() },
+    },
+    wrap(async ({ feed_id }) =>
+      feed_id ? [await calendar.refreshFeed(db, actor, feed_id)] : calendar.refreshFeeds(db, actor),
+    ),
   );
 
   server.registerTool(

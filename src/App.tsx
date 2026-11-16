@@ -12,6 +12,7 @@ import Transactions from "./pages/Transactions.tsx";
 import AddEntry from "./pages/AddEntry.tsx";
 import Todo, { type TodoSummary } from "./pages/Todo.tsx";
 import Occupancy from "./pages/Occupancy.tsx";
+import CalendarPage from "./pages/Calendar.tsx";
 import Reports from "./pages/Reports.tsx";
 import ImportCsv from "./pages/ImportCsv.tsx";
 import ManagerStatement from "./pages/ManagerStatement.tsx";
@@ -78,6 +79,7 @@ const NAV = [
     icon: "M17 2l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3",
   },
   { to: "/reports", label: "Taxes", icon: "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6" },
+  { to: "/calendar", label: "Calendar", icon: "M4 5h16v15H4zM4 10h16M9 3v4M15 3v4M8 14h3v3H8z" },
   { to: "/occupancy", label: "Occupancy", icon: "M4 5h16v15H4zM4 10h16M9 3v4M15 3v4" },
   {
     to: "/settings",
@@ -88,11 +90,21 @@ const NAV = [
 /** Sidebar groups (Add entry is a button above them; Settings sits at the bottom). */
 const SIDEBAR: { title?: string; items: string[] }[] = [
   { title: "Money", items: ["/", "/todo", "/transactions", "/files", "/statement", "/categories", "/recurring"] },
-  { title: "Taxes", items: ["/reports", "/occupancy"] },
+  { title: "Stays", items: ["/calendar", "/occupancy"] },
+  { title: "Taxes", items: ["/reports"] },
 ];
 const MOBILE_NAV = ["/", "/transactions", "/add", "/todo"];
 /** Everything else on a phone lives behind the bottom bar's "More" button. */
-const MOBILE_MORE = ["/files", "/reports", "/statement", "/categories", "/recurring", "/occupancy", "/settings"];
+const MOBILE_MORE = [
+  "/calendar",
+  "/files",
+  "/reports",
+  "/statement",
+  "/categories",
+  "/recurring",
+  "/occupancy",
+  "/settings",
+];
 const MORE_ICON = "M5 12h.01M12 12h.01M19 12h.01";
 
 export function Icon({ d, size = 20 }: { d: string; size?: number }) {
@@ -222,6 +234,7 @@ function Shell() {
           <Route path="/add" element={canWrite ? <AddEntry /> : <Navigate to="/" />} />
           <Route path="/todo" element={<Todo />} />
           <Route path="/review" element={<Navigate to="/todo" replace />} />
+          <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/occupancy" element={<Occupancy />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/import" element={<ImportCsv />} />

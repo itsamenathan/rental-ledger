@@ -4,6 +4,7 @@ import { api, type Property } from "../api.ts";
 import { useApi, useSession, useToast } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 import CategorySettings from "./CategorySettings.tsx";
+import { PropertyCalendars } from "../components/CalendarFeeds.tsx";
 
 export default function Settings() {
   const { user } = useSession();
@@ -24,7 +25,15 @@ export default function Settings() {
       <Routes>
         <Route path="account" element={<Account />} />
         <Route path="api-keys" element={<ApiKeys />} />
-        <Route path="properties" element={<Properties />} />
+        <Route
+          path="properties"
+          element={
+            <>
+              <Properties />
+              <PropertyCalendars />
+            </>
+          }
+        />
         <Route path="categories" element={<CategorySettings />} />
         <Route path="users" element={<Users />} />
         <Route path="backup" element={<Backup />} />
@@ -636,6 +645,7 @@ const VERB: Record<string, string> = {
   login: "Signed in",
   logout: "Signed out",
   change_password: "Changed password",
+  sync: "Synced",
 };
 const NOUN: Record<string, string> = {
   transaction: "transaction",
@@ -643,6 +653,7 @@ const NOUN: Record<string, string> = {
   preparer_package: "preparer package",
   api_key: "API key",
   tax_year: "tax-year inputs",
+  calendar_feed: "calendar",
   audit: "change",
 };
 
@@ -671,6 +682,8 @@ function details(r: AuditRow) {
     return `${show(c.category ?? "")} ${show(c.name)}${c.moved_to ? ` → ${show(c.moved_to)}` : ""}`.trim();
   if (r.entity === "occupancy")
     return `${show(c.month ?? "")} · ${show(c.nights_booked ?? "")} nights booked`.replace(/^ · /, "");
+  if (r.entity === "calendar_feed" && r.action === "sync")
+    return `${show(c.name)}: ${show(c.added)} added, ${show(c.updated)} changed, ${show(c.removed)} cancelled`;
   if (r.action === "undo") return `${VERB[String(c.action)] ?? show(c.action)} ${show(c.entity)} #${show(c.entity_id)}`;
   if (Array.isArray(c.ids)) return `${c.ids.length} transactions`;
   if (Array.isArray(c.transactions)) return `${c.transactions.length} transactions`;

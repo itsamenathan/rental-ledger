@@ -356,3 +356,49 @@ export const importProfiles = sqliteTable(
   },
   (t) => [uniqueIndex("import_profiles_name").on(sql`lower(${t.name})`)],
 );
+
+/**
+ * Booking calendars to import (Airbnb/VRBO iCal export links). url is null for a feed filled by uploading an
+ * .ics file. The url carries a secret token, so it is never logged or shown to read-only users.
+ */
+export const calendarFeeds = sqliteTable("calendar_feeds", {
+  id: integer("id").primaryKey(),
+  propertyId: integer("property_id")
+    .notNull()
+    .references(() => properties.id),
+  name: text("name").notNull(),
+  url: text("url"),
+  lastSyncedAt: text("last_synced_at"),
+  lastError: text("last_error"),
+  createdAt: createdAt(),
+});
+
+/**
+ * Events imported from a calendar feed: reservations and blocked dates. Read-only: every sync replaces them.
+ * Dates are YYYY-MM-DD; end_date is the checkout day (exclusive).
+ */
+export const calendarEvents = sqliteTable(
+  "calendar_events",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    feedId: integer("feed_id")
+      .notNull()
+      .references(() => calendarFeeds.id, { onDelete: "cascade" }),
+    uid: text("uid").notNull(),
+    kind: text("kind", { enum: ["reserved", "blocked"] }).notNull(),
+    startDate: text("start_date").notNull(),
+    endDate: text("end_date").notNull(),
+    summary: text("summary").notNull().default(""),
+    createdAt: createdAt(),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex("calendar_events_feed_uid").on(t.feedId, t.uid),
+    index("calendar_events_property_dates").on(t.propertyId, t.startDate),
+    check("calendar_events_kind_check", sql`${t.kind} IN ('reserved','blocked')`),
+    check("calendar_events_dates_check", sql`${t.endDate} > ${t.startDate}`),
+  ],
+);

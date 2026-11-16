@@ -3263,3 +3263,206 @@ table.conflict thead th {
   color: var(--muted);
   font-weight: 600;
 }
+
+/* ---------- booking calendar ---------- */
+.cal-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.cal-nav h2 {
+  margin: 0;
+  min-width: 9.5rem;
+  text-align: center;
+  font-size: 1.15rem;
+}
+.cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  font-size: 0.8rem;
+  color: var(--text-2);
+}
+.cal-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.cal-swatch {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 3px;
+  vertical-align: -1px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+/* stay colors: background tint + a solid edge, blocked is hatched so it reads as "not a stay" */
+.k-reserved {
+  --cal: var(--series-1);
+}
+.k-blocked {
+  --cal: var(--series-other);
+}
+.cal-swatch[class*="k-"] {
+  background: color-mix(in srgb, var(--cal) 35%, var(--surface));
+  border-color: var(--cal);
+}
+.cal-swatch.k-blocked,
+.cal-day.k-blocked {
+  background: repeating-linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--cal) 28%, var(--surface)) 0 4px,
+    var(--surface) 4px 8px
+  );
+}
+.cal-card {
+  padding: 0.6rem;
+}
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  row-gap: 4px;
+}
+.cal-wd {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+  padding: 0.2rem 0 0.35rem;
+}
+.cal-day {
+  font: inherit;
+  position: relative;
+  min-height: 4.6rem;
+  border: 0;
+  margin: 0 2px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text);
+  text-align: left;
+  padding: 0.3rem 0.4rem;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.15rem;
+  cursor: pointer;
+  overflow: hidden;
+}
+.cal-day:disabled {
+  cursor: default;
+}
+.cal-day:not(:disabled):hover {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.cal-day[class*="k-"] {
+  background: color-mix(in srgb, var(--cal) 24%, var(--surface));
+  box-shadow: inset 0 3px 0 var(--cal);
+}
+/* consecutive nights of one stay join into a bar */
+.cal-day.join-l {
+  margin-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.cal-day.join-r {
+  margin-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.cal-day.out {
+  opacity: 0.4;
+}
+.cal-day.past:not(.out) {
+  opacity: 0.8;
+}
+.cal-day.today .cal-num {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  align-self: flex-start;
+}
+.cal-num {
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.cal-label {
+  font-size: 0.75rem;
+  line-height: 1.2;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-occ {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin: 0;
+}
+.cal-row {
+  cursor: pointer;
+}
+.cal-row:hover td {
+  background: var(--surface-2);
+}
+.cal-feeds-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.cal-feeds-head h2 {
+  margin: 0;
+}
+.cal-feeds {
+  list-style: none;
+  padding: 0;
+  margin: 0.75rem 0;
+}
+.cal-feeds li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--border);
+}
+.cal-feed-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+@media (max-width: 640px) {
+  .cal-day {
+    min-height: 2.9rem;
+    padding: 0.25rem;
+  }
+  .cal-label {
+    display: none;
+  }
+  .cal-legend {
+    width: 100%;
+  }
+}
+.cal-kv {
+  margin: 0 0 1rem;
+}
+.cal-feeds li .grow {
+  min-width: 12rem;
+}
+.cal-prop + .cal-prop {
+  margin-top: 1rem;
+}
+.cal-prop h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.cal-sources {
+  margin: -0.25rem 0 0;
+}

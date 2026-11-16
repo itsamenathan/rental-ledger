@@ -29,6 +29,7 @@ Streamable HTTP MCP endpoint: \`POST /mcp\` with the same Bearer key. Example cl
 Tools: get_overview, list_categories, search_transactions, get_transaction, add_expense, add_transaction,
 bulk_add_transactions, update_transaction, bulk_update_transactions, delete_transaction, flag_for_review,
 attach_receipt, list_files, link_attachment, unlink_attachment, update_attachment, get_summary, get_tax_report, list_occupancy, set_occupancy, set_tax_year_inputs,
+get_calendar, list_calendar_feeds, add_calendar_feed, refresh_calendar_feeds,
 add_category, update_category, delete_category, add_subcategory, rename_subcategory,
 remove_subcategory, set_subcategory_receipt_rule, list_receipt_exclusions, add_receipt_exclusion, remove_receipt_exclusion,
 month_summary, category_by_month, year_totals, get_todo, get_recurring, dismiss_recurring, recent_changes, undo_change.
@@ -77,6 +78,10 @@ month_summary, category_by_month, year_totals, get_todo, get_recurring, dismiss_
     GET    /api/receipt-exclusions             vendors that never need a receipt; POST {name, note?}; DELETE /:id
     GET    /api/properties | POST | PATCH /:id
     GET    /api/occupancy?year=                PUT /api/occupancy {month, nights_booked, owner_nights, check_ins}
+    GET    /api/calendar?from=YYYY-MM&to=      imported reservations/blocks, which holds each night, booked/blocked/free per month
+    GET    /api/calendar/feeds | POST {name, url?} | PATCH /:id | DELETE /:id (removes its events)
+    POST   /api/calendar/feeds/:id/refresh     download the iCal link now; /import takes .ics text as the body
+    POST   /api/calendar/refresh               {stale_minutes?} refresh every linked feed
     GET    /api/tax-years/:year                PUT {mortgage_interest, rental_days_override, personal_days_override}
     GET    /api/reports/summary?year=
     GET    /api/reports/month?month=YYYY-MM    month totals vs last month/last year/12-mo avg, per category, bill checklist

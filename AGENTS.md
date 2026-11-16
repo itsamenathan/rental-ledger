@@ -86,7 +86,8 @@ and To do items: a missing bill, a duplicate, a flagged and an unallocated entry
   that needs the service worker (installing, offline mode, the outbox); `vp dev` doesn't register one.
 - Logins: `admin@example.com`, `member@example.com`, `viewer@example.com`, password `password`.
 - `scripts/harness info` prints the URL, a write and a read API key (`Authorization: Bearer …`), an admin session
-  cookie for curl, and `data/sample-bank-export.csv` for trying CSV import.
+  cookie for curl, `data/sample-bank-export.csv` for trying CSV import, and `data/sample-airbnb.ics` (one new
+  reservation) for trying "Import .ics file" on the Calendar page.
 - Reset only deletes a data folder the harness created (it has `harness.json`), never a real ledger.
 - Run Node commands through `vp env exec --node 24 …` if `node -p process.features.typescript` prints `false`.
 - When a change needs new kinds of data to test, add it to `generate()` in `server/harness.ts`.
