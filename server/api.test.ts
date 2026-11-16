@@ -441,3 +441,58 @@ describe("attachment storage", () => {
     expect(storedFiles()).toBe(before + 1);
   });
 });
+
+describe("offline outbox replay", () => {
+  it("returns the saved entry when the same client_id is sent again", async () => {
+    const entry = {
+      date: "2026-03-04",
+      amount: -42.5,
+      category: "Supplies",
+      vendor: "Hardware store",
+      client_id: "c0ffee00-0000-4000-8000-000000000001",
+    };
+    const first = await call("POST", "/api/transactions", entry);
+    expect(first.status).toBe(201);
+    const again = await call("POST", "/api/transactions", { ...entry, amount: -99 });
+    expect(again.status).toBe(201);
+    expect(again.json.id).toBe(first.json.id);
+    expect(again.json.amount).toBe(-42.5);
+    const list = await call("GET", "/api/transactions?q=Hardware%20store");
+    expect(list.json.items.filter((t: { id: number }) => t.id === first.json.id)).toHaveLength(1);
+    expect(list.json.total).toBe(1);
+    const audit = await call("GET", `/api/audit?entity=transaction&entity_id=${first.json.id}`);
+    expect(audit.json).toHaveLength(1);
+  });
+});
+
+describe("offline edits", () => {
+  it("refuses an update or delete made against an older copy", async () => {
+    const made = await call("POST", "/api/transactions", { date: "2026-03-05", amount: -20, category: "Supplies" });
+    const base = made.json.updated_at as string;
+    const first = await call("PATCH", `/api/transactions/${made.json.id}`, {
+      vendor: "Corner store",
+      expected_updated_at: base,
+    });
+    expect(first.status).toBe(200);
+    expect(first.json.updated_at).not.toBe(base);
+
+    const stale = await call("PATCH", `/api/transactions/${made.json.id}`, {
+      description: "from the phone",
+      expected_updated_at: base,
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.json.details.current.vendor).toBe("Corner store");
+    expect(stale.json.details.current.description).toBe("");
+
+    const del = await call(
+      "DELETE",
+      `/api/transactions/${made.json.id}?expected_updated_at=${encodeURIComponent(base)}`,
+    );
+    expect(del.status).toBe(409);
+    const ok = await call(
+      "DELETE",
+      `/api/transactions/${made.json.id}?expected_updated_at=${encodeURIComponent(first.json.updated_at)}`,
+    );
+    expect(ok.status).toBe(200);
+  });
+});

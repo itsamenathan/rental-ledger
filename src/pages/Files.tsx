@@ -1,17 +1,10 @@
 import { useRef, useState, type DragEvent, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
-import {
-  api,
-  qs,
-  uploadAttachments,
-  type FileLibrary,
-  type LibraryFile,
-  type Transaction,
-  type TxList,
-} from "../api.ts";
+import { api, qs, type FileLibrary, type LibraryFile, type Transaction, type TxList } from "../api.ts";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, money, monthTitle, shiftMonth, thisMonth, THIS_YEAR } from "../format.ts";
 import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
+import { uploadOrQueue } from "../outbox.ts";
 import { Amount, Modal } from "../lib.tsx";
 
 const ACCEPT = "image/*,application/pdf,text/plain,text/csv,.heic,.heif";
@@ -32,7 +25,7 @@ const entryLabel = (t: { vendor: string; subcategory: string; description: strin
   t.vendor || t.subcategory || t.description || t.category;
 
 export default function Files() {
-  const { overview, canWrite } = useSession();
+  const { overview, canWrite, user } = useSession();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const year = params.get("year");
@@ -63,8 +56,13 @@ export default function Files() {
   const upload = async (tx: Transaction, files: File[]) => {
     if (!files.length) return;
     try {
-      await uploadAttachments(tx.id, files);
-      toast({ text: `Attached ${files.length === 1 ? files[0]!.name : `${files.length} files`}`, kind: "ok" });
+      const label = `${tx.category} · ${money(tx.amount)}`;
+      const what = files.length === 1 ? files[0]!.name : `${files.length} files`;
+      if ((await uploadOrQueue(user.id, { id: tx.id, date: tx.date, label }, files)) === "queued") {
+        toast({ text: `No connection: ${what} kept on this device; it uploads when you reconnect`, kind: "ok" });
+        return;
+      }
+      toast({ text: `Attached ${what}`, kind: "ok" });
       reload();
     } catch (e) {
       toast({ text: (e as Error).message, kind: "error" });

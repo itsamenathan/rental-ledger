@@ -17,11 +17,29 @@ export function SessionProvider({
   children: ReactNode;
 }) {
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   const reloadOverview = useCallback(async () => setOverview(await api<Overview>("overview")), []);
+  const boot = useCallback(() => api<Overview>("overview").then(setOverview, (e: Error) => setFailed(e.message)), []);
   useEffect(() => {
-    void reloadOverview();
-  }, [reloadOverview]);
-  if (!overview) return <div className="boot">Loading…</div>;
+    void boot();
+  }, [boot]);
+  if (!overview)
+    return failed ? (
+      <div className="boot">
+        <p>Can't reach the server ({failed}).</p>
+        <button
+          className="btn"
+          onClick={() => {
+            setFailed(null);
+            void boot();
+          }}
+        >
+          Try again
+        </button>
+      </div>
+    ) : (
+      <div className="boot">Loading…</div>
+    );
   const value: Session = {
     user,
     canWrite,
@@ -30,6 +48,8 @@ export function SessionProvider({
     category: (id) => overview.categories.find((c) => c.id === id),
     logout: async () => {
       await api("auth/logout", { method: "POST" });
+      // The service worker keeps the last "who am I" / overview for offline starts; drop them with the session.
+      await globalThis.caches?.delete("api-v1").catch(() => false);
       onLogout();
     },
   };

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { api, type Category, type Overview, type User } from "./api.ts";
+import type { OutboxEntry } from "./outbox.ts";
 
 // ---------------- session + reference data ----------------
 
@@ -74,3 +75,19 @@ export function usePersistentState<T>(key: string, initial: T) {
   }, [key, v]);
   return [v, setV] as const;
 }
+
+// ---------------- offline outbox ----------------
+
+export interface OutboxState {
+  entries: OutboxEntry[];
+  online: boolean;
+  syncing: boolean;
+  syncNow: () => void;
+}
+export const OutboxCtx = createContext<OutboxState>({
+  entries: [],
+  online: true,
+  syncing: false,
+  syncNow: () => {},
+});
+export const useOutbox = () => useContext(OutboxCtx);

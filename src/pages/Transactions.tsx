@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router";
 import { api, qs, type TxList } from "../api.ts";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, money } from "../format.ts";
-import { useApi, useSession, useToast } from "../hooks.ts";
+import { useApi, useOutbox, useSession, useToast } from "../hooks.ts";
 import { AllocationBadge, Amount } from "../lib.tsx";
 
 const PAGE = 100;
@@ -30,6 +30,11 @@ export default function Transactions() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<number | null>(null);
   const toast = useToast();
+  // Changes saved offline and not yet synced, by entry (the list itself shows the server's copy until then).
+  const outbox = useOutbox();
+  const pending = new Map(
+    outbox.entries.filter((e) => e.tx_id != null && e.op !== "create").map((e) => [e.tx_id!, e.op]),
+  );
 
   // Default to the current year. ?year=all shows every year; a month filter implies its own year.
   const yearParam = params.get("year");
@@ -350,6 +355,15 @@ export default function Transactions() {
                       📎
                     </span>
                   )}
+                  {pending.has(t.id) && (
+                    <span className="badge muted" title="Saved on this device; syncs when you're back online">
+                      {pending.get(t.id) === "delete"
+                        ? "Delete waiting to sync"
+                        : pending.get(t.id) === "attach"
+                          ? "Receipt waiting to sync"
+                          : "Changes waiting to sync"}
+                    </span>
+                  )}
                   {t.needs_review && (
                     <span className="badge warn" title={t.review_note}>
                       ⚑ Review
@@ -397,7 +411,14 @@ export default function Transactions() {
         </div>
       )}
 
-      {editing && <TxEditModal id={editing} onClose={() => setEditing(null)} onChanged={() => void reload()} />}
+      {editing && (
+        <TxEditModal
+          id={editing}
+          initial={data?.items.find((t) => t.id === editing)}
+          onClose={() => setEditing(null)}
+          onChanged={() => void reload()}
+        />
+      )}
     </div>
   );
 }

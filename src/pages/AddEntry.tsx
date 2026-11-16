@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router";
 import type { Allocation, Transaction } from "../api.ts";
 import TxForm, { type TxPrefill } from "../components/TxForm.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
+import { OutboxList } from "../components/Outbox.tsx";
 import { fmtDate, thisMonth } from "../format.ts";
 import { useToast } from "../hooks.ts";
 import { AllocationBadge, Amount } from "../lib.tsx";
@@ -50,6 +51,7 @@ export default function AddEntry() {
             toast({ text: `Saved ${t.category} ${Math.abs(t.amount).toFixed(2)}`, kind: "ok" });
             if (!another) void navigate(back?.startsWith("/") ? back : "/transactions");
           }}
+          onQueued={(text) => toast({ text, kind: "ok" })}
         />
       </div>
       {added.length > 0 && (
@@ -72,7 +74,15 @@ export default function AddEntry() {
           </ul>
         </section>
       )}
-      {editing && <TxEditModal id={editing} onClose={() => setEditing(null)} onChanged={() => setAdded([])} />}
+      <OutboxList />
+      {editing && (
+        <TxEditModal
+          id={editing}
+          initial={added.find((t) => t.id === editing)}
+          onClose={() => setEditing(null)}
+          onChanged={() => setAdded([])}
+        />
+      )}
     </div>
   );
 }

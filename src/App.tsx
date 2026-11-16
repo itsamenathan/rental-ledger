@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { api, type User } from "./api.ts";
-import { useApi, useSession } from "./hooks.ts";
+import { useApi, useOutbox, useSession } from "./hooks.ts";
 import { Modal, SessionProvider, ToastProvider } from "./lib.tsx";
+import { OutboxProvider, SyncBanner } from "./components/Outbox.tsx";
 import Overview from "./pages/Overview.tsx";
 import MonthPage from "./pages/Month.tsx";
 import Categories from "./pages/Categories.tsx";
@@ -45,7 +46,9 @@ export default function App() {
             canWrite={me.can_write}
             onLogout={() => setMe({ user: null, can_write: false })}
           >
-            <Shell />
+            <OutboxProvider>
+              <Shell />
+            </OutboxProvider>
           </SessionProvider>
         ) : (
           <Routes>
@@ -111,7 +114,19 @@ export function Icon({ d, size = 20 }: { d: string; size?: number }) {
 }
 
 function Shell() {
-  const { user, logout, canWrite } = useSession();
+  const { user, logout: signOut, canWrite } = useSession();
+  const outbox = useOutbox();
+  const logout = async () => {
+    const n = outbox.entries.length;
+    if (
+      n &&
+      !confirm(
+        `${n} saved-offline ${n === 1 ? "entry hasn't" : "entries haven't"} synced yet. They stay on this device and send when you sign in again. Sign out anyway?`,
+      )
+    )
+      return;
+    await signOut();
+  };
   const todo = useApi<TodoSummary>("todo");
   const loc = useLocation();
   const navigate = useNavigate();
@@ -197,6 +212,7 @@ function Shell() {
         </div>
       </aside>
       <main className="content">
+        <SyncBanner />
         <Routes>
           <Route path="/" element={<Overview />} />
           <Route path="/months/:ym" element={<MonthPage />} />

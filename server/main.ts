@@ -21,6 +21,10 @@ app.use(
   "/assets/*",
   serveStatic({ root: dist, onFound: (_p, c) => c.header("Cache-Control", "public, max-age=31536000, immutable") }),
 );
+// The service worker and manifest must be re-checked on every load so installed apps pick up new versions.
+const revalidate = serveStatic({ root: dist, onFound: (_p, c) => c.header("Cache-Control", "no-cache") });
+app.use("/sw.js", revalidate);
+app.use("/manifest.webmanifest", revalidate);
 app.use("*", serveStatic({ root: dist }));
 // SPA fallback for client-side routes
 app.get("*", (c) => c.html(indexHtml, 200, { "Cache-Control": "no-cache" }));

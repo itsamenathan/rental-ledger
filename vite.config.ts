@@ -1,5 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { getRequestListener } from "@hono/node-server";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { defineConfig, lazyPlugins, type Plugin, type ViteDevServer } from "vite-plus";
 
 /** Serve the Hono API from the dev server so `vp dev` runs the whole app with live reload of server code. */
@@ -27,6 +29,28 @@ function devApi(): Plugin {
   };
 }
 
+/**
+ * Emit dist/sw.js from pwa/service-worker.js with this build's hashed asset list, so an installed app can open
+ * offline and picks up a new version (the file's bytes change whenever any asset does).
+ */
+function serviceWorker(): Plugin {
+  return {
+    name: "rental-service-worker",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      const assets = Object.keys(bundle)
+        .filter((f) => f.startsWith("assets/"))
+        .sort()
+        .map((f) => `/${f}`);
+      const id = createHash("sha256").update(assets.join("\n")).digest("hex").slice(0, 12);
+      const source = readFileSync(new URL("./pwa/service-worker.js", import.meta.url), "utf8")
+        .replace("__BUILD_ID__", id)
+        .replace("__ASSETS__", JSON.stringify(assets));
+      this.emitFile({ type: "asset", fileName: "sw.js", source });
+    },
+  };
+}
+
 export default defineConfig({
   fmt: {
     printWidth: 120,
@@ -49,5 +73,5 @@ export default defineConfig({
     environment: "node",
   },
   server: { port: 5173 },
-  plugins: lazyPlugins(() => [react(), devApi()]),
+  plugins: lazyPlugins(() => [react(), devApi(), serviceWorker()]),
 });
