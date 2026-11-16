@@ -13,6 +13,7 @@ import { todoSummary } from "../services/todo.ts";
 import { annotate, undoAudit } from "../services/undo.ts";
 import { withSpan } from "../telemetry.ts";
 import * as files from "../services/attachments.ts";
+import * as library from "../services/files.ts";
 import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
 import { listAudit } from "../services/audit.ts";
@@ -274,6 +275,64 @@ export function buildMcpServer(actor: Actor) {
         data: Buffer.from(content_base64, "base64"),
       }),
     ),
+  );
+
+  server.registerTool(
+    "list_files",
+    {
+      description:
+        "List stored files (receipts on entries and saved manager statements/invoices) for a month or year, each with the entries it is attached to, plus expenses over the receipt threshold that have no file. One item per stored file even when attached to several entries.",
+      inputSchema: {
+        month: z.string().optional().describe("YYYY-MM (default: current year if neither is given)"),
+        year: z.number().int().optional(),
+        property_id: z.number().int().optional(),
+        q: z.string().optional().describe("Match file name, vendor, category, subcategory, description, reference"),
+        source: z.enum(["all", "receipts", "manager"]).optional(),
+      },
+      annotations: ro,
+    },
+    wrap((args) => library.listFiles(db, args)),
+  );
+
+  server.registerTool(
+    "update_attachment",
+    {
+      description:
+        "Rename an attachment and/or move it to another transaction. If the target already has the same file, the moved copy is dropped.",
+      inputSchema: {
+        id: z.number().int().describe("Attachment id (links[].attachment_id from list_files)"),
+        filename: z.string().optional(),
+        transaction_id: z.number().int().optional().describe("Move to this transaction"),
+      },
+    },
+    wrap(({ id, ...patch }) => files.updateAttachment(db, actor, id, patch)),
+  );
+
+  server.registerTool(
+    "link_attachment",
+    {
+      description:
+        "Attach an existing file to another transaction as well (e.g. one receipt covering two entries). The file is shared, not copied. Remove a link with unlink_attachment.",
+      inputSchema: {
+        id: z.number().int().describe("Attachment id (links[].attachment_id from list_files)"),
+        transaction_id: z.number().int(),
+      },
+    },
+    wrap(({ id, transaction_id }) => files.linkAttachment(db, actor, id, { transaction_id })),
+  );
+
+  server.registerTool(
+    "unlink_attachment",
+    {
+      description:
+        "Take a file off one transaction (by attachment id). The file is deleted only when nothing else uses it: no other transaction and no saved manager document.",
+      inputSchema: { id: z.number().int().describe("Attachment id (links[].attachment_id from list_files)") },
+      annotations: { destructiveHint: true },
+    },
+    wrap(async ({ id }) => {
+      await files.deleteAttachment(db, actor, id);
+      return { ok: true };
+    }),
   );
 
   server.registerTool(

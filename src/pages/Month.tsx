@@ -75,6 +75,9 @@ function Month({ ym }: { ym: string }) {
           <Link className="btn" to={`/?year=${year}`}>
             All of {year}
           </Link>
+          <Link className="btn" to={`/files?month=${ym}`}>
+            Files
+          </Link>
           <a className="btn" href={`/api/export/transactions.csv?month=${ym}`}>
             Export CSV
           </a>

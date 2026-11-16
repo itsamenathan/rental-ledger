@@ -123,6 +123,44 @@ export const qs = (params: Record<string, string | number | boolean | null | und
   return s ? `?${s}` : "";
 };
 
+/** Expenses of at least this many dollars should have a receipt (matches the server's RECEIPT_MIN_DOLLARS). */
+export const RECEIPT_MIN = 75;
+
+export interface LibraryFile {
+  key: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  uploaded_at: string;
+  month: string;
+  date: string;
+  url: string;
+  manager: { id: number; kind: "statement" | "invoice"; month: string; reference: string; property: string } | null;
+  links: {
+    attachment_id: number;
+    transaction_id: number;
+    date: string;
+    amount: number;
+    category: string;
+    kind: "income" | "expense";
+    vendor: string;
+    subcategory: string;
+    description: string;
+    property: string;
+  }[];
+  /** Other attachments/manager documents keeping this file; 0 = unlinking the last listed entry deletes it. */
+  other_uses: number;
+}
+
+export interface FileLibrary {
+  period: { month: string | null; year: number };
+  files: LibraryFile[];
+  totals: { files: number; bytes: number; receipts: number; manager: number };
+  missing: Transaction[];
+  missing_total: number;
+  receipt_min: number;
+}
+
 export async function uploadAttachments(txId: number, files: File[]) {
   const form = new FormData();
   for (const f of files) form.append("file", f);

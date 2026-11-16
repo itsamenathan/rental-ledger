@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { api, type Recurring, type Transaction, type TxList } from "../api.ts";
+import { api, RECEIPT_MIN, type Recurring, type Transaction, type TxList } from "../api.ts";
 import AttentionList from "../components/AttentionList.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, monthTitle } from "../format.ts";
@@ -27,14 +27,8 @@ export default function Todo() {
   const rec = useApi<Recurring>("recurring");
   const summary = useApi<TodoSummary>("todo");
   const managerMonths = summary.data?.manager_months ?? [];
-  const [showReceipts, setShowReceipts] = useState(false);
-  const receipts = useApi<TxList>(
-    showReceipts
-      ? `transactions?kind=expense&has_attachment=false&min_amount=75&year=${year}&sort=amount_asc&limit=500`
-      : null,
-  );
   const receiptCount = useApi<TxList>(
-    `transactions?kind=expense&has_attachment=false&min_amount=75&year=${year}&limit=1`,
+    `transactions?kind=expense&has_attachment=false&min_amount=${RECEIPT_MIN}&year=${year}&limit=1`,
   );
   const [editing, setEditing] = useState<number | null>(null);
   const { canWrite } = useSession();
@@ -46,7 +40,6 @@ export default function Todo() {
     void rec.reload();
     void summary.reload();
     void receiptCount.reload();
-    if (showReceipts) void receipts.reload();
     window.dispatchEvent(new Event("todo:changed"));
   };
   const patch = async (id: number, json: Record<string, unknown>, text: string) => {
@@ -166,32 +159,19 @@ export default function Todo() {
         </Section>
       )}
 
-      <section className="card">
-        <button className="section-toggle" onClick={() => setShowReceipts((v) => !v)} aria-expanded={showReceipts}>
-          <span>
-            {showReceipts ? "▾" : "▸"} Receipts <span className="muted small">optional</span>
-          </span>
-          <span className="muted small">
-            {receiptCount.data ? `${receiptCount.data.total} expenses of $75+ in ${year} without one` : ""}
-          </span>
-        </button>
-        {showReceipts && receipts.data && (
-          <>
-            <p className="muted small">
-              Not required, but handy if your preparer asks. Open an entry to attach a photo or PDF.
-            </p>
-            <EntryList items={receipts.data.items} onOpen={setEditing}>
-              {(tx) =>
-                canWrite && (
-                  <button className="btn small" onClick={() => setEditing(tx.id)}>
-                    Attach
-                  </button>
-                )
-              }
-            </EntryList>
-          </>
-        )}
-      </section>
+      {receiptCount.data && receiptCount.data.total > 0 && (
+        <section className="card">
+          <Link className="section-toggle" to={`/files?year=${year}&missing=1`}>
+            <span>
+              Receipts <span className="muted small">optional</span>
+            </span>
+            <span className="muted small">
+              {receiptCount.data.total} {receiptCount.data.total === 1 ? "expense" : "expenses"} of ${RECEIPT_MIN}+ in{" "}
+              {year} without one →
+            </span>
+          </Link>
+        </section>
+      )}
 
       {editing && <TxEditModal id={editing} onClose={() => setEditing(null)} onChanged={reloadAll} />}
     </div>

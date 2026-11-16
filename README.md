@@ -20,6 +20,11 @@ Income and expense tracking for short-term rental properties, built for year-end
   payouts to deposits (Airbnb deposits, VRBO deposit + balance, Stripe-batched payouts) and invoice lines to expenses,
   cross-checks fees, and adds only what's missing, attaching the invoice to its entries. Agents use
   `list_manager_months`, `save_manager_document`, `preview_manager_month` and `apply_manager_month`.
+- **Files** (Files in the sidebar, or "Files" on a month's page): every receipt and manager statement/invoice for a
+  month or year, each with the entries it's attached to. Image preview, rename, link a file to more entries or unlink it, and
+  "Download all" as a zip named by date, vendor and amount. Expenses of $75+ with nothing attached are in a collapsed
+  "Needs a receipt" section; drop a file on one to attach it. Agents use `list_files`, `link_attachment`, `unlink_attachment` and
+  `update_attachment`.
 - **Month by month**: the overview lists every month's income, expenses and net; open a month to see it against
   last month, the same month last year and the 12-month average, with every transaction grouped by category.
 - **Categories by month**: a category × month grid for the year (split by subcategory, e.g. Utilities → Electric,
@@ -40,7 +45,7 @@ Income and expense tracking for short-term rental properties, built for year-end
   items that may need capitalizing). Print/PDF and CSV export.
 - **Occupancy** by month (booked, owner nights, check-ins).
 - **To do**: one list of everything that needs a look: flagged entries, expenses with no direct/indirect set, and
-  recurring-bill alerts (the nav badge counts these). $75+ expenses without receipts are listed as optional.
+  recurring-bill alerts (the nav badge counts these). $75+ expenses without receipts are counted, with a link to them on the Files page.
 - **CSV import** of bank exports, with duplicate detection.
 - **Users and auth**: email/password, optional OIDC (e.g. Pocket ID), roles `admin` / `member` / `viewer`.
 - **Per-user API keys** (`read` or `write`) for the REST API and the **MCP server** at `/mcp`.

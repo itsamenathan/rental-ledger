@@ -1,5 +1,6 @@
-import { and, eq } from "drizzle-orm";
-import type { DB } from "../db.ts";
+import { and, eq, ne } from "drizzle-orm";
+import { z } from "zod";
+import { tx, type DB } from "../db.ts";
 import { attachments } from "../db/schema.ts";
 import { config } from "../config.ts";
 import { AppError, audit, badRequest, notFound, requireWrite, type Actor } from "../context.ts";
@@ -17,6 +18,16 @@ export const ALLOWED: Record<string, string> = {
   "text/plain": "txt",
   "text/csv": "csv",
 };
+
+/** Expenses of at least this many dollars are expected to have a receipt (To do, tax checks, Files page). */
+export const RECEIPT_MIN_DOLLARS = 75;
+
+/** A filename that is safe in a Content-Disposition header and a zip. */
+export const cleanFilename = (name: string, fallback: string) =>
+  name
+    .replace(/[\\/\r\n"]/g, "_")
+    .trim()
+    .slice(0, 200) || fallback;
 
 export interface Attachment {
   id: number;
@@ -81,7 +92,7 @@ export async function addAttachment(
   }
   // Same bytes stored for another entry (or a manager document): share that file instead of writing a second copy.
   const key = await storeBytes(db, file.data, ext, sha);
-  const filename = file.filename.replace(/[\\/\r\n"]/g, "_").slice(0, 200) || `receipt.${ext}`;
+  const filename = cleanFilename(file.filename, `receipt.${ext}`);
   const { id } = db
     .insert(attachments)
     .values({
@@ -112,4 +123,107 @@ export async function deleteAttachment(db: DB, actor: Actor, id: number) {
   // The stored file may be shared with other entries or manager documents; only remove it with its last reference.
   await releaseFile(db, row.storage_key);
   audit(db, actor, "delete", "attachment", id, { transaction_id: row.transaction_id, filename: row.filename });
+}
+
+const attachmentPatch = z
+  .object({
+    filename: z.string().min(1).max(200).optional(),
+    /** Move the file to another entry. */
+    transaction_id: z.number().int().positive().optional(),
+  })
+  .strict();
+
+/**
+ * Rename an attachment or move it to another entry. If the target entry already holds the same file, the moved row
+ * is dropped instead of duplicated. Returns the attachment as it now stands (the existing one in that case).
+ */
+export async function updateAttachment(db: DB, actor: Actor, id: number, raw: unknown): Promise<Attachment> {
+  requireWrite(actor);
+  const patch = attachmentPatch.parse(raw);
+  const row = getStored(db, id);
+  const filename = patch.filename != null ? cleanFilename(patch.filename, row.filename) : row.filename;
+  const target = patch.transaction_id ?? row.transaction_id;
+  if (target !== row.transaction_id) getTransaction(db, target);
+
+  const sha = db.select({ sha: attachments.sha256 }).from(attachments).where(eq(attachments.id, id)).get()!.sha;
+  const already =
+    target !== row.transaction_id
+      ? db
+          .select({ id: attachments.id })
+          .from(attachments)
+          .where(and(eq(attachments.transactionId, target), eq(attachments.sha256, sha), ne(attachments.id, id)))
+          .get()
+      : undefined;
+
+  const changes: Record<string, [unknown, unknown]> = {};
+  if (filename !== row.filename) changes.filename = [row.filename, filename];
+  if (target !== row.transaction_id) changes.transaction_id = [row.transaction_id, target];
+  if (!Object.keys(changes).length) {
+    const { storage_key: _k, ...meta } = row;
+    return meta;
+  }
+
+  if (already) {
+    // Same bytes are already on the target entry: drop this copy (the stored file stays, the other row uses it).
+    tx(db, () => {
+      db.delete(attachments).where(eq(attachments.id, id)).run();
+      audit(db, actor, "delete", "attachment", id, {
+        transaction_id: row.transaction_id,
+        filename: row.filename,
+        merged_into: already.id,
+      });
+    });
+    await releaseFile(db, row.storage_key);
+    const { storage_key: _k, ...meta } = getStored(db, already.id);
+    return meta;
+  }
+
+  tx(db, () => {
+    db.update(attachments).set({ filename, transactionId: target }).where(eq(attachments.id, id)).run();
+    audit(db, actor, "update", "attachment", id, changes);
+  });
+  const { storage_key: _k, ...meta } = getStored(db, id);
+  return meta;
+}
+
+/**
+ * Attach an existing file to another entry as well (one receipt covering several entries). The stored file is shared,
+ * not copied. If the entry already holds the same file, that attachment is returned unchanged.
+ */
+export function linkAttachment(db: DB, actor: Actor, id: number, raw: unknown): Attachment {
+  requireWrite(actor);
+  const { transaction_id: target } = z.object({ transaction_id: z.number().int().positive() }).strict().parse(raw);
+  const row = db.select().from(attachments).where(eq(attachments.id, id)).get();
+  if (!row) throw notFound("Attachment");
+  getTransaction(db, target);
+  const already = db
+    .select({ id: attachments.id })
+    .from(attachments)
+    .where(and(eq(attachments.transactionId, target), eq(attachments.sha256, row.sha256)))
+    .get();
+  const newId =
+    already?.id ??
+    tx(db, () => {
+      const { id: created } = db
+        .insert(attachments)
+        .values({
+          transactionId: target,
+          filename: row.filename,
+          contentType: row.contentType,
+          size: row.size,
+          sha256: row.sha256,
+          storageKey: row.storageKey,
+          createdBy: actor.user.id,
+        })
+        .returning({ id: attachments.id })
+        .get();
+      audit(db, actor, "create", "attachment", created, {
+        transaction_id: target,
+        filename: row.filename,
+        linked_from: id,
+      });
+      return created;
+    });
+  const { storage_key: _k, ...meta } = getStored(db, newId);
+  return meta;
 }

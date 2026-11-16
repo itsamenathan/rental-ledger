@@ -54,6 +54,8 @@ release. Add a tool name to select part of the graph. For example, run
   changed amounts ask again). Months with entries to add or unexplained warnings count on the To do page.
 - Stored files go through `server/services/storage.ts`: identical bytes share one file across `attachments` and
   `manager_documents`; delete rows first, then `releaseFile`. Backups include every key from both tables.
+- The Files page (`server/services/files.ts`) lists one item per stored file (sha256) with every entry it's attached
+  to: receipts by their entry's date, manager paperwork by the month it covers. Trashed entries are left out.
 - Subcategories are free text on transactions (Grist layout, e.g. Management Fee → Acme PM). The `subcategories`
   table only remembers names for suggestions; rename/remove/merge go through `server/services/categories.ts`.
 - Never write to Grist; `server/grist-import.ts` must stay GET-only.
