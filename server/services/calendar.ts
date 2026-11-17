@@ -18,10 +18,12 @@ import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { calendarEvents, calendarFeeds, properties } from "../db/schema.ts";
 import { AppError, audit, badRequest, diff, notFound, requireWrite, type Actor } from "../context.ts";
+import { config } from "../config.ts";
 import { log, withSpan } from "../telemetry.ts";
 import { parseCsv } from "./csv.ts";
 import { resolvePropertyId } from "./ledger.ts";
 import { savedStatements, toIsoDate } from "./manager-statement.ts";
+import { BlockedAddressError, safeDownload } from "./safe-download.ts";
 
 export type EventKind = "reserved" | "blocked";
 export type EventSource = "feed" | "history" | "statement";
@@ -291,19 +293,14 @@ export function syncFeedText(db: DB, actor: Actor | null, feedId: number, text: 
 const MAX_ICS_BYTES = 5_000_000;
 
 async function download(url: string) {
-  return withSpan("calendar.fetch", { "url.host": maskUrl(url) ?? "" }, async () => {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(20_000),
-      headers: { accept: "text/calendar, */*" },
-      redirect: "follow",
-    });
-    if (!res.ok) throw new Error(`The calendar link answered ${res.status} ${res.statusText}`.trim());
-    const declared = Number(res.headers.get("content-length") ?? 0);
-    if (declared > MAX_ICS_BYTES) throw new Error("The calendar is too large");
-    const body = new Uint8Array(await res.arrayBuffer());
-    if (body.byteLength > MAX_ICS_BYTES) throw new Error("The calendar is too large");
-    return new TextDecoder().decode(body);
-  });
+  return withSpan("calendar.fetch", { "url.host": maskUrl(url) ?? "" }, () =>
+    safeDownload(url, {
+      maxBytes: MAX_ICS_BYTES,
+      timeoutMs: 20_000,
+      accept: "text/calendar, */*",
+      allowPrivate: config.calendarAllowPrivateNetwork,
+    }),
+  );
 }
 
 /** Download a feed and sync it. Failures are saved on the feed (shown in the app) and returned, not thrown. */
@@ -321,7 +318,7 @@ export async function refreshFeed(db: DB, actor: Actor | null, feedId: number): 
         ? e.message
         : (e as Error).name === "TimeoutError"
           ? "The calendar link didn't answer in time"
-          : (e as Error).message === "fetch failed"
+          : (e as NodeJS.ErrnoException).code && !(e instanceof BlockedAddressError)
             ? `Couldn't reach ${maskUrl(feed.url)?.replace(/\/…$/, "")}`
             : (e as Error).message || "Couldn't download the calendar";
     log.warn({ feed_id: feedId, host: maskUrl(feed.url), err: message }, "calendar refresh failed");

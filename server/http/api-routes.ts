@@ -39,6 +39,18 @@ const body = async (c: Context) => {
     throw badRequest("Expected a JSON body");
   }
 };
+/**
+ * Content-Disposition for a download. Header values must be Latin-1, so the plain `filename` gets an ASCII stand-in
+ * and the real name goes in `filename*` (RFC 6266), which every current browser prefers.
+ */
+const disposition = (type: "inline" | "attachment", filename: string) => {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  const encoded = encodeURIComponent(filename).replace(
+    /['()*]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `${type}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+};
 const queryYear = (c: Context) => {
   const y = Number(c.req.query("year") ?? new Date().getFullYear());
   if (!Number.isInteger(y) || y < 2000 || y > 2100) throw badRequest("Invalid year");
@@ -109,7 +121,7 @@ api.get("/files.zip", (c) => {
   const z = library.filesZip(getDb(), actorOf(c), fileFilters(c));
   return c.body(new Uint8Array(z.data), 200, {
     "Content-Type": "application/zip",
-    "Content-Disposition": `attachment; filename="${z.filename}"; filename*=UTF-8''${encodeURIComponent(z.filename)}`,
+    "Content-Disposition": disposition("attachment", z.filename),
     "Cache-Control": "no-store",
   });
 });
@@ -182,7 +194,7 @@ api.get("/attachments/:id", async (c) => {
   const inline = /^(image\/|application\/pdf)/.test(meta.content_type) && c.req.query("download") == null;
   return c.body(new Uint8Array(data), 200, {
     "Content-Type": meta.content_type,
-    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${meta.filename}"`,
+    "Content-Disposition": disposition(inline ? "inline" : "attachment", meta.filename),
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
     "Cache-Control": "private, max-age=3600",
@@ -275,7 +287,7 @@ api.get("/manager/documents/:id/file", async (c) => {
   const inline = meta.content_type === "application/pdf" && c.req.query("download") == null;
   return c.body(new Uint8Array(data), 200, {
     "Content-Type": meta.content_type,
-    "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${meta.filename}"`,
+    "Content-Disposition": disposition(inline ? "inline" : "attachment", meta.filename),
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
     "Cache-Control": "private, max-age=3600",
@@ -379,7 +391,7 @@ api.get("/reports/tax-package.zip", (c) => {
   const p = preparerPackage(getDb(), actorOf(c), queryYear(c), queryProperty(c));
   return c.body(new Uint8Array(p.data), 200, {
     "Content-Type": "application/zip",
-    "Content-Disposition": `attachment; filename="${p.filename}"; filename*=UTF-8''${encodeURIComponent(p.filename)}`,
+    "Content-Disposition": disposition("attachment", p.filename),
     "Cache-Control": "no-store",
   });
 });
@@ -399,7 +411,7 @@ api.get("/backup", (c) => {
   const b = createBackup(getDb(), actorOf(c));
   return c.body(new Uint8Array(b.data), 200, {
     "Content-Type": "application/zip",
-    "Content-Disposition": `attachment; filename="${b.filename}"`,
+    "Content-Disposition": disposition("attachment", b.filename),
     "Cache-Control": "no-store",
   });
 });
@@ -424,7 +436,7 @@ const sourceName = (h: string | undefined) => {
 function csvResponse(c: Context, csv: string, filename: string) {
   return c.body(csv, 200, {
     "Content-Type": "text/csv; charset=utf-8",
-    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Content-Disposition": disposition("attachment", filename),
   });
 }
 

@@ -83,6 +83,8 @@ release. Add a tool name to select part of the graph. For example, run
   them) and from saved manager statements (derived on every read, negative ids, nothing stored). `listEvents` drops a
   reservation that overlaps one from a higher source (feed > history > statement). The production server refreshes
   linked feeds every `CALENDAR_REFRESH_MINUTES` (`server/scheduler.ts`, started in `main.ts`, never in `vp dev`).
+- Fetch user-supplied URLs (calendar feeds) only through `safeDownload` in `server/services/safe-download.ts`: it
+  refuses private/loopback addresses at connect time and on every redirect (`CALENDAR_ALLOW_PRIVATE_NETWORK` opts out).
 - Logging: use `log` from `server/telemetry.ts` (pino), not `console.*` (the CLI's human output is the exception).
   Tracing is automatic for API/MCP requests and SQL; wrap other slow work in `withSpan(name, attrs, fn)`.
 - Never write to Grist; `server/grist-import.ts` must stay GET-only.

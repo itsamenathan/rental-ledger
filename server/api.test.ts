@@ -496,3 +496,29 @@ describe("offline edits", () => {
     expect(ok.status).toBe(200);
   });
 });
+
+describe("downloads", () => {
+  it("serves files whose names aren't Latin-1", async () => {
+    const t = await call(
+      "POST",
+      "/api/transactions",
+      { date: "2026-02-01", amount: -12, category: "Supplies", vendor: "Shop" },
+      bearer(writeKey),
+    );
+    expect(t.status).toBe(201);
+    const form = new FormData();
+    form.append("file", new File([new Uint8Array([1, 2, 3])], '收据 "café" 🧾.png', { type: "image/png" }));
+    const up = await app.request(`/api/transactions/${t.json.id}/attachments`, {
+      method: "POST",
+      headers: bearer(writeKey),
+      body: form,
+    });
+    expect(up.status).toBe(201);
+    const [att] = (await up.json()) as any[];
+    const res = await app.request(`/api/attachments/${att.id}`, { headers: bearer(writeKey) });
+    expect(res.status).toBe(200);
+    const header = res.headers.get("content-disposition")!;
+    expect(header).toMatch(/^inline; filename="[\x20-\x7e]+"; filename\*=UTF-8''/);
+    expect(decodeURIComponent(header.split("UTF-8''")[1]!)).toBe(att.filename);
+  });
+});

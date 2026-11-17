@@ -1,6 +1,8 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie } from "hono/cookie";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { z } from "zod";
+import { config } from "../config.ts";
 import { getDb } from "../db.ts";
 import { log } from "../telemetry.ts";
 import { AppError, type Actor, type Via } from "../context.ts";
@@ -75,10 +77,36 @@ export function errorResponse(err: Error, c: Context) {
   return c.json({ error: "Internal server error" }, 500);
 }
 
+/**
+ * The caller's IP for rate limits. X-Forwarded-For is only believed with TRUST_PROXY set, and then only the entries
+ * our own proxies appended (counted from the end): anything before them is whatever the client sent.
+ */
+export function clientIp(c: Context): string {
+  if (config.trustProxy > 0) {
+    const hops = (c.req.header("x-forwarded-for") ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const ip = hops[hops.length - config.trustProxy];
+    if (ip) return ip;
+  }
+  try {
+    return getConnInfo(c).remote.address ?? "local";
+  } catch {
+    return "local"; // no socket (tests, app.request)
+  }
+}
+
 // ---- tiny in-memory rate limiter (single instance app) ----
 const buckets = new Map<string, { n: number; reset: number }>();
+let nextSweep = 0;
 export function rateLimit(key: string, max: number, windowMs: number) {
   const now = Date.now();
+  if (now >= nextSweep) {
+    // Drop expired buckets so made-up keys can't grow the map forever.
+    for (const [k, b] of buckets) if (b.reset < now) buckets.delete(k);
+    nextSweep = now + 60_000;
+  }
   const b = buckets.get(key);
   if (!b || b.reset < now) {
     buckets.set(key, { n: 1, reset: now + windowMs });

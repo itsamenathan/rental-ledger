@@ -128,21 +128,23 @@ docker run -d -p 3000:3000 -v rental-data:/data -e PUBLIC_URL=https://rental.exa
 See `compose.example.yaml`. Everything persistent lives in `/data` (`rental.db` plus `uploads/` for receipts);
 back up that volume. Run the CLI inside the container with `docker exec <ctr> node server/cli.ts …`.
 
-| Variable                                              | Default                         | Purpose                                                                      |
-| ----------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------- |
-| `PORT`                                                | `3000`                          | HTTP port                                                                    |
-| `DATA_DIR`                                            | `/data` (image), `./data` (dev) | Database and uploads                                                         |
-| `PUBLIC_URL`                                          | –                               | External URL; used for OIDC callbacks                                        |
-| `COOKIE_SECURE`                                       | `true` in production            | Set `false` only when serving plain HTTP                                     |
-| `SESSION_DAYS`                                        | `30`                            | Session lifetime                                                             |
-| `MAX_UPLOAD_MB`                                       | `20`                            | Receipt size limit                                                           |
-| `MAX_RESTORE_MB`                                      | `1024`                          | Largest backup zip accepted for restore                                      |
-| `CALENDAR_REFRESH_MINUTES`                            | `180`                           | Download linked booking calendars in the background this often (`0` = off)   |
-| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | –                               | Enable SSO. Callback: `$PUBLIC_URL/api/auth/oidc/callback`                   |
-| `OIDC_NAME`                                           | `SSO`                           | Button label                                                                 |
-| `OIDC_AUTO_CREATE`                                    | `false`                         | Create unknown SSO users as members (otherwise the email must already exist) |
-| `DISABLE_PASSWORD_LOGIN`                              | `false`                         | SSO only                                                                     |
-| `DEFAULT_PROPERTY_NAME`                               | `My Rental`                     | Name of the property created in an empty database                            |
+| Variable                                              | Default                         | Purpose                                                                                                                                 |
+| ----------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                                                | `3000`                          | HTTP port                                                                                                                               |
+| `DATA_DIR`                                            | `/data` (image), `./data` (dev) | Database and uploads                                                                                                                    |
+| `PUBLIC_URL`                                          | –                               | External URL; used for OIDC callbacks                                                                                                   |
+| `COOKIE_SECURE`                                       | `true` in production            | Set `false` only when serving plain HTTP                                                                                                |
+| `SESSION_DAYS`                                        | `30`                            | Session lifetime                                                                                                                        |
+| `MAX_UPLOAD_MB`                                       | `20`                            | Receipt size limit                                                                                                                      |
+| `MAX_RESTORE_MB`                                      | `1024`                          | Largest backup zip accepted for restore                                                                                                 |
+| `CALENDAR_REFRESH_MINUTES`                            | `180`                           | Download linked booking calendars in the background this often (`0` = off)                                                              |
+| `CALENDAR_ALLOW_PRIVATE_NETWORK`                      | `false`                         | Allow calendar links to private/loopback addresses (feeds served on your own network)                                                   |
+| `TRUST_PROXY`                                         | `0`                             | Reverse proxies in front of the app (`true` = 1); login rate limits then use their `X-Forwarded-For` entry                              |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | –                               | Enable SSO. Callback: `$PUBLIC_URL/api/auth/oidc/callback`                                                                              |
+| `OIDC_NAME`                                           | `SSO`                           | Button label                                                                                                                            |
+| `OIDC_AUTO_CREATE`                                    | `false`                         | Create unknown SSO users as members (otherwise the email must already exist). Linking or creating by email needs `email_verified: true` |
+| `DISABLE_PASSWORD_LOGIN`                              | `false`                         | SSO only                                                                                                                                |
+| `DEFAULT_PROPERTY_NAME`                               | `My Rental`                     | Name of the property created in an empty database                                                                                       |
 
 ## Logging and tracing
 
