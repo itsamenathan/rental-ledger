@@ -219,6 +219,9 @@ pre {
   display: block;
   color: var(--muted);
 }
+.build-version a {
+  color: inherit;
+}
 .content {
   min-width: 0;
   padding: 1.5rem 2rem 3rem;
