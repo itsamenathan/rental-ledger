@@ -40,6 +40,7 @@ import {
   type Actor,
 } from "../context.ts";
 import { defaultReceiptPolicy, needsReceipt, RECEIPT_POLICIES, type ReceiptPolicy } from "./receipts.ts";
+import { claimUploads, uploadIds } from "./uploads.ts";
 
 // ======================= shared schema bits =======================
 
@@ -680,6 +681,15 @@ function insertRow(db: DB, actor: Actor | null, row: PreparedRow, source: string
 
 const nowIso = sql`strftime('%Y-%m-%dT%H:%M:%fZ','now')`;
 
+/**
+ * Receipts uploaded from the entry form before saving (`upload_ids`), attached in the same database transaction as the
+ * save. Read from the raw body like `client_id`, so bulk imports and other schemas don't take it.
+ */
+function uploadsOf(raw: unknown): number[] {
+  const ids = (raw as { upload_ids?: unknown } | null)?.upload_ids;
+  return ids == null ? [] : uploadIds.parse(ids);
+}
+
 export function createTransaction(db: DB, actor: Actor | null, raw: unknown, opts: CreateOptions = {}): Transaction {
   if (actor) requireWrite(actor);
   // A retried save (offline outbox, lost response) returns the entry the first attempt created. Checked before
@@ -696,8 +706,11 @@ export function createTransaction(db: DB, actor: Actor | null, raw: unknown, opt
   if (row.externalId && db.select({ id: t.id }).from(t).where(eq(t.externalId, row.externalId)).get()) {
     throw badRequest(`A transaction with external_id ${row.externalId} already exists`);
   }
+  const uploads = uploadsOf(raw);
+  if (uploads.length && !actor) throw badRequest("upload_ids need a signed-in user");
   return tx(db, () => {
     const id = insertRow(db, actor, row, opts.source ?? actor?.via ?? "cli");
+    if (uploads.length) claimUploads(db, actor!, id, uploads);
     const created = getTransaction(db, id);
     audit(db, actor, "create", "transaction", id, created);
     return created;
@@ -745,6 +758,7 @@ export function updateTransaction(db: DB, actor: Actor, id: number, raw: unknown
       })
       .where(eq(t.id, id))
       .run();
+    claimUploads(db, actor, id, uploadsOf(raw));
     const after = getTransaction(db, id);
     const { updated_at: _a, updated_by: _b, ...b } = before;
     const { updated_at: _c, updated_by: _d, ...a } = after;

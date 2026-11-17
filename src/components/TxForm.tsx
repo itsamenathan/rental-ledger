@@ -16,6 +16,8 @@ import {
   type OutboxEntry,
   type OutboxFile,
 } from "../outbox.ts";
+import { useReceiptUploads } from "../receipt-uploads.ts";
+import ReceiptPicker from "./ReceiptPicker.tsx";
 
 interface Suggestions {
   vendors: { vendor: string; category: string; subcategory: string; allocation: Allocation; uses: number }[];
@@ -138,8 +140,7 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
   const [refund, setRefund] = useState(seed ? (seed.kind === "expense" ? seed.amount > 0 : seed.amount < 0) : false);
   const [needsReview, setNeedsReview] = useState(seed?.needs_review ?? false);
   const [reviewNote, setReviewNote] = useState(seed?.review_note ?? "");
-  const [files, setFiles] = useState<File[]>([]);
-  const [fileInputKey, setFileInputKey] = useState(0); // remount the picker to clear it
+  const receipts = useReceiptUploads({ stage: !queued });
   const [attachments, setAttachments] = useState<Attachment[]>(existing?.attachments ?? []);
   const [showMore, setShowMore] = useState((!!seed && !compact) || !!prefill.vendor);
   const [queuedFiles, setQueuedFiles] = useState<OutboxFile[]>(queued?.files ?? []);
@@ -212,8 +213,6 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
       clientIdRef.current = newClientId();
       setAmount("");
       setDescription("");
-      setFiles([]);
-      setFileInputKey((k) => k + 1);
       setRefund(false);
       setNeedsReview(false);
       setReviewNote("");
@@ -221,25 +220,35 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
     };
     setBusy(true);
     try {
+      // Receipts upload as soon as they're picked; a save made while one is still going waits for it.
+      const picked = await receipts.settle();
+      if (picked.failed.length)
+        throw new Error(
+          `${picked.failed[0]!.file.name} couldn't be uploaded: ${picked.failed[0]!.error}. Remove it or try again.`,
+        );
       if (queued) {
         // Still on this device: change what will be sent.
-        const kept = [...queuedFiles, ...(await toOutboxFiles(files))];
+        const kept = [...queuedFiles, ...(await toOutboxFiles(picked.allFiles))];
         await editQueued(queued.id, { payload, files: kept, label, date });
+        receipts.clear({ saved: true });
         onQueued?.(`Updated ${label} (still waiting to sync)`);
         return;
       }
+      // Kept for the outbox if the save can't reach the server (staged uploads are then dropped on the server).
+      const files = picked.allFiles;
+      const upload_ids = picked.uploadIds.length ? picked.uploadIds : undefined;
       let saved: Transaction;
       try {
         saved = existing
           ? await api<Transaction>(`transactions/${existing.id}`, {
               method: "PATCH",
               // The form may show a saved (offline) copy: never overwrite a newer version with it.
-              json: { ...payload, expected_updated_at: existing.updated_at },
+              json: { ...payload, upload_ids, expected_updated_at: existing.updated_at },
               signal: timeout(SAVE_TIMEOUT_MS),
             })
           : await api<Transaction>("transactions", {
               method: "POST",
-              json: { ...payload, client_id: clientIdRef.current },
+              json: { ...payload, upload_ids, client_id: clientIdRef.current },
               signal: timeout(SAVE_TIMEOUT_MS), // a weak signal queues the entry instead of hanging
             });
       } catch (err) {
@@ -250,6 +259,7 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
         if (!isUnreachable(err)) throw err;
         if (!existing) {
           await enqueue({ id: clientIdRef.current, userId: user.id, payload, files, label, date });
+          receipts.clear({ saved: false });
           resetForAnother();
           onQueued?.(`No connection: ${label} is saved on this device and syncs when you're back online`);
           return;
@@ -259,20 +269,25 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
         if (!Object.keys(patch).length && !files.length)
           throw new Error("Can't reach the server, and nothing changed.");
         await enqueueUpdate({ userId: user.id, base, patch, files, label });
+        receipts.clear({ saved: false });
         onQueued?.(`No connection: your changes to ${label} are saved on this device and sync when you're back online`);
         return;
       }
-      let uploaded = files.length;
-      if (files.length) {
+      // The uploaded receipts were attached with the save (saved.attachment_count includes them).
+      receipts.clear({ saved: true });
+      // Receipts picked while the connection was down go up now, or wait on this device.
+      const local = picked.localFiles;
+      let uploaded = local.length;
+      if (local.length) {
         try {
-          if ((await uploadOrQueue(user.id, { id: saved.id, date, label }, files)) === "queued") {
+          if ((await uploadOrQueue(user.id, { id: saved.id, date, label }, local)) === "queued") {
             onQueued?.("Entry saved; the receipt is kept on this device and uploads when you reconnect");
             uploaded = 0;
           }
         } catch (err) {
-          // The entry is saved. Saving again returns it (same client_id) and only retries the receipt.
+          // The entry is saved. Saving again returns it (same client_id); add the receipt to it from Transactions.
           throw new Error(
-            `The entry was saved, but the receipt was refused: ${(err as Error).message}. Pick another file and save again to attach it (other changes to the form are ignored).`,
+            `The entry was saved, but the receipt was refused: ${(err as Error).message}. Open the entry from Transactions to attach another file.`,
           );
         }
       }
@@ -418,53 +433,13 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
         <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What was it for?" />
       </label>
 
-      <label className="file-field">
-        <span>
-          Receipt <span className="optional">optional</span>
-        </span>
-        <input
-          key={fileInputKey}
-          type="file"
-          accept="image/*,application/pdf"
-          capture="environment"
-          multiple
-          onChange={(e) => setFiles([...(e.target.files ?? [])])}
-        />
-        {files.length > 0 && <small className="hint">{files.map((f) => f.name).join(", ")}</small>}
-      </label>
-      {attachments.length > 0 && (
-        <ul className="attachments">
-          {attachments.map((a) => (
-            <li key={a.id}>
-              <a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">
-                {a.content_type.startsWith("image/") ? <img src={`/api/attachments/${a.id}`} alt="" /> : "📄"}{" "}
-                {a.filename}
-              </a>
-              <button type="button" className="link danger" onClick={() => void removeAttachment(a.id)}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {queuedFiles.length > 0 && (
-        <ul className="attachments">
-          {queuedFiles.map((f, i) => (
-            <li key={`${i}-${f.name}`}>
-              <span>📄 {f.name}</span>
-              <span className="muted small">waiting to upload</span>
-              <button
-                type="button"
-                className="link danger"
-                onClick={() => setQueuedFiles((q) => q.filter((_, j) => j !== i))}
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <ReceiptPicker
+        uploads={receipts}
+        attachments={attachments}
+        onRemoveAttachment={(id) => void removeAttachment(id)}
+        queuedFiles={queuedFiles}
+        onRemoveQueued={(i) => setQueuedFiles((q) => q.filter((_, j) => j !== i))}
+      />
 
       {kind === "expense" && category && (
         <TaxLine
@@ -568,7 +543,7 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
           </button>
         )}
         <button className="btn primary" disabled={busy} onClick={() => (anotherRef.current = false)}>
-          {busy ? "Saving…" : seed ? "Save changes" : "Save"}
+          {busy ? (receipts.uploading ? "Uploading receipt…" : "Saving…") : seed ? "Save changes" : "Save"}
         </button>
       </div>
     </form>

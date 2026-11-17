@@ -85,6 +85,13 @@
       "when": 1794890256560,
       "tag": "0011_calendar_history",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1794892287795,
+      "tag": "0012_pending-uploads",
+      "breakpoints": true
     }
   ]
 }

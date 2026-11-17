@@ -2,29 +2,11 @@ import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { attachments } from "../db/schema.ts";
-import { config } from "../config.ts";
-import { AppError, audit, badRequest, notFound, requireWrite, type Actor } from "../context.ts";
+import { audit, notFound, requireWrite, type Actor } from "../context.ts";
 import { getTransaction } from "./ledger.ts";
-import { readStored, releaseFile, sha256, storeBytes } from "./storage.ts";
+import { checkUpload, cleanFilename, readStored, releaseFile, sha256, storeBytes } from "./storage.ts";
 
-export const ALLOWED: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "image/heic": "heic",
-  "image/heif": "heif",
-  "image/gif": "gif",
-  "application/pdf": "pdf",
-  "text/plain": "txt",
-  "text/csv": "csv",
-};
-
-/** A filename that is safe in a Content-Disposition header and a zip. */
-export const cleanFilename = (name: string, fallback: string) =>
-  name
-    .replace(/[\\/\r\n"]/g, "_")
-    .trim()
-    .slice(0, 200) || fallback;
+export { ALLOWED, cleanFilename } from "./storage.ts";
 
 export interface Attachment {
   id: number;
@@ -71,11 +53,7 @@ export async function addAttachment(
 ): Promise<Attachment> {
   requireWrite(actor);
   getTransaction(db, transactionId);
-  const contentType = file.contentType.split(";")[0]!.trim().toLowerCase();
-  const ext = ALLOWED[contentType];
-  if (!ext) throw badRequest(`Unsupported file type ${contentType}. Allowed: ${Object.keys(ALLOWED).join(", ")}`);
-  if (file.data.byteLength === 0) throw badRequest("Empty file");
-  if (file.data.byteLength > config.maxUploadBytes) throw new AppError(413, "File too large");
+  const { contentType, ext } = checkUpload(file);
   const sha = sha256(file.data);
   // Same bytes already attached to this entry: nothing to add (uploads are idempotent).
   const sameHere = db

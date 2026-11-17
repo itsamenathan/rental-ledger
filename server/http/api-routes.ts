@@ -15,6 +15,7 @@ import { createBackup, restoreBackup } from "../services/backup.ts";
 import { preparerPackage } from "../services/preparer.ts";
 import { annotate, undoAudit } from "../services/undo.ts";
 import * as files from "../services/attachments.ts";
+import * as uploads from "../services/uploads.ts";
 import * as library from "../services/files.ts";
 import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
@@ -160,6 +161,22 @@ api.post("/transactions/:id/attachments", async (c) => {
   }
   return c.json(out, 201);
 });
+// Receipts uploaded from the entry form before the entry is saved; the save's `upload_ids` attaches them.
+api.post("/uploads", async (c) => {
+  const form = await c.req.formData();
+  const f = form.get("file");
+  if (!(f instanceof File)) throw badRequest('Send multipart/form-data with a "file" field');
+  const staged = await uploads.stageUpload(getDb(), actorOf(c), {
+    filename: f.name,
+    contentType: f.type || "application/octet-stream",
+    data: new Uint8Array(await f.arrayBuffer()),
+  });
+  return c.json(staged, 201);
+});
+api.post("/uploads/discard", async (c) =>
+  c.json(await uploads.discardUploads(getDb(), actorOf(c), (await body(c))?.ids)),
+);
+api.delete("/uploads/:id", async (c) => c.json(await uploads.discardUploads(getDb(), actorOf(c), [id(c)])));
 api.get("/attachments/:id", async (c) => {
   const { meta, data } = await files.readAttachment(getDb(), id(c));
   const inline = /^(image\/|application\/pdf)/.test(meta.content_type) && c.req.query("download") == null;

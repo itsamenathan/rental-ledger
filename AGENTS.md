@@ -62,8 +62,12 @@ release. Add a tool name to select part of the graph. For example, run
   hard-coded (CSV columns match by suffix, the subcategory comes from history).
 - Manager warnings can be "marked as explained" (`manager_acknowledgements`, keyed by a hash of the warning text, so
   changed amounts ask again). Months with entries to add or unexplained warnings count on the To do page.
-- Stored files go through `server/services/storage.ts`: identical bytes share one file across `attachments` and
-  `manager_documents`; delete rows first, then `releaseFile`. Backups include every key from both tables.
+- Stored files go through `server/services/storage.ts`: identical bytes share one file across `attachments`,
+  `manager_documents` and `pending_uploads`; delete rows first, then `releaseFile`. Backups include every key from all
+  three tables.
+- Receipts picked in the entry form upload right away to `pending_uploads` (`server/services/uploads.ts`,
+  `POST /api/uploads`) and are attached by `upload_ids` on create/update inside the save's transaction; the form
+  discards them when closed unsaved (`src/receipt-uploads.ts`), and stale ones are pruned after 24 hours. REST only.
 - The Files page (`server/services/files.ts`) lists one item per stored file (sha256) with every entry it's attached
   to: receipts by their entry's date, manager paperwork by the month it covers. Trashed entries are left out.
 - "Needs a receipt" is decided only by `needsReceipt()` in `server/services/receipts.ts`: the subcategory's rule
