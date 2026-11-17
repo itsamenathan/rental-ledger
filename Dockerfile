@@ -6,7 +6,7 @@ WORKDIR /app
 COPY --chown=vp:vp package.json pnpm-lock.yaml pnpm-workspace.yaml .node-version ./
 RUN vp install --frozen-lockfile
 COPY --chown=vp:vp . .
-# .git is not copied in, so pass the commit for the version shown in the app (see README).
+# The version shown in the app comes from .git (build stage only); these args override it when .git is missing.
 ARG GIT_SHA
 ARG GIT_DATE
 RUN vp build

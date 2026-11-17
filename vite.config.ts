@@ -55,7 +55,12 @@ function serviceWorker(): Plugin {
 /** Run git and return its trimmed output, or null when git or the repository isn't there (e.g. in Docker). */
 function git(...args: string[]): string | null {
   try {
-    return execFileSync("git", args, { stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" }).trim() || null;
+    return (
+      execFileSync("git", ["-c", "safe.directory=*", ...args], {
+        stdio: ["ignore", "pipe", "ignore"],
+        encoding: "utf8",
+      }).trim() || null
+    );
   } catch {
     return null;
   }
