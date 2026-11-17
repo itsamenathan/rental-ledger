@@ -17,6 +17,11 @@ export const config = {
   maxUploadBytes: Number(env.MAX_UPLOAD_MB ?? 20) * 1024 * 1024,
   /** Largest backup zip accepted by POST /api/backup/restore. */
   maxRestoreBytes: Number(env.MAX_RESTORE_MB ?? 1024) * 1024 * 1024,
+  /**
+   * Download linked booking calendars in the background every this many minutes (0 = only when the Calendar page
+   * is opened or someone clicks Refresh). Production server only.
+   */
+  calendarRefreshMinutes: Math.max(0, Number(env.CALENDAR_REFRESH_MINUTES ?? 180) || 0),
   /** Disable username/password login (OIDC only). */
   disablePasswordLogin: env.DISABLE_PASSWORD_LOGIN === "true",
   oidc: env.OIDC_ISSUER

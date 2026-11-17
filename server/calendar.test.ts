@@ -203,3 +203,111 @@ describe("calendar months", () => {
     expect(cal.listEvents(db, { from: "2026-01-01", to: "2027-01-01" })).toEqual([]);
   });
 });
+
+const airbnbExport = (...rows: string[]) =>
+  [
+    "Confirmation code,Status,Guest name,Contact,# of adults,# of children,# of infants,Start date,End date,# of nights,Booked,Listing,Earnings",
+    ...rows,
+  ].join("\n");
+
+describe("reservation history", () => {
+  it("imports past stays, skips cancelled and upcoming ones, and survives feed syncs", () => {
+    const { db, actor } = setup();
+    const feed = cal.createFeed(db, actor, { name: "Airbnb" });
+    cal.syncFeedText(db, actor, feed.id, ics(event("f1", "2026-10-02", "2026-10-05", "Reserved")), "2026-10-01");
+    const csv = airbnbExport(
+      "HMOLD1,Past guest,Ann Lee,,2,0,0,3/14/2025,3/17/2025,3,2/1/2025,Harbor View,$600.00",
+      "HMOLD2,Canceled by guest,Bo Ray,,2,0,0,4/1/2025,4/4/2025,3,2/1/2025,Harbor View,$0.00",
+      // the same stay the feed shows
+      "HMFEED,Past guest,Cy Dee,,2,0,0,10/2/2026,10/5/2026,3,9/1/2026,Harbor View,$700.00",
+      "HMNEXT,Confirmed,Di Fox,,2,0,0,12/1/2026,12/4/2026,3,9/1/2026,Harbor View,$700.00",
+    );
+
+    const dry = cal.importReservationHistory(db, actor, { csv, dry_run: true }, "2026-11-16");
+    expect(dry).toMatchObject({
+      stays: 2,
+      added: 2,
+      on_calendar: 1,
+      skipped_cancelled: 1,
+      skipped_upcoming: 1,
+      listing: "Harbor View",
+    });
+    expect(cal.getHistory(db, {}).stays).toBe(0);
+
+    expect(cal.importReservationHistory(db, actor, { csv }, "2026-11-16")).toMatchObject({ added: 2 });
+    expect(cal.importReservationHistory(db, actor, { csv }, "2026-11-16")).toMatchObject({ added: 0, unchanged: 2 });
+    expect(cal.getHistory(db, {})).toMatchObject({ stays: 2, first: "2025-03-14", last: "2026-10-02" });
+
+    // the feed's copy wins; the imported one isn't listed twice
+    const oct = cal.getCalendar(db, actor, { from_month: "2026-10" });
+    expect(oct.events.map((e) => e.source)).toEqual(["feed"]);
+    expect(oct.months[0]).toMatchObject({ booked_nights: 3, check_ins: 1 });
+    const mar = cal.getCalendar(db, actor, { from_month: "2025-03" });
+    expect(mar.events).toMatchObject([
+      { source: "history", feed_id: null, summary: "Ann Lee · HMOLD1", feed: "Reservation history" },
+    ]);
+    expect(mar.months[0]).toMatchObject({ booked_nights: 3, check_ins: 1 });
+
+    // a sync that no longer has anything doesn't touch history, and deleting the feed leaves it too
+    cal.syncFeedText(db, actor, feed.id, ics(), "2026-11-16");
+    cal.deleteFeed(db, actor, feed.id);
+    expect(cal.getHistory(db, {}).stays).toBe(2);
+    expect(cal.getCalendar(db, actor, { from_month: "2026-10" }).events.map((e) => e.source)).toEqual(["history"]);
+
+    expect(cal.clearHistory(db, actor, {})).toMatchObject({ removed: 2 });
+    expect(cal.getHistory(db, {}).stays).toBe(0);
+  });
+
+  it("asks which listing when the export has several", () => {
+    const { db, actor } = setup();
+    const csv = airbnbExport(
+      "HMA,Past guest,A,,1,0,0,2025-01-02,2025-01-04,2,,Cottage,$1",
+      "HMB,Past guest,B,,1,0,0,2025-01-05,2025-01-07,2,,Cabin,$1",
+    );
+    expect(() => cal.importReservationHistory(db, actor, { csv }, "2026-11-16")).toThrow(/2 listings.*Cabin; Cottage/);
+    const r = cal.importReservationHistory(db, actor, { csv, listing: "cabin" }, "2026-11-16");
+    expect(r).toMatchObject({ listing: "Cabin", added: 1, skipped_other_listings: 1 });
+  });
+
+  it("names the columns it needs", () => {
+    const { db, actor } = setup();
+    expect(() => cal.importReservationHistory(db, actor, { csv: "Date,Amount\n2025-01-01,5" })).toThrow(
+      /Start date.*Found: Date, Amount/,
+    );
+  });
+});
+
+describe("stays from manager statements", () => {
+  it("shows statement stays the feeds no longer have, without doubling ones they do", async () => {
+    const { db, actor } = setup();
+    const { saveDocuments } = await import("./services/manager-documents.ts");
+    const feed = cal.createFeed(db, actor, { name: "Airbnb" });
+    cal.syncFeedText(db, actor, feed.id, ics(event("f1", "2025-06-20", "2025-06-23", "Reserved")), "2025-06-01");
+    const statement = [
+      '"Reservation ID",Channel,Guest,"Check-in date","Check-out date",Nights,AcmeOwnerPayout',
+      "111,Airbnb,Ann,2025-06-03,2025-06-06,3,$500.00",
+      "222,VRBO,Bo,2025-06-10,2025-06-14,4,$700.00",
+      // the stay the feed has
+      "333,Airbnb,Cy,2025-06-20,2025-06-23,3,$450.00",
+      // cancelled: 0 nights
+      "444,Airbnb,Di,2025-06-25,2025-06-28,0,$100.00",
+    ].join("\n");
+    const saved = await saveDocuments(db, actor, [
+      { filename: "statement.csv", contentType: "text/csv", data: new TextEncoder().encode(statement) },
+    ]);
+    expect(saved[0]!.status).not.toBe("error");
+
+    const june = cal.getCalendar(db, actor, { from_month: "2025-06" });
+    expect(june.events.map((e) => [e.source, e.start_date, e.summary])).toEqual([
+      ["statement", "2025-06-03", "Airbnb · #111"],
+      ["statement", "2025-06-10", "VRBO · #222"],
+      ["feed", "2025-06-20", "Reserved"],
+    ]);
+    expect(june.events[0]!.id).toBeLessThan(0);
+    expect(june.events[0]!.feed).toBe("Manager statement (Jun 2025)");
+    expect(june.months[0]).toMatchObject({ booked_nights: 10, check_ins: 3 });
+    expect(june.history.statement_stays).toBe(3);
+    expect(june.events.some((e) => e.summary.includes("#444"))).toBe(false);
+    expect(june.nights["2025-06-11"]).toBe(june.events[1]!.id);
+  });
+});

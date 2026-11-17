@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { generate, harnessPort, sampleIcs } from "./harness.ts";
+import { generate, harnessPort, sampleIcs, sampleReservationsCsv } from "./harness.ts";
+import { parseReservationsCsv } from "./services/calendar.ts";
 
 describe("test harness data", () => {
   const today = new Date("2026-11-16T12:00:00Z");
@@ -41,6 +42,23 @@ describe("test harness data", () => {
     const ics = sampleIcs(data, "airbnb");
     expect(ics).toContain("SUMMARY:Reserved");
     expect(ics).toContain("SUMMARY:Airbnb (Not available)");
+  });
+
+  it("keeps only recent Airbnb stays in the feed, with the full history in a reservations export", () => {
+    const data = generate(today);
+    const trimmed = sampleIcs(data, "airbnb", [], "2026-09-17");
+    expect(trimmed).not.toContain("DTSTART;VALUE=DATE:2024");
+    expect(trimmed).toContain("SUMMARY:Reserved");
+    const rows = parseReservationsCsv(sampleReservationsCsv(data, "Harbor View Cottage", "2026-11-16"));
+    expect(rows.length).toBe(data.stays.filter((s) => s.platform === "airbnb").length + 1);
+    expect(rows[0]).toMatchObject({
+      start: data.stays[0]!.start,
+      listing: "Harbor View Cottage",
+      status: "Past guest",
+    });
+    expect(rows.some((r) => /cancel/i.test(r.status))).toBe(true);
+    // the export's codes are the ones in the feed's descriptions
+    expect(sampleIcs(data, "airbnb")).toContain(`details/${rows[0]!.code}`);
   });
 
   it("has a second, smaller property with its own To do item and calendar", () => {

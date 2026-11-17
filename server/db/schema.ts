@@ -374,7 +374,11 @@ export const calendarFeeds = sqliteTable("calendar_feeds", {
 });
 
 /**
- * Events imported from a calendar feed: reservations and blocked dates. Read-only: every sync replaces them.
+ * Booking calendar events: reservations and blocked dates.
+ * - source 'feed': imported from a calendar feed (feed_id set). Every sync upserts them by uid; missing ones that
+ *   haven't ended are deleted (cancelled), past ones are kept.
+ * - source 'history': past stays imported from a reservations export (Airbnb "Export to CSV"), feed_id null and
+ *   uid = the confirmation code. Syncs never touch them; they are removed only per property.
  * Dates are YYYY-MM-DD; end_date is the checkout day (exclusive).
  */
 export const calendarEvents = sqliteTable(
@@ -384,9 +388,10 @@ export const calendarEvents = sqliteTable(
     propertyId: integer("property_id")
       .notNull()
       .references(() => properties.id),
-    feedId: integer("feed_id")
+    feedId: integer("feed_id").references(() => calendarFeeds.id, { onDelete: "cascade" }),
+    source: text("source", { enum: ["feed", "history"] })
       .notNull()
-      .references(() => calendarFeeds.id, { onDelete: "cascade" }),
+      .default("feed"),
     uid: text("uid").notNull(),
     kind: text("kind", { enum: ["reserved", "blocked"] }).notNull(),
     startDate: text("start_date").notNull(),
@@ -397,8 +402,13 @@ export const calendarEvents = sqliteTable(
   },
   (t) => [
     uniqueIndex("calendar_events_feed_uid").on(t.feedId, t.uid),
+    uniqueIndex("calendar_events_history_uid")
+      .on(t.propertyId, t.uid)
+      .where(sql`${t.feedId} IS NULL`),
     index("calendar_events_property_dates").on(t.propertyId, t.startDate),
     check("calendar_events_kind_check", sql`${t.kind} IN ('reserved','blocked')`),
+    check("calendar_events_source_check", sql`${t.source} IN ('feed','history')`),
+    check("calendar_events_source_feed_check", sql`(${t.source} = 'feed') = (${t.feedId} IS NOT NULL)`),
     check("calendar_events_dates_check", sql`${t.endDate} > ${t.startDate}`),
   ],
 );

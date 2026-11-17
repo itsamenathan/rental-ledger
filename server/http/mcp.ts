@@ -32,8 +32,9 @@ Rental property bookkeeping. Data model:
   prorated by rental-use % at tax time. Each expense category has a default allocation; follow it unless the
   user says otherwise.
 - occupancy: per-month nights booked, owner (personal) nights, check-ins; drives the rental-use % for taxes.
-- booking calendar: read-only availability imported from Airbnb/VRBO iCal feeds (reservations and blocked dates).
-  Feeds don't show private bookings or owner stays, so don't treat it as the occupancy record.
+- booking calendar: availability imported from Airbnb/VRBO iCal feeds (reservations and blocked dates), plus past
+  stays from an imported reservations export and from saved manager statements (feeds forget old stays). Feeds
+  don't show private bookings or owner stays, so don't treat it as the occupancy record.
 - properties: each rental is separate. Transactions, occupancy, booking calendars, tax-year inputs and manager
   paperwork all belong to one property; users, categories, receipt rules and import profiles are shared.
 Picking a property:
@@ -459,8 +460,9 @@ export function buildMcpServer(actor: Actor) {
     "get_calendar",
     {
       description:
-        "Booking calendar for whole months, read-only from the imported iCal feeds: reservations and blocks, which " +
-        "event holds each night (a reservation beats a block), and per-month booked/blocked/free nights and check-ins.",
+        "Booking calendar for whole months: reservations and blocks from the iCal feeds, past stays from imported " +
+        "reservation history and saved manager statements (each event has a source), which event holds each night " +
+        "(a reservation beats a block), and per-month booked/blocked/free nights and check-ins.",
       inputSchema: {
         from_month: z.string().describe("YYYY-MM"),
         to_month: z.string().optional().describe("YYYY-MM, default from_month"),
@@ -504,6 +506,34 @@ export function buildMcpServer(actor: Actor) {
     wrap(async ({ feed_id }) =>
       feed_id ? [await calendar.refreshFeed(db, actor, feed_id)] : calendar.refreshFeeds(db, actor),
     ),
+  );
+
+  server.registerTool(
+    "import_reservation_history",
+    {
+      description:
+        "Add past stays to the booking calendar from a reservations export CSV (Airbnb: Reservations → Export to " +
+        "CSV; needs start and end date columns, uses the confirmation code to update on re-import). Cancelled " +
+        "requests and stays that haven't ended are skipped (the iCal feed covers those). With several listings in " +
+        "the file, pass `listing`. Use dry_run=true first.",
+      inputSchema: {
+        csv: z.string(),
+        listing: z.string().optional(),
+        dry_run: z.boolean().optional(),
+        property: one,
+      },
+    },
+    wrap((args) => calendar.importReservationHistory(db, actor, args)),
+  );
+
+  server.registerTool(
+    "clear_reservation_history",
+    {
+      description: "Remove every stay imported with import_reservation_history for one property.",
+      inputSchema: { property: one },
+      annotations: { destructiveHint: true },
+    },
+    wrap(({ property }) => calendar.clearHistory(db, actor, { property_id: ledger.resolvePropertyId(db, property) })),
   );
 
   server.registerTool(

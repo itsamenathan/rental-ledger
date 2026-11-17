@@ -710,6 +710,7 @@ const VERB: Record<string, string> = {
   logout: "Signed out",
   change_password: "Changed password",
   sync: "Synced",
+  import: "Imported",
 };
 const NOUN: Record<string, string> = {
   transaction: "transaction",
@@ -718,6 +719,7 @@ const NOUN: Record<string, string> = {
   api_key: "API key",
   tax_year: "tax-year inputs",
   calendar_feed: "calendar",
+  calendar_history: "reservation history",
   audit: "change",
 };
 
@@ -748,6 +750,9 @@ function details(r: AuditRow) {
     return `${show(c.month ?? "")} · ${show(c.nights_booked ?? "")} nights booked`.replace(/^ · /, "");
   if (r.entity === "calendar_feed" && r.action === "sync")
     return `${show(c.name)}: ${show(c.added)} added, ${show(c.updated)} changed, ${show(c.removed)} cancelled`;
+  if (r.entity === "calendar_history" && r.action === "import")
+    return `Reservation history${c.listing ? ` (${show(c.listing)})` : ""}: ${show(c.added)} added, ${show(c.updated)} changed`;
+  if (r.entity === "calendar_history" && r.action === "delete") return `${show(c.removed)} imported stays removed`;
   if (r.action === "undo") return `${VERB[String(c.action)] ?? show(c.action)} ${show(c.entity)} #${show(c.entity_id)}`;
   if (Array.isArray(c.ids)) return `${c.ids.length} transactions`;
   if (Array.isArray(c.transactions)) return `${c.transactions.length} transactions`;

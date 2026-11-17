@@ -19,6 +19,29 @@ export interface SyncResult {
   error?: string;
 }
 
+/** Past stays kept on the calendar besides the feeds (GET calendar/history). */
+export interface HistorySummary {
+  property_id: number;
+  stays: number;
+  first: string | null;
+  last: string | null;
+  statement_stays: number;
+}
+
+export interface HistoryImport {
+  listings: string[];
+  listing: string | null;
+  stays: number;
+  added: number;
+  updated: number;
+  unchanged: number;
+  on_calendar: number;
+  skipped_cancelled: number;
+  skipped_upcoming: number;
+  skipped_other_listings: number;
+  dry_run: boolean;
+}
+
 export function ago(iso: string | null) {
   if (!iso) return "never";
   const min = Math.round((Date.now() - Date.parse(iso)) / 60_000);

@@ -64,7 +64,7 @@ export function moneyToCents(raw: string | undefined): number | null {
   return neg ? -c : c;
 }
 
-function toIsoDate(raw: string | undefined): string | null {
+export function toIsoDate(raw: string | undefined): string | null {
   const s = (raw ?? "").trim();
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) return `${m[1]}-${m[2]!.padStart(2, "0")}-${m[3]!.padStart(2, "0")}`;
@@ -119,6 +119,8 @@ export const reservationSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .nullable()
     .default(null),
+  /** Not a stay: 0 nights, or a cancellation payout with no rent. Payouts still reconcile; the calendar skips it. */
+  cancelled: z.boolean().default(false),
 });
 export type Reservation = z.infer<typeof reservationSchema>;
 
@@ -169,6 +171,8 @@ export function parseStatementCsv(text: string): ParsedStatement {
     processing: find(/processing fees?$/i),
     booked: find(/^reservation date$/i),
   };
+  // read only to tell the calendar a row wasn't a stay; still unmodeled, so a nonzero amount is still a warning
+  const cancellationCol = find(/^cancell?ation payout$/i);
   const missing = (
     [
       ["Reservation ID", col.id],
@@ -227,6 +231,9 @@ export function parseStatementCsv(text: string): ParsedStatement {
       taxes: num(r, col.taxes),
       processing_fee: num(r, col.processing),
       booked: col.booked >= 0 ? toIsoDate(r[col.booked]) : null,
+      cancelled:
+        (col.nights >= 0 && (r[col.nights] ?? "").trim() !== "" && Number(r[col.nights]) === 0) ||
+        (num(r, cancellationCol) !== 0 && (col.rent < 0 || num(r, col.rent) === 0)),
     });
   }
   if (!reservations.length) throw badRequest("No reservations found in the statement CSV");
@@ -402,7 +409,7 @@ function docTexts(db: DB, propertyId: number) {
 }
 
 /** Parse every saved statement once (bad ones are skipped: they show their error when their month is opened). */
-function savedStatements(db: DB, propertyId: number) {
+export function savedStatements(db: DB, propertyId: number) {
   const out: { docId: number; month: string; statement: ParsedStatement }[] = [];
   for (const d of docTexts(db, propertyId)) {
     if (d.kind !== "statement") continue;

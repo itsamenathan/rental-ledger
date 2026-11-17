@@ -1,6 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
-import { api } from "../api.ts";
-import { ago, syncText, type Feed, type SyncResult } from "../calendar.ts";
+import { api, ApiError } from "../api.ts";
+import { ago, syncText, type Feed, type HistoryImport, type HistorySummary, type SyncResult } from "../calendar.ts";
+import { fmtDate } from "../format.ts";
 import { useApi, useSession, useToast } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 
@@ -34,6 +35,7 @@ export function PropertyCalendars({ propertyId }: { propertyId: number }) {
           ))}
         </ul>
       )}
+      <PastStays propertyId={propertyId} />
       {form && (
         <FeedForm
           propertyId={propertyId}
@@ -201,6 +203,180 @@ function FeedForm({
           </button>
           <button className="btn primary" disabled={saving}>
             {saving ? "Saving…" : feed ? "Save" : "Add and sync"}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** Stays older than what the feeds still show: an imported reservations export, and saved manager statements. */
+function PastStays({ propertyId }: { propertyId: number }) {
+  const { canWrite } = useSession();
+  const toast = useToast();
+  const { data, reload } = useApi<HistorySummary>(`calendar/history?property_id=${propertyId}`);
+  const [importing, setImporting] = useState(false);
+  const clear = async () => {
+    if (!data || !confirm(`Remove the ${data.stays} stays imported from a reservations export?`)) return;
+    try {
+      await api(`calendar/history?property_id=${propertyId}`, { method: "DELETE" });
+      void reload();
+    } catch (e) {
+      toast({ text: (e as Error).message, kind: "error" });
+    }
+  };
+  return (
+    <div className="cal-history">
+      <h3>Past stays</h3>
+      <p className="muted small">
+        Airbnb&apos;s calendar link only shows recent and upcoming stays; the calendar keeps each stay once it has seen
+        it. For older ones, import Airbnb&apos;s reservations export (Reservations → Export → Download CSV file). Stays
+        on saved manager statements show on the calendar too.
+      </p>
+      {data && (
+        <p className="small">
+          {data.stays
+            ? `${data.stays} stay${data.stays === 1 ? "" : "s"} imported (${fmtDate(data.first!)} – ${fmtDate(data.last!)})`
+            : "No reservations export imported"}
+          {" · "}
+          {data.statement_stays} on manager statements
+        </p>
+      )}
+      {canWrite && (
+        <div className="cal-feed-actions">
+          <button className="btn small ghost" onClick={() => setImporting(true)}>
+            Import reservations CSV
+          </button>
+          {!!data?.stays && (
+            <button className="link small danger" onClick={() => void clear()}>
+              Remove imported stays
+            </button>
+          )}
+        </div>
+      )}
+      {importing && (
+        <HistoryForm
+          propertyId={propertyId}
+          onClose={() => setImporting(false)}
+          onDone={() => {
+            setImporting(false);
+            void reload();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+function HistoryForm({ propertyId, onClose, onDone }: { propertyId: number; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [csv, setCsv] = useState<string | null>(null);
+  const [listings, setListings] = useState<string[]>([]);
+  const [listing, setListing] = useState("");
+  const [preview, setPreview] = useState<HistoryImport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const send = (text: string, chosen: string, dryRun: boolean) =>
+    api<HistoryImport>("calendar/history", {
+      method: "POST",
+      json: { property_id: propertyId, csv: text, listing: chosen || undefined, dry_run: dryRun },
+    });
+
+  const check = async (text: string, chosen: string) => {
+    setBusy(true);
+    setError(null);
+    setPreview(null);
+    try {
+      const r = await send(text, chosen, true);
+      setPreview(r);
+      setListings(r.listings);
+    } catch (e) {
+      const more = e instanceof ApiError ? (e.details as { listings?: string[] } | undefined)?.listings : undefined;
+      if (more) setListings(more);
+      else setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!csv) return;
+    setBusy(true);
+    try {
+      const r = await send(csv, listing, false);
+      toast({ text: `Reservation history: ${r.added} added, ${r.updated} updated`, kind: "ok" });
+      onDone();
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Import reservation history" onClose={onClose}>
+      <form onSubmit={(e) => void submit(e)}>
+        <label>
+          Reservations export (.csv)
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              const text = await f.text();
+              setCsv(text);
+              setListing("");
+              setListings([]);
+              void check(text, "");
+            }}
+          />
+        </label>
+        {listings.length > 1 && (
+          <label>
+            Listing for this property
+            <select
+              value={listing}
+              onChange={(e) => {
+                setListing(e.target.value);
+                if (csv && e.target.value) void check(csv, e.target.value);
+              }}
+              required
+            >
+              <option value="">Choose…</option>
+              {listings.map((l) => (
+                <option key={l}>{l}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        {error && <p className="small neg">{error}</p>}
+        {preview && (
+          <p className="small">
+            {plural(preview.stays, "past stay")}: {preview.added} new
+            {!!preview.updated && `, ${preview.updated} changed`}
+            {!!preview.unchanged && `, ${preview.unchanged} already imported`}.
+            {!!preview.on_calendar && ` ${plural(preview.on_calendar, "is", "are")} already on a linked calendar.`}
+            <span className="muted">
+              {" "}
+              Skipped: {plural(preview.skipped_cancelled, "cancelled request")},{" "}
+              {plural(preview.skipped_upcoming, "upcoming stay")} (the calendar link covers those)
+              {!!preview.skipped_other_listings && `, ${plural(preview.skipped_other_listings, "other-listing row")}`}.
+            </span>
+          </p>
+        )}
+        <div className="form-actions">
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn primary"
+            disabled={busy || !preview || !(preview.added || preview.updated) || (listings.length > 1 && !listing)}
+          >
+            {busy ? "Working…" : "Import"}
           </button>
         </div>
       </form>

@@ -5,18 +5,26 @@
  * Feed events are upserted by UID on every sync. An event that disappears from the feed is deleted only if it
  * hasn't ended yet (a cancellation); past stays are kept because Airbnb drops old events from its export.
  *
- * When events overlap, a reservation beats a block: with calendars synced between platforms, Airbnb shows each
- * VRBO stay as "Not available" and VRBO shows each Airbnb stay as "Blocked".
+ * Older stays come from two more sources:
+ * - history: past stays imported from a reservations export (Airbnb Reservations → Export to CSV), stored with no
+ *   feed so syncs never touch them;
+ * - statements: every stay on a saved manager statement, derived on each read (nothing stored).
+ * A stay from a lower source (feed > history > statement) that overlaps a reservation from a higher one is the
+ * same stay and is left out. When events overlap, a reservation beats a block: with calendars synced between
+ * platforms, Airbnb shows each VRBO stay as "Not available" and VRBO shows each Airbnb stay as "Blocked".
  */
-import { and, asc, eq, gt, lt } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
-import { calendarEvents, calendarFeeds } from "../db/schema.ts";
+import { calendarEvents, calendarFeeds, properties } from "../db/schema.ts";
 import { AppError, audit, badRequest, diff, notFound, requireWrite, type Actor } from "../context.ts";
 import { log, withSpan } from "../telemetry.ts";
+import { parseCsv } from "./csv.ts";
 import { resolvePropertyId } from "./ledger.ts";
+import { savedStatements, toIsoDate } from "./manager-statement.ts";
 
 export type EventKind = "reserved" | "blocked";
+export type EventSource = "feed" | "history" | "statement";
 
 // ======================= iCal parsing =======================
 
@@ -341,12 +349,239 @@ export async function refreshFeeds(
   return results;
 }
 
+// ======================= reservation history (CSV) =======================
+
+export const historyInput = z.object({
+  property: z.union([z.number().int(), z.string()]).optional().describe("Property id or name"),
+  property_id: z.number().int().optional(),
+  csv: z.string().min(1).max(5_000_000).describe("The reservations export as CSV text (Airbnb: Reservations → Export)"),
+  listing: z
+    .string()
+    .trim()
+    .max(300)
+    .optional()
+    .describe("Which listing to import when the export has several (its Listing column)"),
+  dry_run: z.boolean().default(false).describe("Only report what would be imported"),
+});
+
+export interface HistoryImport {
+  property_id: number;
+  /** Listings in the file (empty when it has no Listing column). */
+  listings: string[];
+  listing: string | null;
+  /** Past stays found for the listing (after skipping the rows below). */
+  stays: number;
+  added: number;
+  updated: number;
+  unchanged: number;
+  /** Of the stays, how many a linked calendar already shows. They are saved anyway, in case it drops them. */
+  on_calendar: number;
+  skipped_cancelled: number;
+  /** Stays that haven't ended: the linked calendar keeps those up to date. */
+  skipped_upcoming: number;
+  skipped_other_listings: number;
+  dry_run: boolean;
+}
+
+/** Statuses of rows that never became a stay. */
+const NOT_A_STAY = /cancel|declin|expired|withdrawn|inquiry|request|pending|denied|not accepted/i;
+
+interface HistoryRow {
+  code: string;
+  start: string;
+  end: string;
+  guest: string;
+  listing: string;
+  status: string;
+}
+
+/** Columns are matched loosely (Airbnb's export, or any CSV with a code, check-in and checkout per stay). */
+export function parseReservationsCsv(text: string): HistoryRow[] {
+  const rows = parseCsv(text.replace(/^\uFEFF/, ""));
+  const header = rows[0]?.map((h) => h.trim()) ?? [];
+  const find = (re: RegExp) => header.findIndex((h) => re.test(h));
+  const col = {
+    code: find(/^(confirmation (code|number)|reservation( id| code| number)?|booking (id|number))$/i),
+    start: find(/^(start date|check-?in( date)?|arrival( date)?)$/i),
+    end: find(/^(end date|check-?out( date)?|departure( date)?)$/i),
+    status: find(/^status$/i),
+    guest: find(/^guest( name)?$/i),
+    listing: find(/^(listing|listing name|property|property name)$/i),
+  };
+  const missing = (
+    [
+      ["Start date (or Check-in)", col.start],
+      ["End date (or Checkout)", col.end],
+    ] as const
+  )
+    .filter(([, i]) => i < 0)
+    .map(([n]) => n);
+  if (missing.length)
+    throw badRequest(
+      `This doesn't look like a reservations export: missing column(s) ${missing.join(", ")}. ` +
+        `Found: ${header.filter(Boolean).join(", ") || "nothing"}`,
+    );
+  const out: HistoryRow[] = [];
+  for (const r of rows.slice(1)) {
+    const start = toIsoDate(r[col.start]);
+    const end = toIsoDate(r[col.end]);
+    if (!start || !end || end <= start) continue;
+    const cell = (i: number) => (i >= 0 ? (r[i] ?? "").trim() : "");
+    out.push({
+      code: cell(col.code),
+      start,
+      end,
+      guest: cell(col.guest),
+      listing: cell(col.listing),
+      status: cell(col.status),
+    });
+  }
+  if (!out.length) throw badRequest("No stays with a start and end date found in the file");
+  return out;
+}
+
+/**
+ * Save the past stays of a reservations export as calendar history, upserted by confirmation code (or the dates
+ * when there is none). Cancelled requests and stays that haven't ended are skipped. With several listings in the
+ * file, `listing` must say which one is this property.
+ */
+export function importReservationHistory(db: DB, actor: Actor | null, raw: unknown, today = isoToday()): HistoryImport {
+  const i = historyInput.parse(raw);
+  if (actor && !i.dry_run) requireWrite(actor);
+  const propertyId = resolvePropertyId(db, i.property_id ?? i.property);
+  const rows = parseReservationsCsv(i.csv);
+  const listings = [...new Set(rows.map((r) => r.listing).filter(Boolean))].sort();
+  let listing: string | null = null;
+  if (i.listing) {
+    listing = listings.find((l) => l.toLowerCase() === i.listing!.toLowerCase()) ?? null;
+    if (!listing) throw badRequest(`No listing "${i.listing}" in this file. It has: ${listings.join("; ")}`);
+  } else if (listings.length > 1) {
+    throw badRequest(
+      `This file has ${listings.length} listings. Choose which one is this property: ${listings.join("; ")}`,
+      { listings },
+    );
+  } else listing = listings[0] ?? null;
+
+  const result: HistoryImport = {
+    property_id: propertyId,
+    listings,
+    listing,
+    stays: 0,
+    added: 0,
+    updated: 0,
+    unchanged: 0,
+    on_calendar: 0,
+    skipped_cancelled: 0,
+    skipped_upcoming: 0,
+    skipped_other_listings: 0,
+    dry_run: i.dry_run,
+  };
+  const stays = new Map<string, HistoryRow>();
+  for (const r of rows) {
+    if (listing && r.listing && r.listing !== listing) result.skipped_other_listings++;
+    else if (NOT_A_STAY.test(r.status)) result.skipped_cancelled++;
+    else if (r.end > today) result.skipped_upcoming++;
+    else stays.set(r.code || `${r.start}/${r.end}`, r);
+  }
+  result.stays = stays.size;
+
+  const feedStays = storedEvents(db, { from: "0000-01-01", to: "9999-12-31", property_id: propertyId }).filter(
+    (e) => e.source === "feed" && e.kind === "reserved",
+  );
+  tx(db, () => {
+    const existing = new Map(
+      db
+        .select()
+        .from(calendarEvents)
+        .where(and(eq(calendarEvents.propertyId, propertyId), isNull(calendarEvents.feedId)))
+        .all()
+        .map((e) => [e.uid, e]),
+    );
+    const stamp = new Date().toISOString();
+    for (const [uid, r] of stays) {
+      if (feedStays.some((f) => f.start_date < r.end && f.end_date > r.start)) result.on_calendar++;
+      const values = {
+        kind: "reserved" as const,
+        startDate: r.start,
+        endDate: r.end,
+        summary: [r.guest || "Reserved", r.code].filter(Boolean).join(" · "),
+      };
+      const e = existing.get(uid);
+      if (!e) {
+        if (!i.dry_run)
+          db.insert(calendarEvents)
+            .values({ propertyId, feedId: null, source: "history", uid, ...values })
+            .run();
+        result.added++;
+      } else if (e.startDate !== values.startDate || e.endDate !== values.endDate || e.summary !== values.summary) {
+        if (!i.dry_run)
+          db.update(calendarEvents)
+            .set({ ...values, updatedAt: stamp })
+            .where(eq(calendarEvents.id, e.id))
+            .run();
+        result.updated++;
+      } else result.unchanged++;
+    }
+    if (!i.dry_run && (result.added || result.updated))
+      audit(db, actor, "import", "calendar_history", propertyId, {
+        listing,
+        added: result.added,
+        updated: result.updated,
+      });
+  });
+  return result;
+}
+
+export interface HistorySummary {
+  property_id: number;
+  /** Stays imported from a reservations export. */
+  stays: number;
+  first: string | null;
+  last: string | null;
+  /** Stays read from saved manager statements. */
+  statement_stays: number;
+}
+
+export function getHistory(db: DB, raw: { property_id?: number | string }): HistorySummary {
+  const propertyId = resolvePropertyId(db, raw.property_id);
+  const rows = db
+    .select({ start: calendarEvents.startDate })
+    .from(calendarEvents)
+    .where(and(eq(calendarEvents.propertyId, propertyId), eq(calendarEvents.source, "history")))
+    .orderBy(asc(calendarEvents.startDate))
+    .all();
+  return {
+    property_id: propertyId,
+    stays: rows.length,
+    first: rows[0]?.start ?? null,
+    last: rows.at(-1)?.start ?? null,
+    statement_stays: statementStays(db, propertyId).length,
+  };
+}
+
+/** Remove every stay imported from a reservations export for one property. */
+export function clearHistory(db: DB, actor: Actor, raw: { property_id?: number | string }) {
+  requireWrite(actor);
+  const propertyId = resolvePropertyId(db, raw.property_id);
+  return tx(db, () => {
+    const removed = db
+      .delete(calendarEvents)
+      .where(and(eq(calendarEvents.propertyId, propertyId), eq(calendarEvents.source, "history")))
+      .run().changes;
+    if (removed) audit(db, actor, "delete", "calendar_history", propertyId, { removed });
+    return { property_id: propertyId, removed };
+  });
+}
+
 // ======================= calendar view =======================
 
 export interface CalendarEvent {
+  /** Negative for stays read from manager statements (not stored; only stable within one response). */
   id: number;
   property_id: number;
-  feed_id: number;
+  feed_id: number | null;
+  source: EventSource;
+  /** Where it came from: the feed's name, "Reservation history" or "Manager statement (Mon YYYY)". */
   feed: string;
   kind: EventKind;
   start_date: string;
@@ -355,14 +590,15 @@ export interface CalendarEvent {
   summary: string;
 }
 
-/** Events that have at least one night in [from, to). */
-export function listEvents(db: DB, opts: { from: string; to: string; property_id?: number }): CalendarEvent[] {
+/** Stored events (feeds and imported history) that have at least one night in [from, to). */
+function storedEvents(db: DB, opts: { from: string; to: string; property_id?: number }): CalendarEvent[] {
   const e = calendarEvents;
   return db
     .select({
       id: e.id,
       property_id: e.propertyId,
       feed_id: e.feedId,
+      source: e.source,
       feed: calendarFeeds.name,
       kind: e.kind,
       start_date: e.startDate,
@@ -370,7 +606,7 @@ export function listEvents(db: DB, opts: { from: string; to: string; property_id
       summary: e.summary,
     })
     .from(e)
-    .innerJoin(calendarFeeds, eq(calendarFeeds.id, e.feedId))
+    .leftJoin(calendarFeeds, eq(calendarFeeds.id, e.feedId))
     .where(
       and(
         lt(e.startDate, opts.to),
@@ -380,7 +616,70 @@ export function listEvents(db: DB, opts: { from: string; to: string; property_id
     )
     .orderBy(asc(e.startDate), asc(e.id))
     .all()
-    .map((r) => ({ ...r, nights: nightsBetween(r.start_date, r.end_date) }));
+    .map((r) => ({ ...r, feed: r.feed ?? "Reservation history", nights: nightsBetween(r.start_date, r.end_date) }));
+}
+
+const monthName = (m: string) =>
+  new Date(`${m}-01T00:00:00Z`).toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+
+/** Every stay on the property's saved manager statements, once per reservation id (the latest statement wins). */
+function statementStays(db: DB, propertyId: number): Omit<CalendarEvent, "id">[] {
+  const byId = new Map<string, Omit<CalendarEvent, "id">>();
+  for (const { month, statement } of savedStatements(db, propertyId))
+    for (const r of statement.reservations) {
+      if (r.cancelled || r.check_out <= r.check_in) continue;
+      byId.set(r.reservation_id, {
+        property_id: propertyId,
+        feed_id: null,
+        source: "statement",
+        feed: `Manager statement (${monthName(month)})`,
+        kind: "reserved",
+        start_date: r.check_in,
+        end_date: r.check_out,
+        nights: nightsBetween(r.check_in, r.check_out),
+        summary: `${r.channel || "Stay"} · #${r.reservation_id}`,
+      });
+    }
+  return [...byId.values()];
+}
+
+const RANK: Record<EventSource, number> = { feed: 0, history: 1, statement: 2 };
+
+/**
+ * Events with at least one night in [from, to): stored ones plus stays from saved manager statements. A
+ * reservation overlapping a reservation from a higher source (feed > history > statement) is the same stay seen
+ * twice and is left out; checkout and the next check-in on the same day don't overlap.
+ */
+export function listEvents(db: DB, opts: { from: string; to: string; property_id?: number }): CalendarEvent[] {
+  const all = storedEvents(db, opts);
+  const propertyIds = opts.property_id
+    ? [opts.property_id]
+    : db
+        .select({ id: properties.id })
+        .from(properties)
+        .all()
+        .map((p) => p.id);
+  let next = -1;
+  for (const id of propertyIds)
+    for (const s of statementStays(db, id))
+      if (s.start_date < opts.to && s.end_date > opts.from) all.push({ ...s, id: next-- });
+
+  const kept: CalendarEvent[] = [];
+  for (const e of [...all].sort((a, b) => RANK[a.source] - RANK[b.source])) {
+    const dup =
+      e.kind === "reserved" &&
+      e.source !== "feed" &&
+      kept.some(
+        (k) =>
+          k.kind === "reserved" &&
+          k.property_id === e.property_id &&
+          RANK[k.source] < RANK[e.source] &&
+          k.start_date < e.end_date &&
+          k.end_date > e.start_date,
+      );
+    if (!dup) kept.push(e);
+  }
+  return kept.sort((a, b) => a.start_date.localeCompare(b.start_date) || a.id - b.id);
 }
 
 export interface MonthSummary {
@@ -412,11 +711,12 @@ export function getCalendar(
   const to = `${nextMonth(toMonth)}-01`;
   if (nightsBetween(from, to) > 800) throw badRequest("Ask for at most two years at a time");
 
-  const events = listEvents(db, { from, to, property_id: propertyId });
   // start a night early so a stay running into the first month isn't counted as checking in on day one
   const dayBefore = addDays(from, -1);
+  const loaded = listEvents(db, { from: dayBefore, to, property_id: propertyId });
+  const events = loaded.filter((e) => e.end_date > from);
   const best = new Map<string, CalendarEvent>();
-  for (const ev of listEvents(db, { from: dayBefore, to, property_id: propertyId })) {
+  for (const ev of loaded) {
     for (let d = ev.start_date < dayBefore ? dayBefore : ev.start_date; d < ev.end_date && d < to; d = addDays(d, 1)) {
       const cur = best.get(d);
       if (!cur || (cur.kind === "blocked" && ev.kind === "reserved")) best.set(d, ev);
@@ -451,6 +751,7 @@ export function getCalendar(
     nights,
     months,
     feeds: listFeeds(db, actor, { property_id: propertyId }),
+    history: getHistory(db, { property_id: propertyId }),
   };
 }
 
