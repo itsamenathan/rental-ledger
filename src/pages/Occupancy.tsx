@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../api.ts";
 import { monthLabel, percent, THIS_YEAR } from "../format.ts";
-import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
+import { useApi, usePersistentState, useSession, useToast, useProperty } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
 
 interface Row {
@@ -19,10 +19,9 @@ interface Row {
 type Draft = { nights_available: string; nights_booked: string; owner_nights: string; check_ins: string };
 
 export default function Occupancy() {
-  const { overview, canWrite } = useSession();
+  const { canWrite } = useSession();
   const [year, setYear] = usePersistentState("occ-year", THIS_YEAR);
-  const props = overview.properties.filter((p) => !p.archived);
-  const [propertyId, setPropertyId] = useState(props[0]?.id ?? 0);
+  const propertyId = useProperty().single;
   const { data, reload } = useApi<Row[]>(`occupancy?year=${year}&property_id=${propertyId}`);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const toast = useToast();
@@ -78,15 +77,6 @@ export default function Occupancy() {
       <header className="page-head">
         <h1>Occupancy</h1>
         <div className="head-actions">
-          {props.length > 1 && (
-            <select value={propertyId} onChange={(e) => setPropertyId(Number(e.target.value))} aria-label="Property">
-              {props.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
           <YearSelect value={year} onChange={setYear} />
         </div>
       </header>

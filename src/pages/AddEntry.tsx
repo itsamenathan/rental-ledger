@@ -5,10 +5,11 @@ import TxForm, { type TxPrefill } from "../components/TxForm.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { OutboxList } from "../components/Outbox.tsx";
 import { fmtDate, thisMonth } from "../format.ts";
-import { useToast } from "../hooks.ts";
+import { useToast, useScopedPath } from "../hooks.ts";
 import { AllocationBadge, Amount } from "../lib.tsx";
 
 export default function AddEntry() {
+  const scoped = useScopedPath();
   const [added, setAdded] = useState<Transaction[]>([]);
   const [editing, setEditing] = useState<number | null>(null);
   const toast = useToast();
@@ -33,10 +34,10 @@ export default function AddEntry() {
       <header className="page-head">
         <h1>Add entry</h1>
         <span className="head-actions">
-          <Link to={`/months/${thisMonth()}?record=1`} className="link">
+          <Link to={scoped(`/months/${thisMonth()}?record=1`)} className="link">
             Record this month's bills
           </Link>
-          <Link to="/import" className="link">
+          <Link to={scoped("/import")} className="link">
             Import a CSV
           </Link>
         </span>
@@ -49,7 +50,7 @@ export default function AddEntry() {
           onSaved={(t, { another }) => {
             setAdded((a) => [t, ...a]);
             toast({ text: `Saved ${t.category} ${Math.abs(t.amount).toFixed(2)}`, kind: "ok" });
-            if (!another) void navigate(back?.startsWith("/") ? back : "/transactions");
+            if (!another) void navigate(scoped(back?.startsWith("/") ? back : "/transactions"));
           }}
           onQueued={(text) => toast({ text, kind: "ok" })}
         />

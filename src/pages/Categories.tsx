@@ -2,7 +2,7 @@ import { Fragment, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { qs, type CategoryMonths } from "../api.ts";
 import { money, money0, monthLabel, THIS_YEAR } from "../format.ts";
-import { useApi, usePersistentState } from "../hooks.ts";
+import { useApi, usePersistentState, useProperty } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
 
 type Row = CategoryMonths["rows"][number];
@@ -39,11 +39,12 @@ function group(rows: Row[]): Group[] {
 }
 
 export default function Categories() {
+  const { path: scoped, qs: pq } = useProperty();
   const [params, setParams] = useSearchParams();
   const [savedYear, setYear] = usePersistentState("dash-year", THIS_YEAR);
   const year = Number(params.get("year")) || savedYear;
   const kind = params.get("kind") === "income" ? "income" : "expense";
-  const { data, error, loading } = useApi<CategoryMonths>(`reports/categories?year=${year}`);
+  const { data, error, loading } = useApi<CategoryMonths>(`reports/categories?year=${year}&${pq}`);
   const [open, setOpen] = useState<Set<number>>(new Set());
 
   const set = (k: string, v: string) => {
@@ -64,7 +65,9 @@ export default function Categories() {
       return n;
     });
   const txLink = (categoryId: number, month?: string, sub?: string) =>
-    `/transactions${qs({ year: month ? undefined : year, month: month ? `${year}-${month}` : undefined, category: categoryId, q: sub })}`;
+    scoped(
+      `/transactions${qs({ year: month ? undefined : year, month: month ? `${year}-${month}` : undefined, category: categoryId, q: sub })}`,
+    );
 
   const cell = (v: number, to: string) => (
     <td className="num pivot-cell" style={{ ["--heat" as string]: Math.min(1, v / max).toFixed(3) }}>
@@ -117,7 +120,7 @@ export default function Categories() {
               <th className="sticky-col">Category</th>
               {MONTHS.map((m) => (
                 <th key={m} className="num">
-                  <Link to={`/months/${year}-${m}`}>{monthLabel(`${year}-${m}`)}</Link>
+                  <Link to={scoped(`/months/${year}-${m}`)}>{monthLabel(`${year}-${m}`)}</Link>
                 </th>
               ))}
               <th className="num">Total</th>

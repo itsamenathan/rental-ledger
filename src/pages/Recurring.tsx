@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { api, dismissRecurring, type Recurring, type RecurringSeries } from "../api.ts";
 import { fmtDate, money, monthLabel, monthShort, shiftMonth, thisMonth } from "../format.ts";
-import { useApi, useSession, useToast } from "../hooks.ts";
+import { useApi, useSession, useToast, useScopedPath, useProperty } from "../hooks.ts";
 
 const STATUS: Record<RecurringSeries["status"], { text: string; cls: string }> = {
   ok: { text: "Up to date", cls: "ok" },
@@ -13,6 +13,7 @@ const STATUS: Record<RecurringSeries["status"], { text: string; cls: string }> =
 
 /** Last 12 months for one series: paid, missing, not expected. */
 function Strip({ s }: { s: RecurringSeries }) {
+  const scoped = useScopedPath();
   const end = thisMonth();
   const months = Array.from({ length: 12 }, (_, i) => shiftMonth(end, i - 11));
   const paid = new Map(s.history.map((h) => [h.month, h]));
@@ -25,7 +26,7 @@ function Strip({ s }: { s: RecurringSeries }) {
         const cls = h ? "paid" : missing.has(m) ? "missing" : expected.has(m) ? "expected" : "none";
         const title = `${monthShort(m)}: ${h ? money(h.amount) : cls === "missing" ? "missing" : cls === "expected" ? "expected" : "not due"}`;
         return (
-          <Link key={m} to={`/months/${m}`} className={`dot ${cls}`} title={title}>
+          <Link key={m} to={scoped(`/months/${m}`)} className={`dot ${cls}`} title={title}>
             <span>{monthLabel(m).slice(0, 1)}</span>
           </Link>
         );
@@ -35,7 +36,8 @@ function Strip({ s }: { s: RecurringSeries }) {
 }
 
 export default function RecurringPage() {
-  const { data, error, reload } = useApi<Recurring>("recurring");
+  const { path: scoped, qs: pq } = useProperty();
+  const { data, error, reload } = useApi<Recurring>(`recurring?${pq}`);
   const { canWrite } = useSession();
   const toast = useToast();
 
@@ -67,7 +69,7 @@ export default function RecurringPage() {
       {error && <div className="alert error">{error}</div>}
 
       {data && data.alerts.length > 0 && (
-        <Link to="/todo" className="alert warn link-alert">
+        <Link to={scoped("/todo")} className="alert warn link-alert">
           {data.alerts.length} recurring {data.alerts.length === 1 ? "alert" : "alerts"} to check on the To do page →
         </Link>
       )}
@@ -92,7 +94,9 @@ export default function RecurringPage() {
                 <tr key={s.key}>
                   <td>
                     <Link
-                      to={`/transactions?year=all&category=${s.category_id}${s.vendor ? `&vendor=${encodeURIComponent(s.vendor)}` : ""}`}
+                      to={scoped(
+                        `/transactions?year=all&category=${s.category_id}${s.vendor ? `&vendor=${encodeURIComponent(s.vendor)}` : ""}`,
+                      )}
                     >
                       {s.label}
                     </Link>

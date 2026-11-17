@@ -1,6 +1,6 @@
 import { and, asc, between, count, desc, eq, isNull, like, sql, type AnyColumn, type SQL } from "drizzle-orm";
 import type { DB } from "../db.ts";
-import { categories, occupancy as occupancyTable, transactions } from "../db/schema.ts";
+import { categories, occupancy as occupancyTable, properties, transactions } from "../db/schema.ts";
 import { needsReceipt } from "./receipts.ts";
 import { getProperty, resolvePropertyId, SCHEDULE_E_LINES } from "./ledger.ts";
 import { getTaxYear } from "./rental.ts";
@@ -191,7 +191,30 @@ export function summary(db: DB, year: number, propertyId?: number) {
     top_vendors: byVendor,
     needs_review: review.n,
     years: availableYears(db),
+    /** All-properties view only: each property's share of the year (archived ones only if they have data). */
+    by_property: propertyId ? null : propertyBreakdown(db, year),
   };
+}
+
+function propertyBreakdown(db: DB, year: number) {
+  return db
+    .select({ id: properties.id, name: properties.name, archived: properties.archived })
+    .from(properties)
+    .orderBy(properties.archived, properties.name)
+    .all()
+    .map((p) => {
+      const totals = totalsBetween(db, `${year}-01-01`, `${year}-12-31`, p.id);
+      const occ = occupancyTotals(db, year, p.id);
+      return {
+        property_id: p.id,
+        property: p.name,
+        archived: p.archived,
+        ...totals,
+        nights_booked: occ.nights_booked,
+        occupancy_rate: occ.occupancy_rate,
+      };
+    })
+    .filter((r) => !r.archived || r.count || r.nights_booked);
 }
 
 /** Totals for every year with data, newest first (income, expenses, net, nights booked). */

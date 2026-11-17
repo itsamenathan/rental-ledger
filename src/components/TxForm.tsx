@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { api, ApiError, type Allocation, type Attachment, type Transaction } from "../api.ts";
 import { money, today } from "../format.ts";
-import { useApi, useSession } from "../hooks.ts";
+import { useApi, useSession, useProperty } from "../hooks.ts";
 import {
   asText,
   editQueued,
@@ -113,7 +113,7 @@ function changedFields(before: Seed, payload: Record<string, unknown>) {
 export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueued, onDelete, compact }: Props) {
   const { overview, user } = useSession();
   const sugg = useApi<Suggestions>("suggestions");
-  const activeProps = overview.properties.filter((p) => !p.archived);
+  const currentProperty = useProperty().single;
   const [seed] = useState<Seed | undefined>(() =>
     existing
       ? existing
@@ -134,7 +134,7 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
   const [allocTouched, setAllocTouched] = useState(!!seed || prefill.allocation !== undefined);
   const [description, setDescription] = useState(seed?.description ?? prefill.description ?? "");
   const [account, setAccount] = useState(seed?.account ?? "");
-  const [propertyId, setPropertyId] = useState<number>(seed?.property_id ?? activeProps[0]?.id ?? 0);
+  const [propertyId, setPropertyId] = useState<number>(seed?.property_id ?? currentProperty);
   const [refund, setRefund] = useState(seed ? (seed.kind === "expense" ? seed.amount > 0 : seed.amount < 0) : false);
   const [needsReview, setNeedsReview] = useState(seed?.needs_review ?? false);
   const [reviewNote, setReviewNote] = useState(seed?.review_note ?? "");
@@ -516,7 +516,7 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
               ))}
             </datalist>
           </label>
-          {activeProps.length > 1 && (
+          {overview.properties.filter((p) => !p.archived).length > 1 && (
             <label>
               Property
               <select value={propertyId} onChange={(e) => setPropertyId(Number(e.target.value))}>

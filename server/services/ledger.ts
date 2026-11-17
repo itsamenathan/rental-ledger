@@ -53,10 +53,26 @@ const money = z
   .refine((n) => Math.abs(n) < 1e9, "Amount too large");
 const allocation = z.enum(["direct", "indirect"]).nullable();
 
+/**
+ * Parse a PATCH body. zod 4 still fills in `.default()` values inside `.partial()`, which would reset every field
+ * that wasn't sent (e.g. a receipt-rule change clearing a category's default allocation), so keep only sent keys.
+ */
+function parsePatch<T extends z.ZodObject>(schema: T, raw: unknown): Partial<z.output<T>> {
+  const parsed = schema.partial().parse(raw) as Record<string, unknown>;
+  const sent = raw && typeof raw === "object" ? raw : {};
+  return Object.fromEntries(Object.entries(parsed).filter(([k]) => k in sent)) as Partial<z.output<T>>;
+}
+
 // ======================= properties =======================
 
 export const propertyInput = z.object({
-  name: z.string().trim().min(1).max(100),
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    // "all" means every property in API/MCP filters, and a bare number would be read as an id
+    .refine((n) => n.toLowerCase() !== "all" && !/^\d+$/.test(n), 'Pick another name (not "all" or a number)'),
   address: z.string().trim().max(300).default(""),
   placed_in_service: isoDate.nullable().default(null),
   building_basis: money.nullable().default(null),
@@ -120,14 +136,23 @@ export function createProperty(db: DB, actor: Actor | null, raw: unknown) {
 export function updateProperty(db: DB, actor: Actor, id: number, raw: unknown) {
   requireWrite(actor);
   const before = getProperty(db, id);
-  const p = propertyInput.partial().parse(raw);
+  const p = parsePatch(propertyInput, raw);
   if (Object.keys(p).length) db.update(properties).set(propertyValues(p)).where(eq(properties.id, id)).run();
   const after = getProperty(db, id);
   audit(db, actor, "update", "property", id, diff(before, after));
   return after;
 }
 
-/** Accepts a numeric id or a (case-insensitive) property name. Defaults to the sole active property. */
+/** The word that asks a read for every property added up (`property=all`). */
+export const ALL_PROPERTIES = "all";
+
+const isAll = (ref: unknown) => typeof ref === "string" && ref.trim().toLowerCase() === ALL_PROPERTIES;
+
+/**
+ * One property, from a numeric id or a (case-insensitive) name. When none is given and only one active property
+ * exists, that one is used; with several, the caller must say which (400). Every write and every per-property read
+ * (calendar, occupancy, tax year, manager paperwork, tax report) goes through this.
+ */
 export function resolvePropertyId(db: DB, ref: number | string | null | undefined): number {
   if (ref == null || ref === "") {
     const rows = db
@@ -138,8 +163,9 @@ export function resolvePropertyId(db: DB, ref: number | string | null | undefine
       .all();
     if (rows.length === 1) return rows[0]!.id;
     if (rows.length === 0) throw badRequest("No properties exist yet; create one first");
-    throw badRequest("Multiple properties exist; specify property (name or id)");
+    throw badRequest("Several properties exist; pass property (name or id). See get_overview / GET /api/properties");
   }
+  if (isAll(ref)) throw badRequest('This works on one property at a time; pass a property name or id, not "all"');
   const row = db
     .select({ id: properties.id })
     .from(properties)
@@ -147,6 +173,15 @@ export function resolvePropertyId(db: DB, ref: number | string | null | undefine
     .get();
   if (!row) throw badRequest(`Unknown property: ${ref}`);
   return row.id;
+}
+
+/**
+ * Scope for reads that can add up every property (totals, transaction lists, To do, recurring, files): a property
+ * id, or undefined for all of them, which must be asked for with "all". Missing works like resolvePropertyId (the
+ * sole active property, else 400), so nothing is summed across properties by accident.
+ */
+export function resolvePropertyScope(db: DB, ref: number | string | null | undefined): number | undefined {
+  return isAll(ref) ? undefined : resolvePropertyId(db, ref);
 }
 
 // ======================= categories =======================
@@ -183,7 +218,7 @@ export const categoryInput = z.object({
   description: z.string().max(1000).default(""),
   sort_order: z.number().int().default(0),
   archived: z.boolean().default(false),
-  // No zod defaults on these two: updateCategory parses .partial(), and createCategory picks the default.
+  // No zod defaults on these two: createCategory picks the default.
   receipt_policy: z
     .enum(RECEIPT_POLICIES)
     .optional()
@@ -279,7 +314,7 @@ function usageCount(db: DB, categoryId: number, includeDeleted: boolean) {
 export function updateCategory(db: DB, actor: Actor, id: number, raw: unknown) {
   requireWrite(actor);
   const before = getCategory(db, id);
-  const c = categoryInput.partial().parse(raw);
+  const c = parsePatch(categoryInput, raw);
   if (c.kind && c.kind !== before.kind && usageCount(db, id, false)) {
     throw badRequest("Cannot change income/expense kind of a category that has transactions");
   }

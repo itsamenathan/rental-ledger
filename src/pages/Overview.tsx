@@ -11,7 +11,7 @@ import {
 } from "../components/Charts.tsx";
 import type { TodoSummary } from "./Todo.tsx";
 import { fmtDate, money, money0, monthLabel, percent, thisMonth, THIS_YEAR } from "../format.ts";
-import { useApi, usePersistentState, useSession } from "../hooks.ts";
+import { useApi, usePersistentState, useSession, useProperty } from "../hooks.ts";
 import { AllocationBadge, Amount, YearSelect } from "../lib.tsx";
 
 interface Summary {
@@ -29,6 +29,16 @@ interface Summary {
   by_category: { category_id: number; category: string; kind: string; amount: number; count: number }[];
   top_vendors: { vendor: string; amount: number; count: number }[];
   needs_review: number;
+  /** all-properties view only */
+  by_property:
+    | (Totals & {
+        property_id: number;
+        property: string;
+        archived: boolean;
+        nights_booked: number;
+        occupancy_rate: number | null;
+      })[]
+    | null;
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -46,6 +56,8 @@ function Delta({ now, prev, goodWhenUp = true }: { now: number; prev: number; go
 }
 
 export default function Overview() {
+  const scope = useProperty();
+  const { path: scoped, qs: pq } = scope;
   const [params, setParams] = useSearchParams();
   const [year, setYear] = usePersistentState("dash-year", THIS_YEAR);
   // /?year=2025 (e.g. from a month page) selects that year
@@ -56,16 +68,16 @@ export default function Overview() {
       setParams({}, { replace: true });
     }
   }, [params, setParams, setYear]);
-  const { data: s, error } = useApi<Summary>(`reports/summary?year=${year}`);
-  const rec = useApi<Recurring>("recurring");
-  const todo = useApi<TodoSummary>("todo");
-  const recent = useApi<TxList>("transactions?limit=8&sort=updated_desc");
-  const prev = useApi<Summary>(`reports/summary?year=${year - 1}`);
-  const cats = useApi<CategoryMonths>(`reports/categories?year=${year}`);
-  const years = useApi<(Totals & { year: number; nights_booked: number })[]>("reports/years");
+  const { data: s, error } = useApi<Summary>(`reports/summary?year=${year}&${pq}`);
+  const rec = useApi<Recurring>(`recurring?${pq}`);
+  const todo = useApi<TodoSummary>(`todo?${pq}`);
+  const recent = useApi<TxList>(`transactions?limit=8&sort=updated_desc&${pq}`);
+  const prev = useApi<Summary>(`reports/summary?year=${year - 1}&${pq}`);
+  const cats = useApi<CategoryMonths>(`reports/categories?year=${year}&${pq}`);
+  const years = useApi<(Totals & { year: number; nights_booked: number })[]>(`reports/years?${pq}`);
   const navigate = useNavigate();
   const { canWrite } = useSession();
-  const openMonth = (m: string) => void navigate(`/months/${m}`);
+  const openMonth = (m: string) => void navigate(scoped(`/months/${m}`));
 
   const missingByMonth = new Map<string, number>();
   for (const a of rec.data?.alerts ?? [])
@@ -112,11 +124,11 @@ export default function Overview() {
   return (
     <div className="page">
       <header className="page-head">
-        <h1>Overview</h1>
+        <h1>{scope.key === "all" ? "All properties" : "Overview"}</h1>
         <div className="head-actions">
           <YearSelect value={year} onChange={setYear} />
           {canWrite && (
-            <Link className="btn primary" to="/add">
+            <Link className="btn primary" to={scoped("/add")}>
               + Add entry
             </Link>
           )}
@@ -125,7 +137,7 @@ export default function Overview() {
       {error && <div className="alert error">{error}</div>}
 
       {todo.data && todo.data.total > 0 && (
-        <Link to="/todo" className="alert warn link-alert todo-strip">
+        <Link to={scoped("/todo")} className="alert warn link-alert todo-strip">
           <strong>To do:</strong>{" "}
           {[
             todo.data.flagged && plural(todo.data.flagged, "flagged entry", "flagged entries"),
@@ -167,6 +179,38 @@ export default function Overview() {
             </div>
           </div>
 
+          {s.by_property && (
+            <section className="card table-card">
+              <div className="section-head card-pad">
+                <h2>By property, {year}</h2>
+              </div>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Property</th>
+                    <th className="num">Income</th>
+                    <th className="num">Expenses</th>
+                    <th className="num">Net</th>
+                    <th className="num hide-sm">Occupancy</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {s.by_property.map((p) => (
+                    <tr key={p.property_id} className={p.archived ? "excluded" : ""}>
+                      <td>
+                        <Link to={`/p/${p.property_id}`}>{p.property}</Link>
+                      </td>
+                      <td className="num">{money0(p.income)}</td>
+                      <td className="num">{money0(p.expense)}</td>
+                      <td className={`num ${p.net < 0 ? "neg" : ""}`}>{money0(p.net)}</td>
+                      <td className="num hide-sm">{percent(p.occupancy_rate, 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+
           <section className="card">
             <h2>Month by month, {year}</h2>
             <MonthlyChart data={s.monthly} onPick={openMonth} />
@@ -194,7 +238,7 @@ export default function Overview() {
                       className={m.month === current ? "current" : ""}
                     >
                       <td>
-                        <Link to={`/months/${m.month}`} onClick={(e) => e.stopPropagation()}>
+                        <Link to={scoped(`/months/${m.month}`)} onClick={(e) => e.stopPropagation()}>
                           {monthLabel(m.month, "long")}
                         </Link>
                         {m.month === current && <small className="muted"> · so far</small>}
@@ -257,7 +301,7 @@ export default function Overview() {
             <section className="card">
               <div className="section-head">
                 <h2>Expenses by category</h2>
-                <Link to={`/categories?year=${year}`} className="link">
+                <Link to={scoped(`/categories?year=${year}`)} className="link">
                   By month →
                 </Link>
               </div>
@@ -274,7 +318,7 @@ export default function Overview() {
                     value: c.amount,
                     sub: `${c.count} transactions`,
                   }))}
-                onPick={(id) => void navigate(`/transactions?year=${year}&category=${id}`)}
+                onPick={(id) => void navigate(scoped(`/transactions?year=${year}&category=${id}`))}
               />
             </section>
             <section className="card">
@@ -288,7 +332,7 @@ export default function Overview() {
                     sub: `${v.count} transactions`,
                   }))}
                   onPick={(v) =>
-                    void navigate(`/transactions?year=${year}&kind=expense&q=${encodeURIComponent(String(v))}`)
+                    void navigate(scoped(`/transactions?year=${year}&kind=expense&q=${encodeURIComponent(String(v))}`))
                   }
                 />
               ) : (
@@ -343,14 +387,14 @@ export default function Overview() {
       <section className="card">
         <div className="section-head">
           <h2>Recently changed</h2>
-          <Link to="/transactions?year=all&sort=updated_desc" className="link">
+          <Link to={scoped("/transactions?year=all&sort=updated_desc")} className="link">
             All transactions →
           </Link>
         </div>
         <ul className="tx-mini">
           {recent.data?.items.map((t) => (
             <li key={t.id}>
-              <Link to={`/transactions?year=all&q=${t.id}`} className="row-btn">
+              <Link to={scoped(`/transactions?year=all&q=${t.id}`)} className="row-btn">
                 <span>{fmtDate(t.date)}</span>
                 <span>
                   {t.category}

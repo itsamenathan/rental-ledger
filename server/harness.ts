@@ -311,6 +311,86 @@ export function generate(today: Date) {
       { category: "Utilities", name: "Sewer", receipt_policy: "never" as const },
       { category: "Utilities", name: "Electric", receipt_policy: "threshold" as const, receipt_min: 200 },
     ],
+    /** a second, smaller property, so the property switcher and "All properties" have something to show */
+    second: generateSecond(today),
+  };
+}
+
+/**
+ * The second property: a cabin self-managed on Airbnb since January last year, with its own seed so the first
+ * property's data never changes. It has one flagged entry of its own (To do differs per property).
+ */
+function generateSecond(today: Date) {
+  const rand = rng(4242);
+  const between = (lo: number, hi: number) => Math.round((lo + rand() * (hi - lo)) * 100) / 100;
+  const ty = today.getUTCFullYear();
+  const tm = today.getUTCMonth() + 1;
+  const todayIso = today.toISOString().slice(0, 10);
+  const rows: Row[] = [];
+  const occupancy: { month: string; nights_booked: number; owner_nights: number; check_ins: number }[] = [];
+  const stays: { platform: "airbnb" | "vrbo"; start: string; end: string }[] = [];
+  const months: [number, number][] = [];
+  for (let y = ty - 1; y <= ty; y++) for (let m = 1; m <= 12; m++) if (y < ty || m <= tm) months.push([y, m]);
+  for (const [y, m] of months) {
+    const last = daysIn(y, m);
+    const at = (d: number) => `${y}-${pad(m)}-${pad(Math.min(d, last))}`;
+    const add = (d: number, row: Omit<Row, "date">) => {
+      const date = at(d);
+      if (date <= todayIso) rows.push({ account: "Cabin checking", ...row, date });
+    };
+    const winter = m <= 2 || m === 12; // ski season is the busy time here
+    const count = winter ? 3 : 1 + Math.floor(rand() * 2);
+    let booked = 0;
+    let day = 4;
+    for (let i = 0; i < count && day < last - 2; i++) {
+      const nights = 2 + Math.floor(rand() * 3);
+      const n = Math.min(nights, last - day);
+      booked += n;
+      stays.push({ platform: "airbnb", start: at(day), end: at(day + n) });
+      add(day + 1, {
+        amount: Math.round(n * between(winter ? 240 : 160, winter ? 320 : 210) * 100) / 100,
+        category: "Rental Income",
+        subcategory: "Airbnb",
+        vendor: "Airbnb",
+        description: `${n}-night stay`,
+      });
+      add(day + n, { amount: -95, category: "Cleaning", vendor: "Pine Ridge Cleaning", description: "Turnover" });
+      day += nights + 3 + Math.floor(rand() * 4);
+    }
+    if (y < ty || m < tm)
+      occupancy.push({ month: ymOf(y, m), nights_booked: booked, owner_nights: 0, check_ins: count });
+    add(8, { amount: -64.99, category: "Utilities", subcategory: "Internet", vendor: "Mountain Wireless" });
+    add(14, {
+      amount: -between(winter ? 140 : 60, winter ? 220 : 95),
+      category: "Utilities",
+      subcategory: "Electric",
+      vendor: "Pine Ridge Electric Co-op",
+    });
+    if (m === 6) add(10, { amount: -1290, category: "Insurance", vendor: "Example Mutual", receipt: true });
+  }
+  const [py, pm] = months.at(-2)!;
+  rows.push({
+    date: `${py}-${pad(pm)}-20`,
+    amount: -310,
+    category: "Maintenance",
+    vendor: "Snowline Plowing",
+    description: "Driveway plowing",
+    needs_review: true,
+    review_note: "Should this be split with the neighbor?",
+    account: "Cabin checking",
+  });
+  return {
+    property: {
+      name: "Pine Ridge Cabin",
+      address: "48 Sample Road, Lakeview",
+      placed_in_service: `${ty - 1}-01-01`,
+      building_basis: 185000,
+    },
+    rows: rows.sort((a, b) => a.date.localeCompare(b.date)),
+    occupancy,
+    stays,
+    ownerStays: [] as { start: string; end: string }[],
+    years: [ty - 1, ty],
   };
 }
 
@@ -318,7 +398,11 @@ export function generate(today: Date) {
  * An iCal export as a platform writes it: its own stays as reservations, the other platform's stays and owner
  * stays as blocks (calendars synced between platforms look like that).
  */
-export function sampleIcs(data: ReturnType<typeof generate>, platform: "airbnb" | "vrbo", extra: string[] = []) {
+export function sampleIcs(
+  data: Pick<ReturnType<typeof generate>, "stays" | "ownerStays">,
+  platform: "airbnb" | "vrbo",
+  extra: string[] = [],
+) {
   const ymd = (d: string) => d.replace(/-/g, "");
   const ev = (uid: string, start: string, end: string, summary: string, description = "") =>
     [
@@ -437,6 +521,18 @@ async function reset() {
     for (const year of data.years.slice(0, 2)) {
       rental.setTaxYear(db, admin, { property_id: property.id, year, mortgage_interest: 11240.55 - (year % 10) * 180 });
     }
+
+    // The second property: its own entries, occupancy, Airbnb calendar and tax year.
+    const cabin = ledger.createProperty(db, admin, data.second.property);
+    for (const r of data.second.rows) {
+      const { receipt, trash: _t, ...input } = r;
+      const t = ledger.createTransaction(db, admin, { ...input, property_id: cabin.id });
+      if (receipt) receipts.push({ id: t.id, row: r });
+    }
+    for (const o of data.second.occupancy) rental.upsertOccupancy(db, admin, { ...o, property_id: cabin.id });
+    const cabinFeed = calendar.createFeed(db, admin, { property_id: cabin.id, name: "Airbnb (sample file)" });
+    calendar.syncFeedText(db, admin, cabinFeed.id, sampleIcs(data.second, "airbnb"), todayIso);
+    rental.setTaxYear(db, admin, { property_id: cabin.id, year: data.second.years[0]!, notes: "No mortgage" });
   });
   for (const { id, row } of receipts) {
     const text = `RECEIPT\n${row.vendor}\n${row.date}\n${row.description ?? row.category}\nTotal: $${(-row.amount).toFixed(2)}\n`;
@@ -480,7 +576,8 @@ async function reset() {
     api_keys: { write: writeKey.key, read: readKey.key },
     admin_session_cookie: `rental_session=${session.token}`,
     property: property.name,
-    transactions: data.rows.length,
+    properties: [property.name, data.second.property.name],
+    transactions: data.rows.length + data.second.rows.length,
     receipts: receipts.length,
     sample_csv: join(config.dataDir, "sample-bank-export.csv"),
     sample_ics: join(config.dataDir, "sample-airbnb.ics"),

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { api, qs } from "../api.ts";
 import { money, percent, THIS_YEAR } from "../format.ts";
-import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
+import { useApi, usePersistentState, useSession, useToast, useScopedPath, useProperty } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
 
 interface Line {
@@ -71,10 +71,10 @@ const LEVEL = {
 const DEFAULT_TAX_YEAR = THIS_YEAR - (new Date().getMonth() < 3 ? 1 : 0);
 
 export default function Reports() {
-  const { overview, canWrite } = useSession();
+  const { canWrite } = useSession();
   const [year, setYear] = usePersistentState("tax-year", DEFAULT_TAX_YEAR);
-  const props = overview.properties.filter((p) => !p.archived);
-  const [propertyId, setPropertyId] = useState(props[0]?.id ?? 0);
+  const propertyId = useProperty().single;
+  const scoped = useScopedPath();
   const { data: r, error, reload } = useApi<TaxReport>(`reports/tax${qs({ year, property_id: propertyId })}`);
 
   return (
@@ -82,15 +82,6 @@ export default function Reports() {
       <header className="page-head no-print">
         <h1>Tax report</h1>
         <div className="head-actions">
-          {props.length > 1 && (
-            <select value={propertyId} onChange={(e) => setPropertyId(Number(e.target.value))} aria-label="Property">
-              {props.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
           <YearSelect value={year} onChange={setYear} />
           <a
             className="btn primary"
@@ -127,7 +118,7 @@ export default function Reports() {
                       <strong>{LEVEL[c.level].label}: </strong>
                       {c.message}{" "}
                       {c.ids && c.ids.length > 0 && (
-                        <Link className="no-print" to={checkLink(c.code, r.year)}>
+                        <Link className="no-print" to={scoped(checkLink(c.code, r.year))}>
                           Show
                         </Link>
                       )}
@@ -341,6 +332,7 @@ function LineTable({
   year: number;
   allocation?: string;
 }) {
+  const scoped = useScopedPath();
   if (!lines.length) return <p className="muted">None.</p>;
   return (
     <table className="data-table">
@@ -348,7 +340,7 @@ function LineTable({
         {lines.map((l) => (
           <tr key={l.category_id}>
             <td>
-              <Link to={`/transactions${qs({ year, category: l.category_id, allocation })}`}>{l.category}</Link>
+              <Link to={scoped(`/transactions${qs({ year, category: l.category_id, allocation })}`)}>{l.category}</Link>
               {l.schedule_e_line && <small className="muted"> · line {l.schedule_e_line}</small>}
             </td>
             <td className="muted num">{l.count}</td>

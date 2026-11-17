@@ -2089,6 +2089,43 @@ hr.sep {
   cursor: pointer;
   text-align: left;
 }
+/* One property picker for the whole app (shown with more than one active property). */
+.property-switcher {
+  width: 100%;
+  font-weight: 600;
+}
+.sidebar-switcher {
+  margin: 0 0 0.75rem;
+}
+.mobile-switcher {
+  display: none;
+}
+@media (max-width: 900px) {
+  .mobile-switcher {
+    display: block;
+    margin: 0 0 0.75rem;
+  }
+}
+.tx-property {
+  display: block;
+  color: var(--muted);
+}
+dl.details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.4rem 1.25rem;
+  margin: 0;
+}
+dl.details dt {
+  color: var(--muted);
+}
+dl.details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pre-wrap {
+  white-space: pre-wrap;
+}
 .sidebar-add {
   margin: 0 0 1rem;
   gap: 0.4rem;
@@ -3411,14 +3448,6 @@ table.conflict thead th {
 .cal-row:hover td {
   background: var(--surface-2);
 }
-.cal-feeds-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.cal-feeds-head h2 {
-  margin: 0;
-}
 .cal-feeds {
   list-style: none;
   padding: 0;
@@ -3455,13 +3484,6 @@ table.conflict thead th {
 }
 .cal-feeds li .grow {
   min-width: 12rem;
-}
-.cal-prop + .cal-prop {
-  margin-top: 1rem;
-}
-.cal-prop h3 {
-  margin: 0;
-  font-size: 1rem;
 }
 .cal-sources {
   margin: -0.25rem 0 0;

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { api, type Category, type Overview, type User } from "./api.ts";
+import { api, type Category, type Overview, type Property, type User } from "./api.ts";
 import type { OutboxEntry } from "./outbox.ts";
 
 // ---------------- session + reference data ----------------
@@ -91,3 +91,30 @@ export const OutboxCtx = createContext<OutboxState>({
   syncNow: () => {},
 });
 export const useOutbox = () => useContext(OutboxCtx);
+
+// ---------------- property scope (from the URL: /p/<id>/… or /p/all/…) ----------------
+
+export interface PropertyScope {
+  /** What's in the URL and sent as property_id: a property id, or "all" */
+  key: string;
+  /** The property id, or null in the all-properties view */
+  id: number | null;
+  property: Property | null;
+  /** A single property for things that need one: the current one, else the one used last */
+  single: number;
+  /** More than one active property (otherwise the app hides the switcher) */
+  many: boolean;
+  /** Query parameter for API calls: `property_id=<key>` */
+  qs: string;
+  /** App path → the same page for this property ("/transactions?x" → "/p/3/transactions?x"); /settings stays */
+  path: (to: string) => string;
+}
+
+export const PropertyCtx = createContext<PropertyScope | null>(null);
+export const useProperty = () => {
+  const s = useContext(PropertyCtx);
+  if (!s) throw new Error("No property scope");
+  return s;
+};
+/** Link helper: `to={scoped("/months/2026-10")}`. */
+export const useScopedPath = () => useProperty().path;

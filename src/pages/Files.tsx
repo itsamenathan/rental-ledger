@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router";
 import { api, qs, type FileLibrary, type LibraryFile, type Transaction, type TxList } from "../api.ts";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, money, monthTitle, shiftMonth, thisMonth, THIS_YEAR } from "../format.ts";
-import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
+import { useApi, usePersistentState, useSession, useToast, useProperty, useScopedPath } from "../hooks.ts";
 import { uploadOrQueue } from "../outbox.ts";
 import { Amount, Modal } from "../lib.tsx";
 
@@ -25,14 +25,14 @@ const entryLabel = (t: { vendor: string; subcategory: string; description: strin
   t.vendor || t.subcategory || t.description || t.category;
 
 export default function Files() {
-  const { overview, canWrite, user } = useSession();
+  const { path: scoped, key: property } = useProperty();
+  const { canWrite, user } = useSession();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
   const year = params.get("year");
   const month = year ? null : (params.get("month") ?? thisMonth());
   const q = params.get("q") ?? "";
   const source = params.get("source") ?? "all";
-  const property = params.get("property_id") ?? "";
   const filters = { month, year, q: q.trim(), source: source === "all" ? "" : source, property_id: property };
   const lib = useApi<FileLibrary>(`files${qs(filters)}`);
   const [editing, setEditing] = useState<number | null>(null);
@@ -175,16 +175,6 @@ export default function Files() {
           <option value="receipts">Receipts</option>
           <option value="manager">Manager paperwork</option>
         </select>
-        {overview.properties.length > 1 && (
-          <select value={property} onChange={(e) => set({ property_id: e.target.value })} aria-label="Property">
-            <option value="">All properties</option>
-            {overview.properties.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
       </div>
 
       {lib.error && <div className="alert error">{lib.error}</div>}
@@ -198,7 +188,7 @@ export default function Files() {
           {month && (
             <>
               {" · "}
-              <Link to={`/months/${month}`}>{monthTitle(month)} entries</Link>
+              <Link to={scoped(`/months/${month}`)}>{monthTitle(month)} entries</Link>
             </>
           )}
         </p>
@@ -238,12 +228,14 @@ export default function Files() {
                 <p className="muted small">
                   Showing the first {d.missing.length}.{" "}
                   <Link
-                    to={`/transactions${qs({
-                      year: month ? undefined : y,
-                      month: month ?? undefined,
-                      needs_receipt: "true",
-                      property_id: property,
-                    })}`}
+                    to={scoped(
+                      `/transactions${qs({
+                        year: month ? undefined : y,
+                        month: month ?? undefined,
+                        needs_receipt: "true",
+                        property_id: property,
+                      })}`,
+                    )}
                   >
                     See all
                   </Link>
@@ -405,6 +397,7 @@ function FileRow({
   onLink: () => void;
   onUnlink: (attachmentId: number) => void;
 }) {
+  const scoped = useScopedPath();
   // Manager paperwork is linked and unlinked from the Manager page, not here.
   const editable = canWrite && !f.manager;
   /** Unlinking this entry would delete the file: ask in the row first. */
@@ -495,7 +488,7 @@ function FileRow({
           Download
         </a>
         {f.manager && (
-          <Link className="btn small ghost" to={`/statement/${f.manager.month}`}>
+          <Link className="btn small ghost" to={scoped(`/statement/${f.manager.month}`)}>
             Manager page
           </Link>
         )}
@@ -523,12 +516,19 @@ function FileRow({
 /** Attach a file to another entry as well. It stays on the entries it's already on. */
 function LinkDialog({ file, onClose, onDone }: { file: LibraryFile; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
+  const { key: property } = useProperty();
   const first = file.links[0]!;
   const linked = new Set(file.links.map((l) => l.transaction_id));
   const [q, setQ] = useState("");
   const [anyDate, setAnyDate] = useState(false);
   const list = useApi<TxList>(
-    `transactions${qs({ q: q.trim(), month: anyDate ? undefined : first.date.slice(0, 7), limit: 50, sort: "date_asc" })}`,
+    `transactions${qs({
+      q: q.trim(),
+      month: anyDate ? undefined : first.date.slice(0, 7),
+      limit: 50,
+      sort: "date_asc",
+      property_id: property,
+    })}`,
   );
   const link = async (t: Transaction) => {
     try {

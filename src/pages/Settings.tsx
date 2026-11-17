@@ -1,10 +1,12 @@
 import { useState, type FormEvent } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router";
+import { Link, NavLink, Navigate, Route, Routes } from "react-router";
 import { api, type Property } from "../api.ts";
-import { useApi, useSession, useToast } from "../hooks.ts";
+import { useApi, useProperty, useSession, useToast } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 import CategorySettings from "./CategorySettings.tsx";
 import { PropertyCalendars } from "../components/CalendarFeeds.tsx";
+import { propertySettingsPath } from "../scope.ts";
+import { fmtDate } from "../format.ts";
 
 export default function Settings() {
   const { user } = useSession();
@@ -25,15 +27,7 @@ export default function Settings() {
       <Routes>
         <Route path="account" element={<Account />} />
         <Route path="api-keys" element={<ApiKeys />} />
-        <Route
-          path="properties"
-          element={
-            <>
-              <Properties />
-              <PropertyCalendars />
-            </>
-          }
-        />
+        <Route path="properties" element={<Properties />} />
         <Route path="categories" element={<CategorySettings />} />
         <Route path="users" element={<Users />} />
         <Route path="backup" element={<Backup />} />
@@ -241,13 +235,128 @@ function ApiKeys() {
   );
 }
 
+/** App settings → Properties: the list, and adding one. Each property's own settings are at /p/<id>/settings. */
 function Properties() {
-  const { overview, reloadOverview, canWrite } = useSession();
+  const { overview, canWrite } = useSession();
   const [editing, setEditing] = useState<Partial<Property> | null>(null);
+  return (
+    <section className="card">
+      <div className="section-head">
+        <h2>Properties</h2>
+        {canWrite && (
+          <button className="btn" onClick={() => setEditing({ recovery_years: 27.5 })}>
+            + Add property
+          </button>
+        )}
+      </div>
+      {!overview.properties.length && <p className="empty">Add your first rental property to get started.</p>}
+      <p className="muted small">
+        Each property keeps its own books: entries, occupancy, booking calendars, tax-year inputs and manager paperwork.
+        Users, categories and receipt rules are shared.
+      </p>
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th className="hide-sm">Address</th>
+            <th className="hide-sm">In service</th>
+            <th className="num hide-sm">Building basis</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {overview.properties.map((p) => (
+            <tr key={p.id} className={p.archived ? "excluded" : ""}>
+              <td>
+                <Link to={propertySettingsPath(p.id)}>{p.name}</Link>
+                {p.archived && <small className="muted"> archived</small>}
+              </td>
+              <td className="hide-sm">{p.address}</td>
+              <td className="hide-sm nowrap">{p.placed_in_service ? fmtDate(p.placed_in_service) : "—"}</td>
+              <td className="num hide-sm">
+                {p.building_basis?.toLocaleString("en-US", { style: "currency", currency: "USD" }) ?? "—"}
+              </td>
+              <td className="num">
+                {canWrite && (
+                  <button className="link" onClick={() => setEditing(p)}>
+                    Edit
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {editing && <PropertyModal editing={editing} setEditing={setEditing} />}
+    </section>
+  );
+}
+
+/** One property's settings: its details and booking calendars. */
+export function PropertySettings() {
+  const { canWrite } = useSession();
+  const { property } = useProperty();
+  const [editing, setEditing] = useState<Partial<Property> | null>(null);
+  if (!property) return null;
+  const p = property;
+  return (
+    <div className="page">
+      <header className="page-head">
+        <h1>{p.name}</h1>
+        <Link className="link small" to="/settings/properties">
+          All properties
+        </Link>
+      </header>
+      <section className="card">
+        <div className="section-head">
+          <h2>Details</h2>
+          {canWrite && (
+            <button className="btn small" onClick={() => setEditing(p)}>
+              Edit
+            </button>
+          )}
+        </div>
+        <dl className="details">
+          <dt>Address</dt>
+          <dd>{p.address || "—"}</dd>
+          <dt>Placed in service</dt>
+          <dd>{p.placed_in_service ? fmtDate(p.placed_in_service) : "—"}</dd>
+          <dt>Building basis</dt>
+          <dd>{p.building_basis?.toLocaleString("en-US", { style: "currency", currency: "USD" }) ?? "—"}</dd>
+          <dt>Recovery period</dt>
+          <dd>{p.recovery_years} years</dd>
+          {p.notes && (
+            <>
+              <dt>Notes</dt>
+              <dd className="pre-wrap">{p.notes}</dd>
+            </>
+          )}
+          {p.archived && (
+            <>
+              <dt>Status</dt>
+              <dd>Archived</dd>
+            </>
+          )}
+        </dl>
+      </section>
+      <PropertyCalendars propertyId={p.id} />
+      {editing && <PropertyModal editing={editing} setEditing={setEditing} />}
+    </div>
+  );
+}
+
+function PropertyModal({
+  editing,
+  setEditing,
+}: {
+  editing: Partial<Property>;
+  setEditing: (p: Partial<Property> | null) => void;
+}) {
+  const { reloadOverview } = useSession();
   const toast = useToast();
   const save = async (e: FormEvent) => {
     e.preventDefault();
-    const p = editing!;
+    const p = editing;
     const json = {
       name: p.name,
       address: p.address ?? "",
@@ -270,121 +379,76 @@ function Properties() {
     }
   };
   return (
-    <section className="card">
-      <div className="section-head">
-        <h2>Properties</h2>
-        {canWrite && (
-          <button className="btn" onClick={() => setEditing({ recovery_years: 27.5 })}>
-            + Add property
-          </button>
+    <Modal title={editing.id ? "Edit property" : "Add property"} onClose={() => setEditing(null)}>
+      <form onSubmit={save}>
+        <label>
+          Name
+          <input
+            required
+            value={editing.name ?? ""}
+            onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+          />
+        </label>
+        <label>
+          Address
+          <input value={editing.address ?? ""} onChange={(e) => setEditing({ ...editing, address: e.target.value })} />
+        </label>
+        <div className="row-3">
+          <label>
+            Placed in service
+            <input
+              type="date"
+              value={editing.placed_in_service ?? ""}
+              onChange={(e) => setEditing({ ...editing, placed_in_service: e.target.value })}
+            />
+          </label>
+          <label>
+            Building basis ($, excl. land)
+            <input
+              inputMode="decimal"
+              value={editing.building_basis ?? ""}
+              onChange={(e) => setEditing({ ...editing, building_basis: e.target.value as unknown as number })}
+            />
+          </label>
+          <label>
+            Recovery period (years)
+            <select
+              value={editing.recovery_years ?? 27.5}
+              onChange={(e) => setEditing({ ...editing, recovery_years: Number(e.target.value) })}
+            >
+              <option value={27.5}>27.5 (residential rental)</option>
+              <option value={39}>39 (nonresidential, e.g. avg stay ≤ 7 days)</option>
+            </select>
+          </label>
+        </div>
+        <p className="muted small">
+          Basis and in-service date are used to estimate depreciation on the tax report. Your preparer's depreciation
+          schedule is authoritative.
+        </p>
+        <label>
+          Notes
+          <textarea
+            rows={3}
+            value={editing.notes ?? ""}
+            onChange={(e) => setEditing({ ...editing, notes: e.target.value })}
+          />
+        </label>
+        {editing.id && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={!!editing.archived}
+              onChange={(e) => setEditing({ ...editing, archived: e.target.checked })}
+            />{" "}
+            Archived
+          </label>
         )}
-      </div>
-      <table className="data-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Address</th>
-            <th>In service</th>
-            <th className="num">Building basis</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {overview.properties.map((p) => (
-            <tr key={p.id} className={p.archived ? "excluded" : ""}>
-              <td>{p.name}</td>
-              <td>{p.address}</td>
-              <td>{p.placed_in_service ?? "—"}</td>
-              <td className="num">
-                {p.building_basis?.toLocaleString("en-US", { style: "currency", currency: "USD" }) ?? "—"}
-              </td>
-              <td>
-                {canWrite && (
-                  <button className="link" onClick={() => setEditing(p)}>
-                    Edit
-                  </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {editing && (
-        <Modal title={editing.id ? "Edit property" : "Add property"} onClose={() => setEditing(null)}>
-          <form onSubmit={save}>
-            <label>
-              Name
-              <input
-                required
-                value={editing.name ?? ""}
-                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-              />
-            </label>
-            <label>
-              Address
-              <input
-                value={editing.address ?? ""}
-                onChange={(e) => setEditing({ ...editing, address: e.target.value })}
-              />
-            </label>
-            <div className="row-3">
-              <label>
-                Placed in service
-                <input
-                  type="date"
-                  value={editing.placed_in_service ?? ""}
-                  onChange={(e) => setEditing({ ...editing, placed_in_service: e.target.value })}
-                />
-              </label>
-              <label>
-                Building basis ($, excl. land)
-                <input
-                  inputMode="decimal"
-                  value={editing.building_basis ?? ""}
-                  onChange={(e) => setEditing({ ...editing, building_basis: e.target.value as unknown as number })}
-                />
-              </label>
-              <label>
-                Recovery period (years)
-                <select
-                  value={editing.recovery_years ?? 27.5}
-                  onChange={(e) => setEditing({ ...editing, recovery_years: Number(e.target.value) })}
-                >
-                  <option value={27.5}>27.5 (residential rental)</option>
-                  <option value={39}>39 (nonresidential, e.g. avg stay ≤ 7 days)</option>
-                </select>
-              </label>
-            </div>
-            <p className="muted small">
-              Basis and in-service date are used to estimate depreciation on the tax report. Your preparer's
-              depreciation schedule is authoritative.
-            </p>
-            <label>
-              Notes
-              <textarea
-                rows={3}
-                value={editing.notes ?? ""}
-                onChange={(e) => setEditing({ ...editing, notes: e.target.value })}
-              />
-            </label>
-            {editing.id && (
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={!!editing.archived}
-                  onChange={(e) => setEditing({ ...editing, archived: e.target.checked })}
-                />{" "}
-                Archived
-              </label>
-            )}
-            <div className="form-actions">
-              <span className="spacer" />
-              <button className="btn primary">Save</button>
-            </div>
-          </form>
-        </Modal>
-      )}
-    </section>
+        <div className="form-actions">
+          <span className="spacer" />
+          <button className="btn primary">Save</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -406,7 +470,7 @@ function Backup() {
       <RestoreBackup />
       <h3>Spreadsheet copy</h3>
       <p className="muted small">Every transaction as a CSV, for Excel, Google Sheets or your tax preparer.</p>
-      <a className="btn" href="/api/export/transactions.csv">
+      <a className="btn" href="/api/export/transactions.csv?property=all">
         Download all transactions (CSV)
       </a>
     </section>

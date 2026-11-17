@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { api } from "../api.ts";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, money } from "../format.ts";
-import { usePersistentState, useSession, useToast } from "../hooks.ts";
+import { usePersistentState, useSession, useToast, useScopedPath, useProperty } from "../hooks.ts";
 
 // ---------- types (mirror server/services/csv-import.ts) ----------
 
@@ -132,14 +132,15 @@ const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 // ---------- page ----------
 
 export default function ImportCsv() {
-  const { overview, canWrite } = useSession();
+  const scoped = useScopedPath();
+  const { canWrite } = useSession();
   const toast = useToast();
   const [step, setStep] = useState<Step>("upload");
   const [text, setText] = useState("");
   const [fileName, setFileName] = useState("");
   const [info, setInfo] = useState<Inspection | null>(null);
   const [mapping, setMapping] = useState<Mapping | null>(null);
-  const [propertyId, setPropertyId] = useState(overview.properties.find((p) => !p.archived)?.id ?? 0);
+  const propertyId = useProperty().single;
   const [windowDays, setWindowDays] = usePersistentState("csv-window-days", 3);
   const [preview, setPreview] = useState<Preview | null>(null);
   /** file lines the user unticked in the column step */
@@ -269,8 +270,6 @@ export default function ImportCsv() {
           previewError={previewError}
           excluded={excluded}
           setExcluded={setExcluded}
-          propertyId={propertyId}
-          setPropertyId={setPropertyId}
           windowDays={windowDays}
           setWindowDays={setWindowDays}
           saveProfile={saveProfile}
@@ -309,7 +308,7 @@ export default function ImportCsv() {
           )}
           <p className="muted">From {fileName}. They're in your ledger now; anything flagged is on the To do page.</p>
           <div className="form-actions imp-done-actions">
-            <Link className="btn primary" to="/transactions">
+            <Link className="btn primary" to={scoped("/transactions")}>
               View transactions
             </Link>
             <button className="btn" onClick={reset}>
@@ -422,8 +421,6 @@ interface MapProps {
   previewError: string;
   excluded: Set<number>;
   setExcluded: (s: Set<number>) => void;
-  propertyId: number;
-  setPropertyId: (n: number) => void;
   windowDays: number;
   setWindowDays: (n: number) => void;
   saveProfile: boolean;
@@ -473,7 +470,6 @@ function withAmountMode(m: Mapping): Mapping {
 type TableFilter = "all" | "import" | "skipped" | "error";
 
 function MapStep(p: MapProps) {
-  const { overview } = useSession();
   const { info, mapping, preview } = p;
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<TableFilter>("all");
@@ -842,18 +838,6 @@ function MapStep(p: MapProps) {
                 onChange={(e) => set({ account: e.target.value })}
                 placeholder="e.g. Fidelity cash, Chase checking"
               />
-            </label>
-          )}
-          {overview.properties.length > 1 && !mapping.columns.property && (
-            <label>
-              Property
-              <select value={p.propertyId} onChange={(e) => p.setPropertyId(Number(e.target.value))}>
-                {overview.properties.map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {x.name}
-                  </option>
-                ))}
-              </select>
             </label>
           )}
           <label>

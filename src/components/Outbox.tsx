@@ -4,7 +4,7 @@ import type { Transaction } from "../api.ts";
 import { fmtDate, money } from "../format.ts";
 import { Modal } from "../lib.tsx";
 import TxForm from "./TxForm.tsx";
-import { OutboxCtx, useOutbox, useSession, useToast } from "../hooks.ts";
+import { OutboxCtx, useOutbox, useSession, useToast, useScopedPath } from "../hooks.ts";
 import {
   asText,
   discardOutbox,
@@ -102,6 +102,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 /** One line above every page: offline, and/or how much is waiting to be sent. */
 export function SyncBanner() {
+  const scoped = useScopedPath();
   const { entries, online, syncing, syncNow } = useOutbox();
   const failed = entries.filter((e) => e.error).length;
   const waiting = entries.length - failed;
@@ -122,7 +123,7 @@ export function SyncBanner() {
               {syncing ? "Syncing…" : "Sync now"}
             </button>
           )}
-          <Link className="link small" to="/add">
+          <Link className="link small" to={scoped("/add")}>
             Details
           </Link>
         </span>

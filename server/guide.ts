@@ -52,12 +52,26 @@ month_summary, category_by_month, year_totals, get_todo, get_recurring, dismiss_
   \`receipt_policy\` (\`always\`, \`threshold\`: at least \`receipt_min\` dollars, default $75, or \`never\`, e.g.
   mortgage), unless its vendor is on the never-ask list (list_receipt_exclusions). To do, Files, the tax report and
   \`needs_receipt=true\` share this rule.
-- **property** — name or id; may be omitted when only one property exists.
+- **property** — name or id. See "Picking a property" below.
+
+## Picking a property
+
+Each rental property is its own set of books: transactions, occupancy, booking calendars, tax-year inputs and
+manager paperwork belong to one property. Users, API keys, categories, receipt rules and import profiles are shared.
+
+- \`GET /api/properties\` (or \`/api/overview\`) lists them. Pass \`property_id=<id>\` (or \`property=<name>\`) in the
+  query string, or \`property\` / \`property_id\` in a JSON body.
+- While there is only one active property it may be left out. With several, leaving it out is a 400 error rather
+  than a guess.
+- Reads that total things up (transactions, files, occupancy, calendar feeds, reports/summary, reports/month,
+  reports/years, reports/categories, todo, recurring) also take \`property=all\` to add up every property. The tax
+  report, tax package, calendar, tax years and manager paperwork are always for one property.
+- In the web app the property is in the URL: \`/p/<id>/transactions\`, and \`/p/all/\` for the totals view.
 
 ## REST endpoints (JSON)
 
     GET    /api/overview                       properties, categories, years
-    GET    /api/transactions?year=&month=YYYY-MM&from=&to=&category=&kind=&allocation=direct|indirect|none
+    GET    /api/transactions?property_id=&year=&month=YYYY-MM&from=&to=&category=&kind=&allocation=direct|indirect|none
                          &vendor=&q=&amount=69.95|50-100|>500|~70&needs_review=true&has_attachment=false
                          &sort=date_desc&limit=100&offset=0
     POST   /api/transactions                   one object, or an array (bulk)

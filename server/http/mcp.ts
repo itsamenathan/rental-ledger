@@ -34,6 +34,14 @@ Rental property bookkeeping. Data model:
 - occupancy: per-month nights booked, owner (personal) nights, check-ins; drives the rental-use % for taxes.
 - booking calendar: read-only availability imported from Airbnb/VRBO iCal feeds (reservations and blocked dates).
   Feeds don't show private bookings or owner stays, so don't treat it as the occupancy record.
+- properties: each rental is separate. Transactions, occupancy, booking calendars, tax-year inputs and manager
+  paperwork all belong to one property; users, categories, receipt rules and import profiles are shared.
+Picking a property:
+- get_overview lists the properties. Pass \`property\` (name or id) to every tool that takes one. It may be left
+  out only while there is a single active property; with several, a missing property is an error, never a guess.
+- Read tools that total things up (search_transactions, get_summary, month_summary, year_totals, category_by_month,
+  get_recurring, get_todo, list_files, list_occupancy) also accept property="all" to add up every property. The
+  tax report, calendar, occupancy edits, tax-year inputs and manager paperwork are always per property.
 Guidance for agents:
 - Before importing, call bulk_add_transactions with dry_run=true and inspect duplicates/errors.
 - For a bank/card/provider CSV, use inspect_csv (suggests a column mapping, or a saved profile) then
@@ -62,6 +70,16 @@ const wrap =
   };
 
 const ref = z.union([z.number().int(), z.string()]);
+/** A single property (writes and per-property reads). */
+const one = ref
+  .optional()
+  .describe("Property name or id (see get_overview). May be left out only while there is one active property.");
+/** Reads that can also add up every property. */
+const scope = ref
+  .optional()
+  .describe(
+    'Property name or id, or "all" to add up every property. May be left out only while there is one active property.',
+  );
 const receiptFields = {
   receipt_policy: z
     .enum(["always", "threshold", "never"])
@@ -80,7 +98,7 @@ const txShape = {
   date: z.string().describe("YYYY-MM-DD"),
   amount: z.number().describe("Signed dollars: income positive, expenses NEGATIVE"),
   category: z.string().describe("Category name (see list_categories)"),
-  property: ref.optional().describe("Property name or id; defaults to the only property"),
+  property: one,
   subcategory: z.string().optional(),
   vendor: z.string().optional().describe("Payee for expenses, payer for income (e.g. Airbnb, VRBO)"),
   allocation: z.enum(["direct", "indirect"]).nullable().optional().describe("Defaults from the category"),
@@ -116,19 +134,26 @@ export function buildMcpServer(actor: Actor) {
     "get_overview",
     {
       description:
-        "Properties, categories (with kind/default allocation/Schedule E line), years with data, review queue size and to-do counts. Call this first.",
+        "Properties, categories (with kind/default allocation/Schedule E line), years with data, and each active property's to-do counts (flagged = review queue). Call this first, and pick the property to work on from here.",
       inputSchema: {},
       annotations: ro,
     },
-    wrap(() => ({
-      you: { email: actor.user.email, can_write: actor.canWrite },
-      properties: ledger.listProperties(db),
-      categories: ledger.listCategories(db, false),
-      years: reports.availableYears(db),
-      needs_review: ledger.listTransactions(db, { needs_review: "true", limit: 1 }).total,
-      todo: (({ alerts: _a, ...counts }) => counts)(todoSummary(db)),
-      today: new Date().toISOString().slice(0, 10),
-    })),
+    wrap(() => {
+      const properties = ledger.listProperties(db);
+      return {
+        you: { email: actor.user.email, can_write: actor.canWrite },
+        properties,
+        categories: ledger.listCategories(db, false),
+        years: reports.availableYears(db),
+        todo: properties
+          .filter((p) => !p.archived)
+          .map((p) => {
+            const { alerts: _a, manager_months: _m, ...counts } = todoSummary(db, { propertyId: p.id });
+            return { property_id: p.id, property: p.name, ...counts };
+          }),
+        today: new Date().toISOString().slice(0, 10),
+      };
+    }),
   );
 
   server.registerTool(
@@ -157,7 +182,7 @@ export function buildMcpServer(actor: Actor) {
         month: z.string().optional().describe("YYYY-MM"),
         from: z.string().optional(),
         to: z.string().optional(),
-        property_id: z.number().int().optional(),
+        property: scope,
         category: z.string().optional(),
         kind: z.enum(["income", "expense"]).optional(),
         allocation: z.enum(["direct", "indirect", "none"]).optional(),
@@ -181,7 +206,9 @@ export function buildMcpServer(actor: Actor) {
       },
       annotations: ro,
     },
-    wrap((args) => ledger.listTransactions(db, args)),
+    wrap(({ property, ...args }) =>
+      ledger.listTransactions(db, { ...args, property_id: ledger.resolvePropertyScope(db, property) }),
+    ),
   );
 
   server.registerTool(
@@ -325,13 +352,15 @@ export function buildMcpServer(actor: Actor) {
       inputSchema: {
         month: z.string().optional().describe("YYYY-MM (default: current year if neither is given)"),
         year: z.number().int().optional(),
-        property_id: z.number().int().optional(),
+        property: scope,
         q: z.string().optional().describe("Match file name, vendor, category, subcategory, description, reference"),
         source: z.enum(["all", "receipts", "manager"]).optional(),
       },
       annotations: ro,
     },
-    wrap((args) => library.listFiles(db, args)),
+    wrap(({ property, ...args }) =>
+      library.listFiles(db, { ...args, property_id: ledger.resolvePropertyScope(db, property) }),
+    ),
   );
 
   server.registerTool(
@@ -380,10 +409,10 @@ export function buildMcpServer(actor: Actor) {
     {
       description:
         "Income/expense totals, monthly breakdown, category and vendor totals, occupancy and year-over-year comparison.",
-      inputSchema: { year: z.number().int(), property_id: z.number().int().optional() },
+      inputSchema: { year: z.number().int(), property: scope },
       annotations: ro,
     },
-    wrap(({ year, property_id }) => reports.summary(db, year, property_id)),
+    wrap(({ year, property }) => reports.summary(db, year, ledger.resolvePropertyScope(db, property))),
   );
 
   server.registerTool(
@@ -391,7 +420,7 @@ export function buildMcpServer(actor: Actor) {
     {
       description:
         "Year-end tax report: direct vs indirect expenses, rental-use allocation, Schedule E lines, depreciation estimate, and data-quality checks.",
-      inputSchema: { year: z.number().int(), property: ref.optional() },
+      inputSchema: { year: z.number().int(), property: one },
       annotations: ro,
     },
     wrap(({ year, property }) => reports.taxReport(db, year, property)),
@@ -401,10 +430,12 @@ export function buildMcpServer(actor: Actor) {
     "list_occupancy",
     {
       description: "Monthly occupancy records.",
-      inputSchema: { year: z.number().int().optional(), property_id: z.number().int().optional() },
+      inputSchema: { year: z.number().int().optional(), property: scope },
       annotations: ro,
     },
-    wrap((args) => rental.listOccupancy(db, args)),
+    wrap(({ year, property }) =>
+      rental.listOccupancy(db, { year, property_id: ledger.resolvePropertyScope(db, property) }),
+    ),
   );
 
   server.registerTool(
@@ -413,7 +444,7 @@ export function buildMcpServer(actor: Actor) {
       description: "Create or replace a month's occupancy (nights booked, owner/personal nights, check-ins).",
       inputSchema: {
         month: z.string().describe("YYYY-MM"),
-        property: ref.optional(),
+        property: one,
         nights_available: z.number().int().optional(),
         nights_booked: z.number().int(),
         owner_nights: z.number().int().default(0),
@@ -433,28 +464,30 @@ export function buildMcpServer(actor: Actor) {
       inputSchema: {
         from_month: z.string().describe("YYYY-MM"),
         to_month: z.string().optional().describe("YYYY-MM, default from_month"),
-        property_id: z.number().int().optional(),
+        property: one,
       },
       annotations: ro,
     },
-    wrap((args) => calendar.getCalendar(db, actor, args)),
+    wrap(({ property, ...args }) =>
+      calendar.getCalendar(db, actor, { ...args, property_id: ledger.resolvePropertyId(db, property) }),
+    ),
   );
 
   server.registerTool(
     "list_calendar_feeds",
     {
       description: "iCal feeds imported into the booking calendar, with last sync and error.",
-      inputSchema: {},
+      inputSchema: { property: scope },
       annotations: ro,
     },
-    wrap(() => calendar.listFeeds(db, actor)),
+    wrap(({ property }) => calendar.listFeeds(db, actor, { property_id: ledger.resolvePropertyScope(db, property) })),
   );
 
   server.registerTool(
     "add_calendar_feed",
     {
       description: "Add an iCal export link (Airbnb/VRBO) to import into the booking calendar, then sync it.",
-      inputSchema: { name: z.string(), url: z.string(), property: ref.optional() },
+      inputSchema: { name: z.string(), url: z.string(), property: one },
     },
     wrap(async (args) => {
       const feed = calendar.createFeed(db, actor, args);
@@ -479,7 +512,7 @@ export function buildMcpServer(actor: Actor) {
       description: "Set per-year tax inputs: Form 1098 mortgage interest, and optional rental/personal day overrides.",
       inputSchema: {
         year: z.number().int(),
-        property: ref.optional(),
+        property: one,
         mortgage_interest: z.number().nullable().optional(),
         rental_days_override: z.number().int().nullable().optional(),
         personal_days_override: z.number().int().nullable().optional(),
@@ -518,15 +551,11 @@ export function buildMcpServer(actor: Actor) {
     {
       description:
         "One month in detail: income/expenses/net vs previous month, same month last year and 12-month average; totals per category; and the recurring-bill checklist (paid / missing / upcoming).",
-      inputSchema: { month: z.string().describe("YYYY-MM"), property: ref.optional() },
+      inputSchema: { month: z.string().describe("YYYY-MM"), property: scope },
       annotations: ro,
     },
     wrap(({ month, property }) =>
-      reports.monthDetail(
-        db,
-        recurring.assertMonth(month),
-        property == null ? undefined : ledger.resolvePropertyId(db, property),
-      ),
+      reports.monthDetail(db, recurring.assertMonth(month), ledger.resolvePropertyScope(db, property)),
     ),
   );
 
@@ -534,12 +563,10 @@ export function buildMcpServer(actor: Actor) {
     "year_totals",
     {
       description: "Income, expenses (direct/indirect), net and nights booked for every year with data.",
-      inputSchema: { property: ref.optional() },
+      inputSchema: { property: scope },
       annotations: ro,
     },
-    wrap(({ property }) =>
-      reports.yearTotals(db, property == null ? undefined : ledger.resolvePropertyId(db, property)),
-    ),
+    wrap(({ property }) => reports.yearTotals(db, ledger.resolvePropertyScope(db, property))),
   );
 
   server.registerTool(
@@ -547,12 +574,10 @@ export function buildMcpServer(actor: Actor) {
     {
       description:
         "Category × month grid for a year (one row per category + subcategory, 12 monthly amounts, year total and prior-year total). Amounts are positive for income and expenses.",
-      inputSchema: { year: z.number().int(), property: ref.optional() },
+      inputSchema: { year: z.number().int(), property: scope },
       annotations: ro,
     },
-    wrap(({ year, property }) =>
-      reports.categoryMonths(db, year, property == null ? undefined : ledger.resolvePropertyId(db, property)),
-    ),
+    wrap(({ year, property }) => reports.categoryMonths(db, year, ledger.resolvePropertyScope(db, property))),
   );
 
   server.registerTool(
@@ -560,12 +585,12 @@ export function buildMcpServer(actor: Actor) {
     {
       description:
         "Recurring bills/income learned from history (cadence, typical amount, next due date, status) and alerts: missing payments, possible duplicates, amount changes. Use this to answer 'am I missing anything?'.",
-      inputSchema: { property: ref.optional(), include_history: z.boolean().default(false) },
+      inputSchema: { property: scope, include_history: z.boolean().default(false) },
       annotations: ro,
     },
     wrap(({ property, include_history }) => {
       const r = recurring.recurring(db, {
-        propertyId: property == null ? undefined : ledger.resolvePropertyId(db, property),
+        propertyId: ledger.resolvePropertyScope(db, property),
       });
       return include_history ? r : { ...r, series: r.series.map(({ history: _h, expected_months: _e, ...s }) => s) };
     }),
@@ -576,10 +601,10 @@ export function buildMcpServer(actor: Actor) {
     {
       description:
         "The user's to-do list: counts of flagged entries, expenses with no direct/indirect set, recurring-bill alerts (missing, duplicate, changed), and expenses this year that should have a receipt and don't (per category receipt rules and never-ask names; list them with search_transactions needs_receipt=true), plus the recurring alerts themselves. Use search_transactions (needs_review=true, allocation=none) for the entries.",
-      inputSchema: {},
+      inputSchema: { property: scope },
       annotations: ro,
     },
-    wrap(() => todoSummary(db)),
+    wrap(({ property }) => todoSummary(db, { propertyId: ledger.resolvePropertyScope(db, property) })),
   );
 
   server.registerTool(
@@ -728,7 +753,7 @@ export function buildMcpServer(actor: Actor) {
           .optional()
           .describe("Service month YYYY-MM. Alone: use the saved documents. Default: statement check-out month"),
         subcategory: z.string().optional().describe("Manager name used as subcategory (default: from history)"),
-        property: ref.optional(),
+        property: one,
       },
       annotations: ro,
     },
@@ -763,7 +788,7 @@ export function buildMcpServer(actor: Actor) {
           .optional(),
         month: z.string().optional(),
         subcategory: z.string().optional(),
-        property: ref.optional(),
+        property: one,
         tag_income: z.boolean().optional(),
         create_income: z.array(z.string()).optional(),
         create_lines: z.array(z.union([z.string(), z.number().int()])).optional(),
@@ -790,7 +815,7 @@ export function buildMcpServer(actor: Actor) {
         key: z.string(),
         note: z.string().optional(),
         undo: z.boolean().optional(),
-        property: ref.optional(),
+        property: one,
       },
     },
     wrap(({ undo, ...args }) =>
@@ -803,7 +828,7 @@ export function buildMcpServer(actor: Actor) {
     {
       description:
         "The manager paperwork saved for a year: per month, the saved owner statement and invoices and a status (done, todo = entries to add, check = something to look at, empty = nothing saved).",
-      inputSchema: { year: z.number().int(), property: ref.optional() },
+      inputSchema: { year: z.number().int(), property: one },
       annotations: ro,
     },
     wrap(({ year, property }) => manager.managerYear(db, { year, property })),
@@ -820,7 +845,7 @@ export function buildMcpServer(actor: Actor) {
         base64: z.string().optional(),
         month: z.string().optional(),
         replace: z.boolean().optional(),
-        property: ref.optional(),
+        property: one,
       },
     },
     wrap(async ({ filename, text, base64, month, replace, property }) => {
@@ -890,7 +915,7 @@ export function buildMcpServer(actor: Actor) {
       inputSchema: {
         text: z.string().describe("The CSV file's text"),
         mapping: z.record(z.string(), z.unknown()).describe("The mapping from inspect_csv (or a saved profile)"),
-        property: ref.optional(),
+        property: one,
         window_days: z.number().int().min(0).max(14).optional(),
         only_attention: z
           .boolean()

@@ -13,12 +13,13 @@ import AttentionList from "../components/AttentionList.tsx";
 import RecordBills from "../components/RecordBills.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, money, money0, monthShort, monthTitle, shiftMonth, thisMonth } from "../format.ts";
-import { useApi, useSession, useToast } from "../hooks.ts";
+import { useApi, useSession, useToast, useScopedPath, useProperty } from "../hooks.ts";
 import { AllocationBadge, Amount } from "../lib.tsx";
 
 export default function MonthPage() {
+  const scoped = useScopedPath();
   const { ym = "" } = useParams();
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return <Navigate to="/" />;
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return <Navigate to={scoped("/")} />;
   return <Month key={ym} ym={ym} />;
 }
 
@@ -39,10 +40,11 @@ function Compare({ label, now, then, goodWhenUp }: { label: string; now: number;
 }
 
 function Month({ ym }: { ym: string }) {
+  const { path: scoped, qs: pq, key } = useProperty();
   const { canWrite } = useSession();
-  const detail = useApi<MonthDetail>(`reports/month?month=${ym}`);
-  const txs = useApi<TxList>(`transactions${qs({ month: ym, limit: 1000, sort: "date_asc" })}`);
-  const rec = useApi<Recurring>("recurring");
+  const detail = useApi<MonthDetail>(`reports/month?month=${ym}&${pq}`);
+  const txs = useApi<TxList>(`transactions${qs({ month: ym, limit: 1000, sort: "date_asc", property_id: key })}`);
+  const rec = useApi<Recurring>(`recurring?${pq}`);
   const [editing, setEditing] = useState<number | null>(null);
   // /months/2026-11?record=1 (from Add entry) opens the "record bills" dialog straight away
   const [params, setParams] = useSearchParams();
@@ -63,28 +65,28 @@ function Month({ ym }: { ym: string }) {
     <div className="page">
       <header className="page-head">
         <div className="month-nav">
-          <Link className="icon-btn" to={`/months/${shiftMonth(ym, -1)}`} aria-label="Previous month">
+          <Link className="icon-btn" to={scoped(`/months/${shiftMonth(ym, -1)}`)} aria-label="Previous month">
             ‹
           </Link>
           <h1>{monthTitle(ym)}</h1>
-          <Link className="icon-btn" to={`/months/${shiftMonth(ym, 1)}`} aria-label="Next month">
+          <Link className="icon-btn" to={scoped(`/months/${shiftMonth(ym, 1)}`)} aria-label="Next month">
             ›
           </Link>
         </div>
         <div className="head-actions">
-          <Link className="btn" to={`/?year=${year}`}>
+          <Link className="btn" to={scoped(`/?year=${year}`)}>
             All of {year}
           </Link>
-          <Link className="btn" to={`/files?month=${ym}`}>
+          <Link className="btn" to={scoped(`/files?month=${ym}`)}>
             Files
           </Link>
-          <a className="btn" href={`/api/export/transactions.csv?month=${ym}`}>
+          <a className="btn" href={`/api/export/transactions.csv?month=${ym}&${pq}`}>
             Export CSV
           </a>
           {canWrite && (
             <Link
               className="btn primary"
-              to={`/add${qs({ date: ym === thisMonth() ? undefined : `${ym}-01`, back: `/months/${ym}` })}`}
+              to={scoped(`/add${qs({ date: ym === thisMonth() ? undefined : `${ym}-01`, back: `/months/${ym}` })}`)}
             >
               + Add
             </Link>
@@ -163,7 +165,7 @@ function Month({ ym }: { ym: string }) {
                   Record {unpaid} {unpaid === 1 ? "bill" : "bills"}
                 </button>
               )}
-              <Link to="/recurring" className="link">
+              <Link to={scoped("/recurring")} className="link">
                 All recurring →
               </Link>
             </span>
@@ -231,6 +233,7 @@ function Checklist({
   onChanged: () => void;
   onOpen: (id: number) => void;
 }) {
+  const scoped = useScopedPath();
   const { canWrite } = useSession();
   const toast = useToast();
   const fine = async (i: ChecklistItem) => {
@@ -273,7 +276,7 @@ function Checklist({
             </span>
             {canWrite && i.state === "missing" && (
               <span className="bill-actions">
-                <Link className="btn small" to={addLinkFor(i, i.expected_date, `/months/${ym}`)}>
+                <Link className="btn small" to={scoped(addLinkFor(i, i.expected_date, `/months/${ym}`))}>
                   Add
                 </Link>
                 <button className="btn small ghost" onClick={() => void fine(i)}>

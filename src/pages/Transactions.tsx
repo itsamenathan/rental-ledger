@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router";
 import { api, qs, type TxList } from "../api.ts";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, money } from "../format.ts";
-import { useApi, useOutbox, useSession, useToast } from "../hooks.ts";
+import { useApi, useOutbox, useSession, useToast, useProperty } from "../hooks.ts";
 import { AllocationBadge, Amount } from "../lib.tsx";
 
 const PAGE = 100;
@@ -19,10 +19,11 @@ const FILTER_KEYS = [
   "has_attachment",
   "needs_receipt",
   "vendor",
-  "property_id",
 ] as const;
 
 export default function Transactions() {
+  const { path: scoped, key: propertyKey } = useProperty();
+  const all = propertyKey === "all";
   const { overview, canWrite } = useSession();
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState(params.get("q") ?? "");
@@ -39,7 +40,10 @@ export default function Transactions() {
   // Default to the current year. ?year=all shows every year; a month filter implies its own year.
   const yearParam = params.get("year");
   const allYears = yearParam === "all";
-  const filters = Object.fromEntries(FILTER_KEYS.map((k) => [k, params.get(k) ?? ""]));
+  const filters: Record<string, string> = {
+    ...Object.fromEntries(FILTER_KEYS.map((k) => [k, params.get(k) ?? ""])),
+    property_id: propertyKey,
+  };
   filters.year = allYears ? "" : yearParam || (filters.month ? "" : String(new Date().getFullYear()));
   const offset = Number(params.get("offset") ?? 0);
   const query = qs({ ...filters, limit: PAGE, offset, sort: params.get("sort") ?? "date_desc" });
@@ -110,12 +114,12 @@ export default function Transactions() {
             Export CSV
           </a>
           {canWrite && (
-            <Link className="btn" to="/import">
+            <Link className="btn" to={scoped("/import")}>
               Import CSV
             </Link>
           )}
           {canWrite && (
-            <Link className="btn primary" to="/add">
+            <Link className="btn primary" to={scoped("/add")}>
               + Add
             </Link>
           )}
@@ -212,20 +216,6 @@ export default function Transactions() {
           <option value="false">No receipt</option>
           <option value="needs">Needs a receipt</option>
         </select>
-        {overview.properties.length > 1 && (
-          <select
-            value={filters.property_id}
-            onChange={(e) => set("property_id", e.target.value)}
-            aria-label="Property"
-          >
-            <option value="">All properties</option>
-            {overview.properties.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
         <label className="check">
           <input
             type="checkbox"
@@ -346,6 +336,7 @@ export default function Transactions() {
                 <td>
                   {t.category}
                   {t.subcategory && <small className="muted"> · {t.subcategory}</small>}
+                  {all && <small className="tx-property">{t.property}</small>}
                 </td>
                 <td className="desc">
                   {t.vendor && <strong>{t.vendor} </strong>}

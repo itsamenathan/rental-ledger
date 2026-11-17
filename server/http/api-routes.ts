@@ -43,10 +43,14 @@ const queryYear = (c: Context) => {
   if (!Number.isInteger(y) || y < 2000 || y > 2100) throw badRequest("Invalid year");
   return y;
 };
+/** ?property_id= or ?property= (id or name) for one property; services resolve it (missing = the only one). */
 const queryProperty = (c: Context) => {
   const p = c.req.query("property_id") ?? c.req.query("property");
   return p ? (/^\d+$/.test(p) ? Number(p) : ledger.resolvePropertyId(getDb(), p)) : undefined;
 };
+/** Like queryProperty, for reads that can also add up every property: undefined = ?property=all. */
+const queryScope = (c: Context) =>
+  ledger.resolvePropertyScope(getDb(), c.req.query("property_id") ?? c.req.query("property"));
 
 // ---------------- overview ----------------
 
@@ -98,7 +102,7 @@ api.delete("/receipt-exclusions/:id", (c) => c.json(receipts.removeReceiptExclus
 
 // ---------------- file library ----------------
 
-const fileFilters = (c: Context) => ({ ...c.req.query(), property_id: queryProperty(c) });
+const fileFilters = (c: Context) => ({ ...c.req.query(), property_id: queryScope(c) });
 api.get("/files", (c) => c.json(library.listFiles(getDb(), fileFilters(c))));
 api.get("/files.zip", (c) => {
   const z = library.filesZip(getDb(), actorOf(c), fileFilters(c));
@@ -111,7 +115,9 @@ api.get("/files.zip", (c) => {
 
 // ---------------- transactions ----------------
 
-api.get("/transactions", (c) => c.json(ledger.listTransactions(getDb(), c.req.query())));
+api.get("/transactions", (c) =>
+  c.json(ledger.listTransactions(getDb(), { ...c.req.query(), property_id: queryScope(c) })),
+);
 api.post("/transactions", async (c) => {
   const b = await body(c);
   const db = getDb();
@@ -269,7 +275,7 @@ api.get("/occupancy", (c) =>
   c.json(
     rental.listOccupancy(getDb(), {
       year: c.req.query("year") ? queryYear(c) : undefined,
-      property_id: queryProperty(c),
+      property_id: queryScope(c),
     }),
   ),
 );
@@ -295,7 +301,7 @@ api.get("/calendar", (c) =>
     }),
   ),
 );
-api.get("/calendar/feeds", (c) => c.json(calendar.listFeeds(getDb(), actorOf(c), { property_id: queryProperty(c) })));
+api.get("/calendar/feeds", (c) => c.json(calendar.listFeeds(getDb(), actorOf(c), { property_id: queryScope(c) })));
 api.post("/calendar/feeds", async (c) => c.json(calendar.createFeed(getDb(), actorOf(c), await body(c)), 201));
 api.patch("/calendar/feeds/:id", async (c) => c.json(calendar.updateFeed(getDb(), actorOf(c), id(c), await body(c))));
 api.delete("/calendar/feeds/:id", (c) => {
@@ -312,7 +318,7 @@ api.post("/calendar/feeds/:id/import", async (c) =>
 api.post("/calendar/refresh", async (c) => {
   const raw = (await c.req.text()) ? await body(c) : {};
   const o = z.object({ stale_minutes: z.number().int().min(0).optional() }).parse(raw);
-  return c.json(await calendar.refreshFeeds(getDb(), actorOf(c), { ...o, property_id: queryProperty(c) }));
+  return c.json(await calendar.refreshFeeds(getDb(), actorOf(c), { ...o, property_id: queryScope(c) }));
 });
 
 api.get("/tax-years/:year", (c) => {
@@ -325,14 +331,14 @@ api.put("/tax-years/:year", async (c) =>
 
 // ---------------- reports & exports ----------------
 
-api.get("/reports/summary", (c) => c.json(reports.summary(getDb(), queryYear(c), queryProperty(c))));
+api.get("/reports/summary", (c) => c.json(reports.summary(getDb(), queryYear(c), queryScope(c))));
 api.get("/reports/month", (c) =>
-  c.json(reports.monthDetail(getDb(), recurring.assertMonth(c.req.query("month")), queryProperty(c))),
+  c.json(reports.monthDetail(getDb(), recurring.assertMonth(c.req.query("month")), queryScope(c))),
 );
-api.get("/reports/years", (c) => c.json(reports.yearTotals(getDb(), queryProperty(c))));
-api.get("/reports/categories", (c) => c.json(reports.categoryMonths(getDb(), queryYear(c), queryProperty(c))));
-api.get("/todo", (c) => c.json(todoSummary(getDb(), { propertyId: queryProperty(c) })));
-api.get("/recurring", (c) => c.json(recurring.recurring(getDb(), { propertyId: queryProperty(c) })));
+api.get("/reports/years", (c) => c.json(reports.yearTotals(getDb(), queryScope(c))));
+api.get("/reports/categories", (c) => c.json(reports.categoryMonths(getDb(), queryYear(c), queryScope(c))));
+api.get("/todo", (c) => c.json(todoSummary(getDb(), { propertyId: queryScope(c) })));
+api.get("/recurring", (c) => c.json(recurring.recurring(getDb(), { propertyId: queryScope(c) })));
 api.post("/recurring/dismissals", async (c) => c.json(recurring.dismiss(getDb(), actorOf(c), await body(c)), 201));
 api.delete("/recurring/dismissals/:id", (c) => c.json(recurring.undismiss(getDb(), actorOf(c), id(c))));
 api.get("/reports/tax", (c) => c.json(reports.taxReport(getDb(), queryYear(c), queryProperty(c))));
@@ -353,7 +359,7 @@ api.get("/reports/tax-package.zip", (c) => {
 });
 
 api.get("/export/transactions.csv", (c) => {
-  const q = { ...c.req.query(), limit: "5000" };
+  const q = { ...c.req.query(), property_id: queryScope(c), limit: "5000" };
   const { items } = ledger.listTransactions(getDb(), q);
   return csvResponse(
     c,
