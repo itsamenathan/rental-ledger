@@ -64,7 +64,14 @@ release. Add a tool name to select part of the graph. For example, run
   changed amounts ask again). Months with entries to add or unexplained warnings count on the To do page.
 - Stored files go through `server/services/storage.ts`: identical bytes share one file across `attachments`,
   `manager_documents` and `pending_uploads`; delete rows first, then `releaseFile`. Backups include every key from all
-  three tables.
+  three tables. `storeBytes(db, data, ext, save)` takes a synchronous `save(key)`
+  that writes the row(s) in the same tick as the lookup of an existing file (no `await` between them), so a
+  concurrent `releaseFile` can't delete a file that's about to be referenced.
+- Zip downloads stream through `gatedZipStream`/`zipStream` in `server/services/zip.ts` (files read and compressed
+  one at a time, off the event loop); never build a whole archive in memory. Restores inflate one entry at a time.
+- Restore swaps the database handle and uploads folder inside `exclusive()` from `server/maintenance.ts`: API/MCP
+  requests, streamed downloads and the scheduler hold the gate (`enter()`), so new work gets a 503 and running work
+  finishes first. Background work outside a request must hold the gate too.
 - Receipts picked in the entry form upload right away to `pending_uploads` (`server/services/uploads.ts`,
   `POST /api/uploads`) and are attached by `upload_ids` on create/update inside the save's transaction; the form
   discards them when closed unsaved (`src/receipt-uploads.ts`), and stale ones are pruned after 24 hours. REST only.

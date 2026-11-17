@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vite-plus/test";
+import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 
 const dataDir = mkdtempSync(join(tmpdir(), "rental-restore-test-"));
 process.env.DATA_DIR = dataDir;
@@ -13,6 +13,8 @@ const { getDb } = await import("./db.ts");
 const { seedDefaults } = await import("./seed.ts");
 const { createApp } = await import("./app.ts");
 const { zip, unzip } = await import("./services/backup.ts");
+const { readZip, streamToBuffer, zipStream } = await import("./services/zip.ts");
+const { enter, exclusive, isClosed } = await import("./maintenance.ts");
 
 seedDefaults(getDb());
 const app = createApp();
@@ -58,18 +60,34 @@ beforeAll(async () => {
 });
 
 describe("zip reader", () => {
-  it("round-trips the zip writer", () => {
-    const entries = [
-      { name: "a.txt", data: Buffer.from("hello hello hello") },
-      { name: "dir/b.bin", data: Buffer.from([0, 1, 2, 255]) },
-    ];
-    expect(unzip(zip(entries)).map((e) => [e.name, e.data.toString("hex")])).toEqual(
-      entries.map((e) => [e.name, e.data.toString("hex")]),
-    );
+  const entries = [
+    { name: "a.txt", data: Buffer.from("hello hello hello") },
+    { name: "dir/b.bin", data: Buffer.from([0, 1, 2, 255]) },
+    { name: "photo.jpg", data: Buffer.from("stored, not deflated") },
+    { name: "empty.txt", data: Buffer.alloc(0) },
+  ];
+  const hex = (list: { name: string; data: Buffer }[]) => list.map((e) => [e.name, e.data.toString("hex")]);
+
+  it("round-trips the zip writer", async () => {
+    expect(hex(await unzip(zip(entries)))).toEqual(hex(entries));
   });
 
-  it("rejects garbage", () => {
-    expect(() => unzip(Buffer.from("not a zip at all, sorry"))).toThrow(/Not a zip/);
+  it("round-trips a streamed zip, reading files from disk and skipping ones that are gone", async () => {
+    const path = join(dataDir, "on-disk.txt");
+    writeFileSync(path, "from disk");
+    const z = zipStream([...entries, { name: "disk.txt", path }, { name: "gone.txt", path: join(dataDir, "nope") }]);
+    const buf = await streamToBuffer(z.stream);
+    expect(hex(await unzip(buf))).toEqual(hex([...entries, { name: "disk.txt", data: Buffer.from("from disk") }]));
+    expect(await z.done).toEqual({ bytes: buf.length, files: 5, missing: ["gone.txt"] });
+  });
+
+  it("rejects garbage, and an entry that inflates past its declared size", async () => {
+    expect(() => readZip(Buffer.from("not a zip at all, sorry"))).toThrow(/Not a zip/);
+    // A zip bomb: 10 MB of zeros that claims to be 10 bytes.
+    const bomb = zip([{ name: "rental.db", data: Buffer.alloc(10 * 1024 * 1024) }]);
+    const cd = bomb.readUInt32LE(bomb.length - 6);
+    bomb.writeUInt32LE(10, cd + 24); // central directory: uncompressed size
+    await expect(unzip(bomb)).rejects.toThrow(/Corrupt zip entry/);
   });
 });
 
@@ -162,10 +180,9 @@ describe("restore", () => {
     const bobCookie = (await login("bob@example.com", "bob password!"))!;
 
     // Doctor the backup: carol exists only there, and holds bob's id so bob has to move.
-    const { unzip } = await import("./services/backup.ts");
-    const entries = unzip(backupZip);
+    const restoredEntries = await unzip(backupZip);
     const dbFile = join(dataDir, "doctored.db");
-    writeFileSync(dbFile, entries.find((e) => e.name === "rental.db")!.data);
+    writeFileSync(dbFile, restoredEntries.find((e) => e.name === "rental.db")!.data);
     const doctored = new Database(dbFile);
     doctored
       .prepare(
@@ -173,7 +190,7 @@ describe("restore", () => {
       )
       .run(bob.id, "x");
     doctored.close();
-    const zipped = zip(entries.map((e) => (e.name === "rental.db" ? { ...e, data: readFileSync(dbFile) } : e)));
+    const zipped = zip(restoredEntries.map((e) => (e.name === "rental.db" ? { ...e, data: readFileSync(dbFile) } : e)));
 
     const r = await call("POST", "/api/backup/restore", new Uint8Array(zipped), { "content-type": "application/zip" });
     expect(r.status).toBe(200);
@@ -229,6 +246,54 @@ describe("restore", () => {
     );
     expect(r.status).toBe(400);
     expect(r.json.error).toMatch(/newer version/);
+  });
+
+  it("waits for running work, turns new requests away while it swaps, and allows one restore at a time", async () => {
+    const backup = await call("GET", "/api/backup");
+    expect(backup.status).toBe(200);
+    const running = enter(); // stands in for a request or download still in progress
+    const restoring = call("POST", "/api/backup/restore", new Uint8Array(backup.buf));
+    await vi.waitFor(() => expect(isClosed()).toBe(true));
+
+    const busy = await app.request("/api/transactions", { headers: { cookie } });
+    expect(busy.status).toBe(503);
+    expect(busy.headers.get("retry-after")).toBe("30");
+    expect((await call("POST", "/api/backup/restore", new Uint8Array(backup.buf))).status).toBe(409);
+
+    running();
+    expect((await restoring).status).toBe(200);
+    expect(isClosed()).toBe(false);
+    expect((await call("GET", "/api/transactions")).status).toBe(200);
+  });
+
+  it("lets go of the gate when a download is cancelled part way", async () => {
+    const { createBackup } = await import("./services/backup.ts");
+    const actor = {
+      user: { id: 1, email: "owner@example.com", name: "Owner", role: "admin" as const },
+      apiKeyId: null,
+      canWrite: true,
+      via: "web" as const,
+    };
+    const b = createBackup(getDb(), actor);
+    const reader = b.stream.getReader();
+    expect((await reader.read()).done).toBe(false);
+    await reader.cancel();
+    await expect(b.done).rejects.toThrow();
+    await exclusive(() => {}, 200); // nothing is holding the gate any more
+  });
+
+  it("gives up and reopens when running work doesn't finish in time", async () => {
+    const running = enter();
+    let ran = false;
+    await expect(
+      exclusive(() => {
+        ran = true;
+      }, 20),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(ran).toBe(false);
+    expect(isClosed()).toBe(false);
+    running();
+    enter()(); // open again
   });
 
   it("is admin-only", async () => {

@@ -1,17 +1,18 @@
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "rental-test-"));
 
 const { openDb } = await import("./db.ts");
+const { config } = await import("./config.ts");
 const { seedDefaults } = await import("./seed.ts");
 const { managerDocuments, properties, users } = await import("./db/schema.ts");
 const ledger = await import("./services/ledger.ts");
 const files = await import("./services/attachments.ts");
 const library = await import("./services/files.ts");
-const { unzip } = await import("./services/backup.ts");
+const { streamToBuffer, unzip } = await import("./services/zip.ts");
 const { sha256, storeBytes } = await import("./services/storage.ts");
 
 function setup() {
@@ -52,22 +53,24 @@ describe("file library", () => {
     const a = expense("2026-10-03", -60, "Acme PM");
     const b = expense("2026-10-20", -30, "Acme PM");
     const bytes = new TextEncoder().encode("owner statement csv");
-    const key = await storeBytes(db, bytes, "csv");
     const property = db.select().from(properties).get()!;
-    db.insert(managerDocuments)
-      .values({
-        propertyId: property.id,
-        month: "2026-10",
-        kind: "statement",
-        filename: "statement.csv",
-        contentType: "text/csv",
-        size: bytes.byteLength,
-        sha256: sha256(bytes),
-        storageKey: key,
-        text: "",
-        createdBy: actor.user.id,
-      })
-      .run();
+    await storeBytes(db, bytes, "csv", (key) =>
+      db
+        .insert(managerDocuments)
+        .values({
+          propertyId: property.id,
+          month: "2026-10",
+          kind: "statement",
+          filename: "statement.csv",
+          contentType: "text/csv",
+          size: bytes.byteLength,
+          sha256: sha256(bytes),
+          storageKey: key,
+          text: "",
+          createdBy: actor.user.id,
+        })
+        .run(),
+    );
     await attach(a, "owner statement csv", "statement.csv");
     await attach(b, "owner statement csv", "statement.csv");
     await attach(b, "fee invoice");
@@ -82,7 +85,7 @@ describe("file library", () => {
     expect(library.listFiles(db, { month: "2026-10", source: "manager" }).files).toHaveLength(1);
 
     const z = library.filesZip(db, actor, { month: "2026-10" });
-    expect(unzip(z.data).map((e) => e.name)).toEqual([
+    expect((await unzip(await streamToBuffer(z.stream))).map((e) => e.name)).toEqual([
       "2026-10 - Manager statement.csv",
       "2026-10-20 - Acme PM - 30.00.pdf",
     ]);
@@ -93,20 +96,23 @@ describe("file library", () => {
     const deposit = expense("2026-09-28", -60, "Acme PM");
     const bytes = new TextEncoder().encode("october statement");
     const property = db.select().from(properties).get()!;
-    db.insert(managerDocuments)
-      .values({
-        propertyId: property.id,
-        month: "2026-10",
-        kind: "statement",
-        filename: "october.csv",
-        contentType: "text/csv",
-        size: bytes.byteLength,
-        sha256: sha256(bytes),
-        storageKey: await storeBytes(db, bytes, "csv"),
-        text: "",
-        createdBy: actor.user.id,
-      })
-      .run();
+    await storeBytes(db, bytes, "csv", (key) =>
+      db
+        .insert(managerDocuments)
+        .values({
+          propertyId: property.id,
+          month: "2026-10",
+          kind: "statement",
+          filename: "october.csv",
+          contentType: "text/csv",
+          size: bytes.byteLength,
+          sha256: sha256(bytes),
+          storageKey: key,
+          text: "",
+          createdBy: actor.user.id,
+        })
+        .run(),
+    );
     await attach(deposit, "october statement", "october.csv");
 
     const year = library.listFiles(db, { year: 2026 });
@@ -190,5 +196,33 @@ describe("linkAttachment", () => {
     const [left] = library.listFiles(db, { month: "2026-09" }).files;
     expect(left!.links.map((l) => l.transaction_id)).toEqual([sep]);
     expect((await files.readAttachment(db, left!.links[0]!.attachment_id)).data.toString()).toBe("split invoice");
+  });
+});
+
+describe("shared stored files", () => {
+  it("keeps a file that a new upload reuses while its last other reference is deleted", async () => {
+    const { db, actor, expense, attach } = setup();
+    const a = expense("2026-10-01", -10);
+    const b = expense("2026-10-02", -10);
+    const first = await attach(a, "same bytes");
+    // Upload the same bytes to b while a's attachment (the only other reference) is deleted.
+    const [second] = await Promise.all([attach(b, "same bytes"), files.deleteAttachment(db, actor, first.id)]);
+    const read = await files.readAttachment(db, second.id);
+    expect(Buffer.from(read.data).toString()).toBe("same bytes");
+  });
+
+  it("removes a newly written file when the row that would use it can't be saved", async () => {
+    const { db } = setup();
+    const txtFiles = () =>
+      existsSync(config.uploadsDir)
+        ? readdirSync(config.uploadsDir, { recursive: true }).filter((f) => String(f).endsWith(".txt")).length
+        : 0;
+    const before = txtFiles();
+    await expect(
+      storeBytes(db, new TextEncoder().encode("never saved"), "txt", () => {
+        throw new Error("insert failed");
+      }),
+    ).rejects.toThrow("insert failed");
+    await vi.waitFor(() => expect(txtFiles()).toBe(before)); // the unlink finishes in the background
   });
 });

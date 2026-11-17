@@ -7,6 +7,7 @@
  */
 import { config } from "./config.ts";
 import { getDb } from "./db.ts";
+import { enter } from "./maintenance.ts";
 import { refreshFeeds } from "./services/calendar.ts";
 import { log, withSpan } from "./telemetry.ts";
 
@@ -21,6 +22,12 @@ export function startScheduler(minutes = config.calendarRefreshMinutes) {
   let running = false;
   const tick = async () => {
     if (running) return; // a slow download is still going
+    let release: () => void;
+    try {
+      release = enter(); // a restore is swapping the database: skip this tick
+    } catch {
+      return;
+    }
     running = true;
     try {
       // getDb() on every tick: a backup restore swaps the handle.
@@ -41,6 +48,7 @@ export function startScheduler(minutes = config.calendarRefreshMinutes) {
       log.error({ err }, "background calendar refresh failed");
     } finally {
       running = false;
+      release();
     }
   };
   const first = setTimeout(() => void tick(), 60_000);

@@ -74,24 +74,48 @@ function existingKey(db: DB, sha: string): string | undefined {
   return rows.find((r) => existsSync(pathFor(r.key)))?.key;
 }
 
-/** Store bytes (or reuse the identical stored file) and return its key. */
-export async function storeBytes(db: DB, data: Uint8Array, ext: string, sha = sha256(data)): Promise<string> {
+/** True while any row in any table points at `key`. */
+function referenced(db: DB, key: string) {
+  return !!(
+    db.select({ id: attachments.id }).from(attachments).where(eq(attachments.storageKey, key)).get() ??
+    db.select({ id: managerDocuments.id }).from(managerDocuments).where(eq(managerDocuments.storageKey, key)).get() ??
+    db.select({ id: pendingUploads.id }).from(pendingUploads).where(eq(pendingUploads.storageKey, key)).get()
+  );
+}
+
+/**
+ * Store bytes (or reuse the identical stored file) and save the row(s) that point at it with `save(key)`.
+ *
+ * `save` must be synchronous: it runs in the same tick as the final lookup of an existing file, so `releaseFile` can't
+ * delete a file between "found it" and "row saved". If `save` throws, or saves nothing that points at a newly written
+ * file, that file is removed again.
+ */
+export async function storeBytes<T>(
+  db: DB,
+  data: Uint8Array,
+  ext: string,
+  save: (key: string) => T,
+  sha = sha256(data),
+): Promise<T> {
   const reuse = existingKey(db, sha);
-  if (reuse) return reuse;
-  const key = join(new Date().toISOString().slice(0, 7), `${randomBytes(12).toString("hex")}.${ext}`);
-  const path = pathFor(key);
+  if (reuse) return save(reuse);
+  const written = join(new Date().toISOString().slice(0, 7), `${randomBytes(12).toString("hex")}.${ext}`);
+  const path = pathFor(written);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, data);
-  return key;
+  // The same bytes may have been stored by someone else while this file was written: share theirs.
+  const key = existingKey(db, sha) ?? written;
+  try {
+    return save(key);
+  } finally {
+    if (!referenced(db, written)) void unlink(path).catch(() => {});
+  }
 }
 
 export const readStored = (key: string) => readFile(pathFor(key));
 
 /** Call after deleting a row that pointed at `key`: removes the file once nothing references it. */
 export async function releaseFile(db: DB, key: string) {
-  const used =
-    db.select({ id: attachments.id }).from(attachments).where(eq(attachments.storageKey, key)).get() ??
-    db.select({ id: managerDocuments.id }).from(managerDocuments).where(eq(managerDocuments.storageKey, key)).get() ??
-    db.select({ id: pendingUploads.id }).from(pendingUploads).where(eq(pendingUploads.storageKey, key)).get();
-  if (!used) await unlink(pathFor(key)).catch(() => {});
+  // Checked and removed with no await in between the check and the row deletes that came before it.
+  if (!referenced(db, key)) await unlink(pathFor(key)).catch(() => {});
 }

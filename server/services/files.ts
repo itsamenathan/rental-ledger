@@ -6,7 +6,7 @@
  * A receipt belongs to the month of its entry's date; manager paperwork to the month it covers. Upload dates don't
  * matter. Entries in the trash are left out.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { extname, resolve, sep } from "node:path";
 import { and, asc, count, eq, inArray, isNull, like, type SQL } from "drizzle-orm";
 import { z } from "zod";
@@ -15,7 +15,7 @@ import type { DB } from "../db.ts";
 import { attachments, categories, managerDocuments, properties, transactions } from "../db/schema.ts";
 import { audit, badRequest, type Actor } from "../context.ts";
 import { RECEIPT_MIN_DOLLARS } from "./receipts.ts";
-import { zip } from "./backup.ts";
+import { gatedZipStream, type ZipSource } from "./zip.ts";
 import { listTransactions, type Transaction } from "./ledger.ts";
 
 export const fileQuery = z
@@ -299,7 +299,7 @@ export function filesZip(db: DB, actor: Actor | null, raw: unknown) {
     ].map((r) => [r.sha, r.key]),
   );
   const used = new Set<string>();
-  const entries: { name: string; data: Buffer }[] = [];
+  const entries: ZipSource[] = [];
   const missing: string[] = [];
   for (const f of lib.files) {
     const key = keys.get(f.key);
@@ -312,7 +312,7 @@ export function filesZip(db: DB, actor: Actor | null, raw: unknown) {
     let name = `${base}${ext}`;
     for (let n = 2; used.has(name.toLowerCase()); n++) name = `${base} ${n}${ext}`;
     used.add(name.toLowerCase());
-    entries.push({ name, data: readFileSync(path) });
+    entries.push({ name, path });
   }
   const label = lib.period.month ?? String(lib.period.year);
   audit(db, actor, "export", "files", null, {
@@ -320,5 +320,5 @@ export function filesZip(db: DB, actor: Actor | null, raw: unknown) {
     files: entries.length,
     missing: missing.length || undefined,
   });
-  return { filename: `Files ${label}.zip`, data: zip(entries), files: entries.length, missing };
+  return { filename: `Files ${label}.zip`, stream: gatedZipStream(entries).stream, files: entries.length, missing };
 }

@@ -8,6 +8,7 @@ import { authRoutes } from "./http/auth-routes.ts";
 import { api } from "./http/api-routes.ts";
 import { mcpRoutes } from "./http/mcp.ts";
 import { API_GUIDE } from "./guide.ts";
+import { gate } from "./maintenance.ts";
 import { httpTelemetry } from "./telemetry.ts";
 
 export function createApp() {
@@ -36,6 +37,10 @@ export function createApp() {
   app.get("/llms.txt", (c) => c.text(API_GUIDE, 200, { "Content-Type": "text/markdown; charset=utf-8" }));
   app.get("/api/docs", (c) => c.text(API_GUIDE, 200, { "Content-Type": "text/markdown; charset=utf-8" }));
 
+  // Restore waits for running requests and turns new ones away while it swaps the database (it takes the gate itself).
+  const maintenance = gate((path) => path === "/api/backup/restore");
+  app.use("/api/*", maintenance);
+  app.use("/mcp", maintenance);
   app.use("/api/*", resolveActor("api"));
   app.use("/mcp", resolveActor("mcp"));
   app.route("/api/auth", authRoutes);
