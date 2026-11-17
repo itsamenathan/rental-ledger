@@ -1,5 +1,6 @@
 import react from "@vitejs/plugin-react";
 import { getRequestListener } from "@hono/node-server";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { defineConfig, lazyPlugins, type Plugin, type ViteDevServer } from "vite-plus";
@@ -51,7 +52,34 @@ function serviceWorker(): Plugin {
   };
 }
 
+/** Run git and return its trimmed output, or null when git or the repository isn't there (e.g. in Docker). */
+function git(...args: string[]): string | null {
+  try {
+    return execFileSync("git", args, { stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The version shown in the app: the commit's date plus its hash, linked to the commit. GIT_SHA / GIT_DATE (Docker
+ * build args) win over git, and a build without either still works.
+ */
+function buildInfo() {
+  const sha = process.env.GIT_SHA?.trim() || git("rev-parse", "HEAD");
+  const date =
+    process.env.GIT_DATE?.trim() || git("log", "-1", "--format=%cs") || new Date().toISOString().slice(0, 10);
+  const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as {
+    repository?: { url?: string };
+  };
+  const repo = pkg.repository?.url?.replace(/^git\+/, "").replace(/\.git$/, "");
+  return { date, sha, url: sha && repo ? `${repo}/commit/${sha}` : null };
+}
+
 export default defineConfig({
+  define: {
+    __APP_BUILD__: JSON.stringify(buildInfo()),
+  },
   fmt: {
     printWidth: 120,
   },

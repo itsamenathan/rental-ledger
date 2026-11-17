@@ -2,7 +2,12 @@
 services:
   rental-ledger:
     image: rental-ledger:latest
-    build: .
+    build:
+      context: .
+      # Version shown in the app: GIT_SHA=$(git rev-parse HEAD) GIT_DATE=$(git log -1 --format=%cs) docker compose build
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+        GIT_DATE: ${GIT_DATE:-}
     restart: unless-stopped
     environment:
       PUBLIC_URL: https://rental.example.com

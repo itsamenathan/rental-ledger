@@ -135,6 +135,25 @@ export function Icon({ d, size = 20 }: { d: string; size?: number }) {
   );
 }
 
+/** "v2026-09-01 · 5d17935", the hash linking to its commit (set at build time, see vite.config.ts). */
+function BuildVersion() {
+  const { date, sha, url } = __APP_BUILD__;
+  const short = sha?.slice(0, 7);
+  return (
+    <small className="build-version">
+      v{date}
+      {short && " · "}
+      {short && url ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" title={`Commit ${sha}`}>
+          {short}
+        </a>
+      ) : (
+        short
+      )}
+    </small>
+  );
+}
+
 function Shell() {
   const { user, logout: signOut, canWrite } = useSession();
   const outbox = useOutbox();
@@ -235,7 +254,7 @@ function Shell() {
         <div className="sidebar-foot">
           <div className="who" title={user.email}>
             {user.name || user.email}
-            <small>{user.role}</small>
+            <BuildVersion />
           </div>
           <button className="link" onClick={() => void logout()}>
             Sign out
@@ -319,7 +338,7 @@ function Shell() {
           <div className="more-foot">
             <div className="who" title={user.email}>
               {user.name || user.email}
-              <small>{user.role}</small>
+              <BuildVersion />
             </div>
             <button className="link" onClick={() => void logout()}>
               Sign out
