@@ -6,9 +6,10 @@
  */
 import { and, eq, inArray, lt } from "drizzle-orm";
 import { z } from "zod";
-import type { DB } from "../db.ts";
-import { attachments, pendingUploads } from "../db/schema.ts";
+import { tx, type DB } from "../db.ts";
+import { pendingUploads } from "../db/schema.ts";
 import { audit, badRequest, requireWrite, type Actor } from "../context.ts";
+import { attachStored } from "./attachments.ts";
 import { checkUpload, cleanFilename, releaseFile, sha256, storeBytes } from "./storage.ts";
 
 export const STALE_HOURS = 24;
@@ -41,22 +42,30 @@ export async function stageUpload(
   await pruneStaleUploads(db);
   const { contentType, ext } = checkUpload(file);
   const sha = sha256(file.data);
-  const key = await storeBytes(db, file.data, ext, sha);
   const filename = cleanFilename(file.filename, `receipt.${ext}`);
-  const row = db
-    .insert(pendingUploads)
-    .values({
-      filename,
-      contentType,
-      size: file.data.byteLength,
-      sha256: sha,
-      storageKey: key,
-      createdBy: actor.user.id,
-    })
-    .returning(cols)
-    .get();
-  audit(db, actor, "create", "pending_upload", row.id, { filename, size: row.size });
-  return row;
+  return storeBytes(
+    db,
+    file.data,
+    ext,
+    (key) =>
+      tx(db, () => {
+        const row = db
+          .insert(pendingUploads)
+          .values({
+            filename,
+            contentType,
+            size: file.data.byteLength,
+            sha256: sha,
+            storageKey: key,
+            createdBy: actor.user.id,
+          })
+          .returning(cols)
+          .get();
+        audit(db, actor, "create", "pending_upload", row.id, { filename, size: row.size });
+        return row;
+      }),
+    sha,
+  );
 }
 
 /** Drop uploads the caller made for a form that wasn't saved. Ids that are gone (already saved or discarded) are skipped. */
@@ -93,26 +102,14 @@ export function claimUploads(db: DB, actor: Actor, transactionId: number, raw: u
     throw badRequest("A receipt upload has expired or was removed. Add the receipt again, then save.");
   for (const r of rows) {
     db.delete(pendingUploads).where(eq(pendingUploads.id, r.id)).run();
-    const already = db
-      .select({ id: attachments.id })
-      .from(attachments)
-      .where(and(eq(attachments.transactionId, transactionId), eq(attachments.sha256, r.sha256)))
-      .get();
-    if (already) continue; // the stored file stays: the existing attachment uses the same key
-    const { id } = db
-      .insert(attachments)
-      .values({
-        transactionId,
-        filename: r.filename,
-        contentType: r.contentType,
-        size: r.size,
-        sha256: r.sha256,
-        storageKey: r.storageKey,
-        createdBy: actor.user.id,
-      })
-      .returning({ id: attachments.id })
-      .get();
-    audit(db, actor, "create", "attachment", id, { transaction_id: transactionId, filename: r.filename, size: r.size });
+    // A file whose bytes are already on the entry isn't added again; the stored file stays, that attachment uses it.
+    attachStored(db, actor, transactionId, {
+      filename: r.filename,
+      contentType: r.contentType,
+      size: r.size,
+      sha256: r.sha256,
+      storageKey: r.storageKey,
+    });
   }
 }
 

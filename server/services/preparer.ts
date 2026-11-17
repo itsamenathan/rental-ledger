@@ -2,7 +2,7 @@
  * Everything the tax preparer needs for one year, in one zip: a readable summary, the tax report and all of the
  * year's transactions as CSV, and the receipts (named by date, category and amount).
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { extname, resolve, sep } from "node:path";
 import { and, between, eq, isNull } from "drizzle-orm";
 import { config } from "../config.ts";
@@ -12,7 +12,7 @@ import { audit, type Actor } from "../context.ts";
 import { transactionsCsv } from "./csv.ts";
 import { listTransactions } from "./ledger.ts";
 import { taxReport, taxReportCsv } from "./reports.ts";
-import { zip } from "./backup.ts";
+import { gatedZipStream, type ZipSource } from "./zip.ts";
 
 const usd = (n: number) =>
   (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -124,7 +124,7 @@ export function preparerPackage(db: DB, actor: Actor | null, year: number, prope
     .where(and(isNull(t.deletedAt), eq(t.propertyId, r.property.id), between(t.date, `${year}-01-01`, `${year}-12-31`)))
     .orderBy(t.date, t.id)
     .all();
-  const receipts: { name: string; data: Buffer }[] = [];
+  const receipts: ZipSource[] = [];
   const used = new Set<string>();
   for (const f of files) {
     const p = resolve(root, f.key);
@@ -133,10 +133,10 @@ export function preparerPackage(db: DB, actor: Actor | null, year: number, prope
     let name = `${base}${extname(f.filename) || extname(f.key)}`;
     for (let n = 2; used.has(name); n++) name = `${base} ${n}${extname(f.filename) || extname(f.key)}`;
     used.add(name);
-    receipts.push({ name, data: readFileSync(p) });
+    receipts.push({ name, path: p });
   }
 
-  const data = zip([
+  const { stream } = gatedZipStream([
     { name: "Summary.txt", data: Buffer.from(summaryText(r, receipts.length)) },
     { name: `Tax summary ${year}.csv`, data: Buffer.from(taxReportCsv(r)) },
     { name: `Transactions ${year}.csv`, data: Buffer.from(transactionsCsv(items)) },
@@ -150,7 +150,7 @@ export function preparerPackage(db: DB, actor: Actor | null, year: number, prope
   });
   return {
     filename: `${safe(r.property.name)} ${year} tax package.zip`,
-    data,
+    stream,
     transactions: items.length,
     receipts: receipts.length,
   };

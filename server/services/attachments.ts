@@ -55,35 +55,57 @@ export async function addAttachment(
   getTransaction(db, transactionId);
   const { contentType, ext } = checkUpload(file);
   const sha = sha256(file.data);
-  // Same bytes already attached to this entry: nothing to add (uploads are idempotent).
-  const sameHere = db
-    .select({ id: attachments.id })
-    .from(attachments)
-    .where(and(eq(attachments.transactionId, transactionId), eq(attachments.sha256, sha)))
-    .get();
-  if (sameHere) {
-    const { storage_key: _k, ...meta } = getStored(db, sameHere.id);
-    return meta;
-  }
-  // Same bytes stored for another entry (or a manager document): share that file instead of writing a second copy.
-  const key = await storeBytes(db, file.data, ext, sha);
   const filename = cleanFilename(file.filename, `receipt.${ext}`);
-  const { id } = db
-    .insert(attachments)
-    .values({
-      transactionId,
-      filename,
-      contentType,
-      size: file.data.byteLength,
-      sha256: sha,
-      storageKey: key,
-      createdBy: actor.user.id,
-    })
-    .returning({ id: attachments.id })
-    .get();
-  audit(db, actor, "create", "attachment", id, { transaction_id: transactionId, filename, size: file.data.byteLength });
+  // Same bytes stored for another entry (or a manager document): share that file instead of writing a second copy.
+  const id = await storeBytes(
+    db,
+    file.data,
+    ext,
+    (key) =>
+      attachStored(db, actor, transactionId, {
+        filename,
+        contentType,
+        size: file.data.byteLength,
+        sha256: sha,
+        storageKey: key,
+      }),
+    sha,
+  );
   const { storage_key: _k, ...meta } = getStored(db, id);
   return meta;
+}
+
+/**
+ * Attach an already stored file to an entry and return the attachment id. Synchronous, so it can run inside a
+ * caller's transaction. Same bytes already on the entry: that attachment's id, nothing added (uploads are idempotent).
+ */
+export function attachStored(
+  db: DB,
+  actor: Actor,
+  transactionId: number,
+  file: { filename: string; contentType: string; size: number; sha256: string; storageKey: string },
+  details: Record<string, unknown> = {},
+): number {
+  return tx(db, () => {
+    const sameHere = db
+      .select({ id: attachments.id })
+      .from(attachments)
+      .where(and(eq(attachments.transactionId, transactionId), eq(attachments.sha256, file.sha256)))
+      .get();
+    if (sameHere) return sameHere.id;
+    const { id } = db
+      .insert(attachments)
+      .values({ transactionId, ...file, createdBy: actor.user.id })
+      .returning({ id: attachments.id })
+      .get();
+    audit(db, actor, "create", "attachment", id, {
+      transaction_id: transactionId,
+      filename: file.filename,
+      size: file.size,
+      ...details,
+    });
+    return id;
+  });
 }
 
 export async function readAttachment(db: DB, id: number) {

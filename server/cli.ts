@@ -12,8 +12,8 @@ import { closeDb, getDb } from "./db.ts";
 import { seedDefaults } from "./seed.ts";
 import { createUser, findUserByEmail, setPassword } from "./services/auth.ts";
 import { importFromGrist } from "./grist-import.ts";
-import { createBackup, restoreBackup } from "./services/backup.ts";
-import { readFileSync, writeFileSync } from "node:fs";
+import { backupFilename, restoreBackup, writeBackup } from "./services/backup.ts";
+import { readFileSync } from "node:fs";
 
 const [command, ...rest] = process.argv.slice(2);
 const parsed = parseArgs({
@@ -71,17 +71,16 @@ switch (command) {
     break;
   }
   case "backup": {
-    const b = createBackup(db, null);
-    const out = values.out ?? b.filename;
-    writeFileSync(out, b.data);
-    console.log(`Wrote ${out} (${(b.data.length / 1024).toFixed(0)} KB, ${b.receipts} receipts)`);
+    const out = values.out ?? backupFilename();
+    const b = await writeBackup(db, null, out);
+    console.log(`Wrote ${out} (${(b.bytes / 1024).toFixed(0)} KB, ${b.receipts} receipts)`);
     if (b.missing.length) console.warn(`Missing receipt files: ${b.missing.join(", ")}`);
     break;
   }
   case "restore": {
     const file = positionals[0];
     if (!file) throw new Error("Usage: restore <backup.zip>");
-    const r = restoreBackup(db, null, readFileSync(file), file);
+    const r = await restoreBackup(db, null, readFileSync(file), file);
     console.log(
       `Restored ${r.transactions} transactions and ${r.receipts} receipts from ${file}.\n` +
         `Users: ${r.users_kept} kept their current sign-in, ${r.users_disabled} only in the backup (disabled), ` +

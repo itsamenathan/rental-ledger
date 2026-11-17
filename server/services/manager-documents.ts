@@ -4,11 +4,11 @@
  */
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import type { DB } from "../db.ts";
+import { tx, type DB } from "../db.ts";
 import { managerDocuments } from "../db/schema.ts";
 import { audit, badRequest, notFound, requireWrite, type Actor } from "../context.ts";
 import { log } from "../telemetry.ts";
-import { addAttachment } from "./attachments.ts";
+import { attachStored } from "./attachments.ts";
 import { extractPdfText } from "./invoice-pdf.ts";
 import { resolvePropertyId } from "./ledger.ts";
 import {
@@ -149,28 +149,44 @@ export async function saveDocuments(
       });
       continue;
     }
-    for (const old of occupied) await deleteDocument(db, actor, old.id);
     const ext = isPdf(file) ? "pdf" : p.kind === "statement" ? "csv" : "txt";
-    const key = await storeBytes(db, file.data, ext, p.sha);
     const contentType = isPdf(file) ? "application/pdf" : p.kind === "statement" ? "text/csv" : "text/plain";
-    const { id } = db
-      .insert(managerDocuments)
-      .values({
-        propertyId,
-        month,
-        kind: p.kind,
-        filename: file.filename.replace(/[\\/\r\n"]/g, "_").slice(0, 200) || `${p.kind}.${ext}`,
-        contentType,
-        size: file.data.byteLength,
-        sha256: p.sha,
-        storageKey: key,
-        text: p.text,
-        reference,
-        createdBy: actor.user.id,
-      })
-      .returning({ id: managerDocuments.id })
-      .get();
-    audit(db, actor, "create", "manager_document", id, { month, kind: p.kind, filename: file.filename, reference });
+    // The replaced documents go in the same transaction as the new one: a failure keeps the old paperwork.
+    const { id, released } = await storeBytes(
+      db,
+      file.data,
+      ext,
+      (key) =>
+        tx(db, () => {
+          const released = occupied.map((old) => removeDocumentRow(db, actor, old.id));
+          const { id } = db
+            .insert(managerDocuments)
+            .values({
+              propertyId,
+              month,
+              kind: p.kind,
+              filename: file.filename.replace(/[\\/\r\n"]/g, "_").slice(0, 200) || `${p.kind}.${ext}`,
+              contentType,
+              size: file.data.byteLength,
+              sha256: p.sha,
+              storageKey: key,
+              text: p.text,
+              reference,
+              createdBy: actor.user.id,
+            })
+            .returning({ id: managerDocuments.id })
+            .get();
+          audit(db, actor, "create", "manager_document", id, {
+            month,
+            kind: p.kind,
+            filename: file.filename,
+            reference,
+          });
+          return { id, released };
+        }),
+      p.sha,
+    );
+    for (const key of released) await releaseFile(db, key);
     results.push({
       filename: file.filename,
       status: occupied.length ? "replaced" : "saved",
@@ -195,12 +211,20 @@ export function updateDocument(db: DB, actor: Actor, id: number, raw: unknown) {
   return toView(db, before.propertyId, id);
 }
 
-export async function deleteDocument(db: DB, actor: Actor, id: number) {
-  requireWrite(actor);
+/** Delete a document's row (and audit it); returns its storage key for `releaseFile` once the transaction is done. */
+function removeDocumentRow(db: DB, actor: Actor, id: number) {
   const d = docSelect(db, id);
   db.delete(managerDocuments).where(eq(managerDocuments.id, id)).run();
-  await releaseFile(db, d.storageKey);
   audit(db, actor, "delete", "manager_document", id, { month: d.month, kind: d.kind, filename: d.filename });
+  return d.storageKey;
+}
+
+export async function deleteDocument(db: DB, actor: Actor, id: number) {
+  requireWrite(actor);
+  await releaseFile(
+    db,
+    tx(db, () => removeDocumentRow(db, actor, id)),
+  );
   return { id, deleted: true };
 }
 
@@ -214,31 +238,34 @@ export async function readDocument(db: DB, id: number) {
 
 /**
  * Apply a month from its saved documents, then keep the paperwork with the books: each invoice is attached to the
- * entries for its lines, and the statement to the management-fee entry. Identical files share storage.
+ * entries for its lines, and the statement to the management-fee entry. One transaction: the entries and their
+ * attachments are saved together or not at all. The files are already stored, so attaching only adds rows.
  */
-export async function applySavedMonth(db: DB, actor: Actor, raw: Record<string, unknown> & { attach?: boolean }) {
+export function applySavedMonth(db: DB, actor: Actor, raw: Record<string, unknown> & { attach?: boolean }) {
   const { attach = true, ...rest } = raw;
-  const result = applyManagerMonth(db, actor, rest);
-  const attached: number[] = [];
-  if (attach) {
-    const propertyId = resolvePropertyId(db, (rest.property_id ?? rest.property) as number | string | undefined);
-    const docs = listDocuments(db, propertyId, { month: result.month });
-    const targets: [number, number][] = []; // [documentId, transactionId]
-    for (const lt of result.line_transactions) if (lt.document_id) targets.push([lt.document_id, lt.transaction_id]);
-    const statement = docs.filter((d) => d.kind === "statement").at(-1);
-    if (statement && result.anchor_transaction_id) targets.push([statement.id, result.anchor_transaction_id]);
-    const cache = new Map<number, { filename: string; contentType: string; data: Uint8Array }>();
-    for (const [docId, txId] of targets) {
-      let file = cache.get(docId);
-      if (!file) {
-        const d = await readDocument(db, docId);
-        file = { filename: d.meta.filename, contentType: d.meta.content_type, data: new Uint8Array(d.data) };
-        cache.set(docId, file);
+  return tx(db, () => {
+    const result = applyManagerMonth(db, actor, rest);
+    const attached = new Set<number>();
+    if (attach) {
+      const propertyId = resolvePropertyId(db, (rest.property_id ?? rest.property) as number | string | undefined);
+      const docs = listDocuments(db, propertyId, { month: result.month });
+      const targets: [number, number][] = []; // [documentId, transactionId]
+      for (const lt of result.line_transactions) if (lt.document_id) targets.push([lt.document_id, lt.transaction_id]);
+      const statement = docs.filter((d) => d.kind === "statement").at(-1);
+      if (statement && result.anchor_transaction_id) targets.push([statement.id, result.anchor_transaction_id]);
+      for (const [docId, txId] of targets) {
+        const d = docSelect(db, docId);
+        const file = {
+          filename: d.filename,
+          contentType: d.contentType,
+          size: d.size,
+          sha256: d.sha256,
+          storageKey: d.storageKey,
+        };
+        // Same bytes already on the entry: kept as is. The attachment shares the document's stored file.
+        attached.add(attachStored(db, actor, txId, file, { manager_document_id: docId }));
       }
-      // addAttachment ignores the same bytes already on the entry and reuses the stored file.
-      const a = await addAttachment(db, actor, txId, file);
-      attached.push(a.id);
     }
-  }
-  return { ...result, attachments: [...new Set(attached)].length };
+    return { ...result, attachments: attached.size };
+  });
 }

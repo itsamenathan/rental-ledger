@@ -119,7 +119,7 @@ const fileFilters = (c: Context) => ({ ...c.req.query(), property_id: queryScope
 api.get("/files", (c) => c.json(library.listFiles(getDb(), fileFilters(c))));
 api.get("/files.zip", (c) => {
   const z = library.filesZip(getDb(), actorOf(c), fileFilters(c));
-  return c.body(new Uint8Array(z.data), 200, {
+  return c.body(z.stream, 200, {
     "Content-Type": "application/zip",
     "Content-Disposition": disposition("attachment", z.filename),
     "Cache-Control": "no-store",
@@ -244,7 +244,7 @@ api.get("/manager/months/:month", (c) =>
   ),
 );
 api.post("/manager/months/:month/apply", async (c) =>
-  c.json(await docs.applySavedMonth(getDb(), actorOf(c), { ...(await body(c)), month: monthParam(c) })),
+  c.json(docs.applySavedMonth(getDb(), actorOf(c), { ...(await body(c)), month: monthParam(c) })),
 );
 /** Mark a month's warning as explained ({key, note}), or undo that. */
 api.post("/manager/months/:month/explained", async (c) =>
@@ -389,7 +389,7 @@ api.get("/reports/tax.csv", (c) => {
 // Everything for the tax preparer for one year: summary, tax CSV, transactions CSV, receipts.
 api.get("/reports/tax-package.zip", (c) => {
   const p = preparerPackage(getDb(), actorOf(c), queryYear(c), queryProperty(c));
-  return c.body(new Uint8Array(p.data), 200, {
+  return c.body(p.stream, 200, {
     "Content-Type": "application/zip",
     "Content-Disposition": disposition("attachment", p.filename),
     "Cache-Control": "no-store",
@@ -409,7 +409,7 @@ api.get("/export/transactions.csv", (c) => {
 // Full backup (admin): database snapshot + receipts as a zip.
 api.get("/backup", (c) => {
   const b = createBackup(getDb(), actorOf(c));
-  return c.body(new Uint8Array(b.data), 200, {
+  return c.body(b.stream, 200, {
     "Content-Type": "application/zip",
     "Content-Disposition": disposition("attachment", b.filename),
     "Cache-Control": "no-store",
@@ -422,7 +422,7 @@ api.post("/backup/restore", async (c) => {
   requireAdmin(actor); // before reading a large body
   const data = Buffer.from(await c.req.arrayBuffer());
   if (!data.length) throw badRequest("Send the backup .zip as the request body");
-  return c.json(restoreBackup(getDb(), actor, data, sourceName(c.req.header("x-filename"))));
+  return c.json(await restoreBackup(getDb(), actor, data, sourceName(c.req.header("x-filename"))));
 });
 
 const sourceName = (h: string | undefined) => {
