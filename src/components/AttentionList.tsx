@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useLocation } from "react-router";
 import { addLinkFor, dismissRecurring, qs, type RecurringAlert, type RecurringSeries } from "../api.ts";
 import { dateInMonth, monthShort } from "../format.ts";
-import { useSession, useToast } from "../hooks.ts";
+import { useSession, useToast, useScopedPath } from "../hooks.ts";
 
 const ICON: Record<RecurringAlert["type"], string> = {
   missing: "?",
@@ -23,6 +23,7 @@ export default function AttentionList({
   limit?: number;
   onChanged: () => void;
 }) {
+  const scoped = useScopedPath();
   const { canWrite } = useSession();
   const here = useLocation().pathname;
   const toast = useToast();
@@ -51,20 +52,25 @@ export default function AttentionList({
               <div className="attention-body">
                 <div>{a.message}</div>
                 <div className="attention-actions">
-                  <Link to={`/months/${a.month}`} className="link small">
+                  <Link to={scoped(`/months/${a.month}`)} className="link small">
                     Open {monthShort(a.month)}
                   </Link>
                   {canWrite && (
                     <>
                       {a.type === "missing" && s && (
-                        <Link className="btn small" to={addLinkFor(s, dateInMonth(a.month, s.expected_day), here)}>
+                        <Link
+                          className="btn small"
+                          to={scoped(addLinkFor(s, dateInMonth(a.month, s.expected_day), here))}
+                        >
                           Add it
                         </Link>
                       )}
                       {a.type === "duplicate" && a.ids && (
                         <Link
                           className="btn small"
-                          to={`/transactions${qs({ month: a.month, category: s?.category_id, vendor: s?.vendor || undefined, q: s?.subcategory || undefined })}`}
+                          to={scoped(
+                            `/transactions${qs({ month: a.month, category: s?.category_id, vendor: s?.vendor || undefined, q: s?.subcategory || undefined })}`,
+                          )}
                         >
                           Review
                         </Link>

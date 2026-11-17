@@ -40,6 +40,16 @@ release. Add a tool name to select part of the graph. For example, run
   `server/db/migrations/`, and commit both. Never hand-write or edit an applied migration. Migrations apply automatically
   on startup (`runMigrations` in `server/db.ts`).
 - Use `tx(db, fn)` from `server/db.ts` for multi-statement writes; nested calls join the outer transaction.
+- Properties are separate books. Transactions, occupancy, calendars, tax years and manager paperwork belong to one
+  property; users, API keys, categories, receipt rules, import profiles and backups are app-wide. Services take an
+  optional `propertyId` (undefined = every property); REST/MCP resolve it with `resolvePropertyId` (writes and
+  per-property reads) or `resolvePropertyScope` (reads that may add up, `property=all`). A missing property only
+  falls back to the sole active one; with several it's a 400, never a guess.
+- In the app every page lives under `/p/<id>/…` (`/p/all/…` for Overview, Month, Categories, Recurring, To do,
+  Transactions, Files; `ALL_PAGES` in `src/scope.ts`). Build links with `useScopedPath()` and send `useProperty().qs`
+  on API calls; the shell's `PropertySwitcher` is the only property picker (hidden with one active property). Old
+  URLs redirect to the last property used. `/settings` stays app-wide; `/p/<id>/settings` is the property's own.
+- PATCH bodies go through `parsePatch` in `ledger.ts`: zod 4 fills `.default()` values even inside `.partial()`.
 - Recurring-bill detection (`server/services/recurring.ts`) is computed from history on each request; the only stored
   state is user feedback in `recurring_dismissals` (month = '' means stop tracking the series). Tests in
   `server/recurring.test.ts` pin the rules with a fixed `today`.
@@ -76,8 +86,10 @@ release. Add a tool name to select part of the graph. For example, run
 
 # Test harness (worktrees)
 
-Each worktree gets its own throwaway `./data` with fictional data (about 3 years of transactions, receipts, occupancy,
-and To do items: a missing bill, a duplicate, a flagged and an unallocated entry) and known logins. T3 Code runs
+Each worktree gets its own throwaway `./data` with fictional data and known logins: Harbor View Cottage (about 3 years
+of transactions, receipts, occupancy, and To do items: a missing bill, a duplicate, a flagged and an unallocated
+entry) and a smaller Pine Ridge Cabin (2 years, its own calendar and one flagged entry), so the property switcher and
+`/p/all` have something to show. T3 Code runs
 `scripts/harness setup` when it creates a worktree.
 
 - `scripts/harness dev` starts `vp dev` on 0.0.0.0 at this worktree's own port (stable per path, printed and stored in

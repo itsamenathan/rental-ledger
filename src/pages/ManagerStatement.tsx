@@ -2,7 +2,7 @@ import { useEffect, useState, type DragEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api.ts";
 import { fmtDate, money, monthTitle, shiftMonth, thisMonth } from "../format.ts";
-import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
+import { useApi, useSession, useToast, useScopedPath, useProperty } from "../hooks.ts";
 import TxEditModal from "../components/TxEditModal.tsx";
 
 // ---------------- types ----------------
@@ -91,13 +91,10 @@ const fileUrl = (d: Doc) => `/api/manager/documents/${d.id}/file`;
 const docLabel = (d: Doc) =>
   d.kind === "statement" ? "Owner statement" : `Invoice${d.reference ? ` #${d.reference}` : ""}`;
 
-/** The property the page works on (only matters with more than one), shared by both views. */
-function useProperty() {
-  const { overview } = useSession();
-  const active = overview.properties.filter((p) => !p.archived);
-  const [id, setId] = usePersistentState("ms-property", active[0]?.id ?? 0);
-  const valid = active.some((p) => p.id === id) ? id : (active[0]?.id ?? 0);
-  return { id: valid, setId, many: active.length > 1, active, qs: active.length > 1 ? `property_id=${valid}` : "" };
+/** The property in the URL; manager paperwork is always per property. */
+function useMsProperty() {
+  const id = useProperty().single;
+  return { id, qs: `property_id=${id}` };
 }
 
 const STATUS: Record<MonthRow["status"], { badge: string; text: (m: MonthRow) => string }> = {
@@ -113,7 +110,7 @@ const STATUS: Record<MonthRow["status"], { badge: string; text: (m: MonthRow) =>
 /** Drop zone + file picker that saves files and reports what happened to each. */
 function Upload({ month, onSaved }: { month?: string; onSaved: () => void }) {
   const toast = useToast();
-  const property = useProperty();
+  const property = useMsProperty();
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
   const [results, setResults] = useState<(SaveResult & { file: File })[]>([]);
@@ -126,7 +123,7 @@ function Upload({ month, onSaved }: { month?: string; onSaved: () => void }) {
       for (const f of files) form.append("file", f);
       if (replace) form.append("replace", "true");
       if (month) form.append("month", month);
-      const res = await api<SaveResult[]>(`manager/documents${property.qs ? `?${property.qs}` : ""}`, {
+      const res = await api<SaveResult[]>(`manager/documents?${property.qs}`, {
         method: "POST",
         body: form,
       });
@@ -199,11 +196,12 @@ function Upload({ month, onSaved }: { month?: string; onSaved: () => void }) {
 // ---------------- year view ----------------
 
 function YearView() {
+  const scoped = useScopedPath();
   const { canWrite } = useSession();
   const navigate = useNavigate();
   const [year, setYear] = useState(() => Number(thisMonth().slice(0, 4)));
-  const property = useProperty();
-  const months = useApi<{ months: MonthRow[] }>(`manager/months?year=${year}${property.qs ? `&${property.qs}` : ""}`);
+  const property = useMsProperty();
+  const months = useApi<{ months: MonthRow[] }>(`manager/months?year=${year}&${property.qs}`);
   const rows = months.data?.months ?? [];
   const saved = rows.filter((m) => m.status !== "empty");
   const open = saved.filter((m) => m.status !== "done");
@@ -212,15 +210,6 @@ function YearView() {
     <div className="page ms">
       <header className="page-head">
         <h1>Manager statements</h1>
-        {property.many && (
-          <select value={property.id} onChange={(e) => property.setId(Number(e.target.value))} aria-label="Property">
-            {property.active.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
         <div className="ms-year">
           <button className="icon-btn" onClick={() => setYear(year - 1)} aria-label="Previous year">
             ‹
@@ -270,13 +259,13 @@ function YearView() {
               <tr
                 key={m.month}
                 className={m.status === "empty" ? "excluded" : "clickable"}
-                onClick={() => m.status !== "empty" && navigate(`/statement/${m.month}`)}
+                onClick={() => m.status !== "empty" && navigate(scoped(`/statement/${m.month}`))}
               >
                 <td>
                   {m.status === "empty" ? (
                     monthTitle(m.month)
                   ) : (
-                    <Link to={`/statement/${m.month}`}>{monthTitle(m.month)}</Link>
+                    <Link to={scoped(`/statement/${m.month}`)}>{monthTitle(m.month)}</Link>
                   )}
                 </td>
                 <td className="muted small">
@@ -304,11 +293,12 @@ function YearView() {
 // ---------------- month view ----------------
 
 function MonthView({ month }: { month: string }) {
+  const scoped = useScopedPath();
   const { canWrite } = useSession();
   const toast = useToast();
   const [subcategory, setSubcategory] = useState("");
   const [applied, setApplied] = useState("");
-  const property = useProperty();
+  const property = useMsProperty();
   const query = [property.qs, applied ? `subcategory=${encodeURIComponent(applied)}` : ""].filter(Boolean).join("&");
   const review = useApi<Review>(`manager/months/${month}${query ? `?${query}` : ""}`);
   const p = review.data;
@@ -326,7 +316,7 @@ function MonthView({ month }: { month: string }) {
   const [explaining, setExplaining] = useState<{ key: string } | null>(null);
   const explain = async (key: string, note: string | null) => {
     try {
-      await api(`manager/months/${month}/explained${property.qs ? `?${property.qs}` : ""}`, {
+      await api(`manager/months/${month}/explained?${property.qs}`, {
         method: note === null ? "DELETE" : "POST",
         json: note === null ? { key } : { key, note },
       });
@@ -384,7 +374,7 @@ function MonthView({ month }: { month: string }) {
       const res = await api<Applied>(`manager/months/${month}/apply`, {
         method: "POST",
         json: {
-          property_id: property.many ? property.id : undefined,
+          property_id: property.id,
           subcategory: p.subcategory,
           tag_income: tagIncome,
           attach,
@@ -441,16 +431,16 @@ function MonthView({ month }: { month: string }) {
     <div className="page ms">
       <header className="page-head">
         <div>
-          <Link to="/statement" className="muted small">
+          <Link to={scoped("/statement")} className="muted small">
             ← All months
           </Link>
           <h1>{monthTitle(month)}</h1>
         </div>
         <div className="ms-year">
-          <Link className="icon-btn" to={`/statement/${shiftMonth(month, -1)}`} aria-label="Previous month">
+          <Link className="icon-btn" to={scoped(`/statement/${shiftMonth(month, -1)}`)} aria-label="Previous month">
             ‹
           </Link>
-          <Link className="icon-btn" to={`/statement/${shiftMonth(month, 1)}`} aria-label="Next month">
+          <Link className="icon-btn" to={scoped(`/statement/${shiftMonth(month, 1)}`)} aria-label="Next month">
             ›
           </Link>
         </div>

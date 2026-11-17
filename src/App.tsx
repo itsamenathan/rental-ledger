@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { api, type User } from "./api.ts";
-import { useApi, useOutbox, useSession } from "./hooks.ts";
+import { useApi, useOutbox, useProperty, useSession } from "./hooks.ts";
 import { Modal, SessionProvider, ToastProvider } from "./lib.tsx";
 import { OutboxProvider, SyncBanner } from "./components/Outbox.tsx";
 import Overview from "./pages/Overview.tsx";
@@ -17,7 +17,9 @@ import Reports from "./pages/Reports.tsx";
 import ImportCsv from "./pages/ImportCsv.tsx";
 import ManagerStatement from "./pages/ManagerStatement.tsx";
 import Files from "./pages/Files.tsx";
-import Settings from "./pages/Settings.tsx";
+import Settings, { PropertySettings } from "./pages/Settings.tsx";
+import { LegacyRedirect, PropertyProvider, PropertySwitcher, ScopeGuard } from "./property.tsx";
+import { propertySettingsPath } from "./scope.ts";
 
 interface Me {
   user: User | null;
@@ -48,7 +50,9 @@ export default function App() {
             onLogout={() => setMe({ user: null, can_write: false })}
           >
             <OutboxProvider>
-              <Shell />
+              <PropertyProvider>
+                <Shell />
+              </PropertyProvider>
             </OutboxProvider>
           </SessionProvider>
         ) : (
@@ -82,6 +86,11 @@ const NAV = [
   { to: "/calendar", label: "Calendar", icon: "M4 5h16v15H4zM4 10h16M9 3v4M15 3v4M8 14h3v3H8z" },
   { to: "/occupancy", label: "Occupancy", icon: "M4 5h16v15H4zM4 10h16M9 3v4M15 3v4" },
   {
+    to: "/property",
+    label: "Property",
+    icon: "M3 11l9-7 9 7M5 10v10h14V10M10 20v-6h4v6",
+  },
+  {
     to: "/settings",
     label: "Settings",
     icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
@@ -103,6 +112,7 @@ const MOBILE_MORE = [
   "/categories",
   "/recurring",
   "/occupancy",
+  "/property",
   "/settings",
 ];
 const MORE_ICON = "M5 12h.01M12 12h.01M19 12h.01";
@@ -139,11 +149,14 @@ function Shell() {
       return;
     await signOut();
   };
-  const todo = useApi<TodoSummary>("todo");
+  const scope = useProperty();
+  const todo = useApi<TodoSummary>(`todo?${scope.qs}`);
   const loc = useLocation();
   const navigate = useNavigate();
   const [moreOpen, setMoreOpen] = useState(false);
-  const moreActive = MOBILE_MORE.some((to) => loc.pathname.startsWith(to));
+  /** Where a nav item goes: pages under this property; "Property" is its settings page. */
+  const href = (to: string) => (to === "/property" ? propertySettingsPath(scope.single) : scope.path(to));
+  const moreActive = MOBILE_MORE.some((to) => loc.pathname.startsWith(href(to)));
   useEffect(() => {
     setMoreOpen(false);
     void todo.reload();
@@ -162,12 +175,13 @@ function Shell() {
         !t.isContentEditable
       ) {
         e.preventDefault();
-        void navigate("/add");
+        void navigate(href("/add"));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [navigate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigate, scope.key]);
 
   // Refresh the badge when something is fixed on the To do page.
   useEffect(() => {
@@ -186,8 +200,9 @@ function Shell() {
           <img src="/favicon.svg" alt="" width={28} height={28} />
           <span>Rental Ledger</span>
         </div>
+        <PropertySwitcher className="sidebar-switcher" />
         {canWrite && (
-          <NavLink to="/add" className="btn primary block sidebar-add">
+          <NavLink to={href("/add")} className="btn primary block sidebar-add">
             <Icon d="M12 5v14M5 12h14" size={18} /> Add entry
           </NavLink>
         )}
@@ -198,7 +213,7 @@ function Shell() {
               {g.items.map((to) => {
                 const n = NAV.find((x) => x.to === to)!;
                 return (
-                  <NavLink key={to} to={to} end={to === "/"}>
+                  <NavLink key={to} to={href(to)} end={to === "/"}>
                     <Icon d={n.icon} />
                     <span>{n.label}</span>
                     {badge(to)}
@@ -208,6 +223,10 @@ function Shell() {
             </div>
           ))}
           <div className="nav-spacer" />
+          <NavLink to={href("/property")} title={scope.property?.name}>
+            <Icon d={NAV.find((x) => x.to === "/property")!.icon} />
+            <span>Property</span>
+          </NavLink>
           <NavLink to="/settings">
             <Icon d={NAV.find((x) => x.to === "/settings")!.icon} />
             <span>Settings</span>
@@ -224,25 +243,37 @@ function Shell() {
         </div>
       </aside>
       <main className="content">
+        <PropertySwitcher className="mobile-switcher" />
         <SyncBanner />
         <Routes>
-          <Route path="/" element={<Overview />} />
-          <Route path="/months/:ym" element={<MonthPage />} />
-          <Route path="/categories" element={<Categories />} />
-          <Route path="/recurring" element={<RecurringPage />} />
-          <Route path="/transactions" element={<Transactions />} />
-          <Route path="/add" element={canWrite ? <AddEntry /> : <Navigate to="/" />} />
-          <Route path="/todo" element={<Todo />} />
-          <Route path="/review" element={<Navigate to="/todo" replace />} />
-          <Route path="/calendar" element={<CalendarPage />} />
-          <Route path="/occupancy" element={<Occupancy />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/import" element={<ImportCsv />} />
-          <Route path="/files" element={<Files />} />
-          <Route path="/statement" element={<ManagerStatement />} />
-          <Route path="/statement/:month" element={<ManagerStatement />} />
+          <Route
+            path="/p/:key/*"
+            element={
+              <ScopeGuard>
+                {/* key: a page's own state (filters, forms) starts fresh for another property */}
+                <Routes key={scope.key}>
+                  <Route index element={<Overview />} />
+                  <Route path="months/:ym" element={<MonthPage />} />
+                  <Route path="categories" element={<Categories />} />
+                  <Route path="recurring" element={<RecurringPage />} />
+                  <Route path="transactions" element={<Transactions />} />
+                  <Route path="add" element={canWrite ? <AddEntry /> : <Navigate to={scope.path("/")} />} />
+                  <Route path="todo" element={<Todo />} />
+                  <Route path="calendar" element={<CalendarPage />} />
+                  <Route path="occupancy" element={<Occupancy />} />
+                  <Route path="reports" element={<Reports />} />
+                  <Route path="import" element={<ImportCsv />} />
+                  <Route path="files" element={<Files />} />
+                  <Route path="statement" element={<ManagerStatement />} />
+                  <Route path="statement/:month" element={<ManagerStatement />} />
+                  <Route path="settings" element={<PropertySettings />} />
+                  <Route path="*" element={<Navigate to={scope.path("/")} replace />} />
+                </Routes>
+              </ScopeGuard>
+            }
+          />
           <Route path="/settings/*" element={<Settings />} />
-          <Route path="*" element={<Navigate to="/" />} />
+          <Route path="*" element={<LegacyRedirect />} />
         </Routes>
       </main>
       <nav className="bottom-nav">
@@ -251,7 +282,7 @@ function Shell() {
           .map((n) => (
             <NavLink
               key={n.to}
-              to={n.to}
+              to={href(n.to)}
               end={n.to === "/"}
               className={n.primary ? "nav-primary" : undefined}
               aria-label={n.label}
@@ -278,7 +309,7 @@ function Shell() {
             {MOBILE_MORE.map((to) => {
               const n = NAV.find((x) => x.to === to)!;
               return (
-                <NavLink key={to} to={to} onClick={() => setMoreOpen(false)}>
+                <NavLink key={to} to={href(to)} onClick={() => setMoreOpen(false)}>
                   <Icon d={n.icon} />
                   <span>{n.label}</span>
                 </NavLink>

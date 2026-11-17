@@ -3,7 +3,8 @@ import { Link } from "react-router";
 import { api } from "../api.ts";
 import { ago, syncText, type Feed, type SyncResult } from "../calendar.ts";
 import { fmtDate, monthTitle, shiftMonth, thisMonth, today } from "../format.ts";
-import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
+import { propertySettingsPath } from "../scope.ts";
+import { useApi, usePersistentState, useSession, useToast, useProperty } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 
 type Kind = "reserved" | "blocked";
@@ -47,10 +48,9 @@ const eventLabel = (e: CalEvent) => e.summary || KIND_LABEL[e.kind];
 
 /** Read-only availability from the imported Airbnb/VRBO calendars. */
 export default function Calendar() {
-  const { overview, canWrite } = useSession();
+  const { canWrite } = useSession();
   const toast = useToast();
-  const props = overview.properties.filter((p) => !p.archived);
-  const [propertyId, setPropertyId] = useState(props[0]?.id ?? 0);
+  const propertyId = useProperty().single;
   const [month, setMonth] = usePersistentState("cal-month", thisMonth());
   const { data, reload } = useApi<CalendarData>(`calendar?from=${month}&property_id=${propertyId}`);
   const [open, setOpen] = useState<CalEvent | null>(null);
@@ -106,17 +106,7 @@ export default function Calendar() {
     <div className="page">
       <header className="page-head">
         <h1>Calendar</h1>
-        <div className="head-actions">
-          {props.length > 1 && (
-            <select value={propertyId} onChange={(e) => setPropertyId(Number(e.target.value))} aria-label="Property">
-              {props.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
+        <div className="head-actions"></div>
       </header>
       <p className="muted">
         When the house is booked or free, from your Airbnb/VRBO calendars. Each day shows that night; the checkout day
@@ -214,8 +204,8 @@ export default function Calendar() {
             {" · "}
           </>
         )}
-        <Link className="link small" to="/settings/properties">
-          {data && !data.feeds.length ? "Add one in Settings → Properties" : "Manage calendars"}
+        <Link className="link small" to={propertySettingsPath(propertyId)}>
+          {data && !data.feeds.length ? "Add one in this property's settings" : "Manage calendars"}
         </Link>
       </p>
 

@@ -43,6 +43,16 @@ describe("test harness data", () => {
     expect(ics).toContain("SUMMARY:Airbnb (Not available)");
   });
 
+  it("has a second, smaller property with its own To do item and calendar", () => {
+    const { second, rows } = generate(today);
+    expect(second.property.name).not.toBe("");
+    expect(second.rows[0]!.date >= "2025-01-01").toBe(true);
+    expect(second.rows.length).toBeLessThan(rows.length / 2);
+    expect(second.rows.filter((r) => r.needs_review)).toHaveLength(1);
+    expect(second.occupancy.at(-1)!.month).toBe("2026-10");
+    expect(sampleIcs(second, "airbnb")).toContain("SUMMARY:Reserved");
+  });
+
   it("gives each worktree a stable port", () => {
     const p = harnessPort();
     expect(p).toBe(harnessPort());

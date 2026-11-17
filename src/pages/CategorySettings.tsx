@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { api, type Category, type ReceiptExclusion } from "../api.ts";
-import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
+import { useApi, usePersistentState, useSession, useToast, useScopedPath } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 
 type Policy = Category["receipt_policy"];
@@ -542,6 +542,7 @@ function CategoryPanel({
   onClose: () => void;
   onChanged: () => Promise<void>;
 }) {
+  const scoped = useScopedPath();
   const { overview, user } = useSession();
   const toast = useToast();
   const [name, setName] = useState(c.name);
@@ -601,7 +602,7 @@ function CategoryPanel({
         </button>
       </form>
       <p className="muted small">
-        <Link to={`/transactions?year=all&category=${c.id}`}>{plural(count, "transaction")}</Link>
+        <Link to={scoped(`/transactions?year=all&category=${c.id}`)}>{plural(count, "transaction")}</Link>
         {count > 0 && " · renaming keeps them all in this category"}
       </p>
 

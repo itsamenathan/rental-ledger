@@ -4,7 +4,7 @@ import { api, type Recurring, type Transaction, type TxList } from "../api.ts";
 import AttentionList from "../components/AttentionList.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { fmtDate, monthTitle } from "../format.ts";
-import { useApi, useSession, useToast } from "../hooks.ts";
+import { useApi, useSession, useToast, useProperty } from "../hooks.ts";
 import { Amount } from "../lib.tsx";
 
 export interface TodoSummary {
@@ -22,10 +22,11 @@ const year = new Date().getFullYear();
 
 /** One place for everything that needs a look: flagged entries, missing tax treatment, recurring-bill alerts. */
 export default function Todo() {
-  const flagged = useApi<TxList>("transactions?needs_review=true&sort=date_asc&limit=500");
-  const unallocated = useApi<TxList>("transactions?kind=expense&allocation=none&sort=date_asc&limit=500");
-  const rec = useApi<Recurring>("recurring");
-  const summary = useApi<TodoSummary>("todo");
+  const { path: scoped, qs: pq } = useProperty();
+  const flagged = useApi<TxList>(`transactions?needs_review=true&sort=date_asc&limit=500&${pq}`);
+  const unallocated = useApi<TxList>(`transactions?kind=expense&allocation=none&sort=date_asc&limit=500&${pq}`);
+  const rec = useApi<Recurring>(`recurring?${pq}`);
+  const summary = useApi<TodoSummary>(`todo?${pq}`);
   const managerMonths = summary.data?.manager_months ?? [];
   const [editing, setEditing] = useState<number | null>(null);
   const { canWrite } = useSession();
@@ -123,7 +124,7 @@ export default function Todo() {
           help={
             <>
               Based on what you usually pay each month or quarter.{" "}
-              <Link to="/recurring">See everything it tracks →</Link>
+              <Link to={scoped("/recurring")}>See everything it tracks →</Link>
             </>
           }
         >
@@ -140,7 +141,7 @@ export default function Todo() {
           <ul className="plain-list">
             {managerMonths.map((m) => (
               <li key={`${m.property_id}-${m.month}`}>
-                <Link to={`/statement/${m.month}`}>{monthTitle(m.month)}</Link>{" "}
+                <Link to={scoped(`/statement/${m.month}`)}>{monthTitle(m.month)}</Link>{" "}
                 <span className="muted">
                   {[
                     m.to_add ? `${m.to_add} ${m.to_add === 1 ? "entry" : "entries"} to add` : "",
@@ -157,7 +158,7 @@ export default function Todo() {
 
       {!!summary.data?.missing_receipts && (
         <section className="card">
-          <Link className="section-toggle" to={`/files?year=${year}&missing=1`}>
+          <Link className="section-toggle" to={scoped(`/files?year=${year}&missing=1`)}>
             <span>
               Receipts <span className="muted small">optional</span>
             </span>

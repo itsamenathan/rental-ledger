@@ -4,55 +4,39 @@ import { ago, syncText, type Feed, type SyncResult } from "../calendar.ts";
 import { useApi, useSession, useToast } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 
-/** Settings → Properties: each property's imported booking calendars. */
-export function PropertyCalendars() {
-  const { overview, canWrite } = useSession();
-  const { data, reload } = useApi<Feed[]>("calendar/feeds");
-  const [form, setForm] = useState<{ propertyId: number; feed: Feed | null } | null>(null);
-  const props = overview.properties.filter((p) => !p.archived || data?.some((f) => f.property_id === p.id));
+/** A property's settings page: its imported booking calendars. */
+export function PropertyCalendars({ propertyId }: { propertyId: number }) {
+  const { canWrite } = useSession();
+  const { data, reload } = useApi<Feed[]>(`calendar/feeds?property_id=${propertyId}`);
+  const [form, setForm] = useState<{ feed: Feed | null } | null>(null);
+  const feeds = data ?? [];
   return (
     <section className="card">
       <div className="section-head">
         <h2>Booking calendars</h2>
+        {canWrite && (
+          <button className="btn small" onClick={() => setForm({ feed: null })}>
+            + Add calendar
+          </button>
+        )}
       </div>
       <p className="muted small">
-        The Calendar page shows when each property is booked or free from these iCal links. In Airbnb: the
+        The Calendar page shows when this property is booked or free from these iCal links. In Airbnb: the
         listing&apos;s Availability settings → Connect calendars → Export calendar. VRBO: Calendar → Import/Export →
         Export. Each link works like a password; only people who can edit see it.
       </p>
-      {props.map((p) => {
-        const feeds = (data ?? []).filter((f) => f.property_id === p.id);
-        return (
-          <div key={p.id} className="cal-prop">
-            <div className="cal-feeds-head">
-              {props.length > 1 && <h3>{p.name}</h3>}
-              <span className="spacer" />
-              {canWrite && (
-                <button className="btn small" onClick={() => setForm({ propertyId: p.id, feed: null })}>
-                  + Add calendar
-                </button>
-              )}
-            </div>
-            {!feeds.length ? (
-              <p className="empty">No calendars yet.</p>
-            ) : (
-              <ul className="cal-feeds">
-                {feeds.map((f) => (
-                  <FeedRow
-                    key={f.id}
-                    feed={f}
-                    onEdit={() => setForm({ propertyId: p.id, feed: f })}
-                    onChanged={() => void reload()}
-                  />
-                ))}
-              </ul>
-            )}
-          </div>
-        );
-      })}
+      {!data ? null : !feeds.length ? (
+        <p className="empty">No calendars yet.</p>
+      ) : (
+        <ul className="cal-feeds">
+          {feeds.map((f) => (
+            <FeedRow key={f.id} feed={f} onEdit={() => setForm({ feed: f })} onChanged={() => void reload()} />
+          ))}
+        </ul>
+      )}
       {form && (
         <FeedForm
-          propertyId={form.propertyId}
+          propertyId={propertyId}
           feed={form.feed}
           onClose={() => setForm(null)}
           onSaved={() => {
