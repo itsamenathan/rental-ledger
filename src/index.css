@@ -1156,28 +1156,154 @@ tr.dirty td {
   }
 }
 
-.attachments {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 0.85rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+/* ---------- receipts (entry form) ---------- */
+.receipts {
+  margin-bottom: 0.85rem;
 }
-.attachments li {
+.receipts-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.88rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+  font-weight: 550;
+  color: var(--text-2);
+  margin-bottom: 0.3rem;
 }
-.attachments img {
-  width: 40px;
-  height: 40px;
+.receipt-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.receipt-btn {
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 550;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 48px;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+  color: var(--accent);
+  cursor: pointer;
+}
+.receipt-btn:hover {
+  background: var(--accent-soft);
+  border-style: solid;
+}
+.receipt-tiles {
+  list-style: none;
+  padding: 0;
+  margin: 0.6rem 0 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.6rem;
+}
+.receipt-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  font-size: 0.78rem;
+}
+.receipt-tile > a {
+  display: block;
+  border-radius: 8px;
+}
+.tile-thumb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.receipt-tile.failed .tile-thumb {
+  border-color: color-mix(in srgb, var(--critical) 50%, var(--border));
+}
+.tile-thumb img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  border-radius: 6px;
-  vertical-align: middle;
-  margin-right: 0.4rem;
+}
+.tile-thumb.busy img {
+  opacity: 0.45;
+}
+.tile-doc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+.tile-spinner {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: tile-spin 0.8s linear infinite;
+}
+@keyframes tile-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile-spinner {
+    animation-duration: 2.4s;
+  }
+}
+.tile-name {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tile-status {
+  color: var(--muted);
+}
+.tile-status.ok {
+  color: var(--pos);
+}
+.tile-status.bad {
+  color: var(--neg);
+}
+.tile-status .link {
+  font-size: inherit;
+}
+.tile-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--text-2);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.tile-remove:hover {
+  color: var(--neg);
+  border-color: color-mix(in srgb, var(--neg) 40%, var(--border));
 }
 
 /* ---------- review ---------- */

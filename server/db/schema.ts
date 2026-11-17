@@ -199,6 +199,28 @@ export const attachments = sqliteTable(
 );
 
 /**
+ * Receipts uploaded from the entry form before the entry is saved. Saving the entry (`upload_ids`) turns them into
+ * attachments; the form discards them if it's closed without saving, and stale ones are pruned. The stored file may be
+ * shared with attachments or manager documents (same sha256).
+ */
+export const pendingUploads = sqliteTable(
+  "pending_uploads",
+  {
+    id: integer("id").primaryKey(),
+    filename: text("filename").notNull(),
+    contentType: text("content_type").notNull(),
+    size: integer("size").notNull(),
+    sha256: text("sha256").notNull(),
+    storageKey: text("storage_key").notNull(),
+    createdAt: createdAt(),
+    createdBy: integer("created_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => [index("pending_uploads_key").on(t.storageKey), index("pending_uploads_sha").on(t.sha256)],
+);
+
+/**
  * Property-manager paperwork saved for re-checking later: owner-statement CSVs and invoices, one row per file.
  * `text` keeps the CSV / extracted invoice text so it's re-parsed on every review (parser fixes apply to old months).
  * Files live in the uploads folder and may share a stored file with attachments (same sha256).
