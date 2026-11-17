@@ -21,6 +21,13 @@ export const config = {
    * Download linked booking calendars in the background every this many minutes (0 = only when the Calendar page
    * is opened or someone clicks Refresh). Production server only.
    */
+  /** Allow booking calendar links that point at loopback/private/link-local addresses (feeds on your own network). */
+  calendarAllowPrivateNetwork: env.CALENDAR_ALLOW_PRIVATE_NETWORK === "true",
+  /**
+   * Reverse proxies in front of the app that append to X-Forwarded-For (`true` = 1). The client address used for
+   * login rate limits is taken that many entries from the end; 0 (default) uses the socket address and ignores the header.
+   */
+  trustProxy: env.TRUST_PROXY === "true" ? 1 : Math.max(0, Math.floor(Number(env.TRUST_PROXY ?? 0)) || 0),
   calendarRefreshMinutes: Math.max(0, Number(env.CALENDAR_REFRESH_MINUTES ?? 180) || 0),
   /** Disable username/password login (OIDC only). */
   disablePasswordLogin: env.DISABLE_PASSWORD_LOGIN === "true",

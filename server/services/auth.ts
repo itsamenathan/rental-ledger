@@ -22,8 +22,15 @@ export async function hashPassword(password: string): Promise<string> {
   return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString("base64")}$${hash.toString("base64")}`;
 }
 
+/** Checked when there's no user or no password, so a wrong email takes as long as a wrong password. */
+let dummyHash: Promise<string> | undefined;
+
 export async function verifyPassword(password: string, stored: string | null): Promise<boolean> {
-  if (!stored) return false;
+  if (!stored) {
+    dummyHash ??= hashPassword(randomBytes(16).toString("hex"));
+    await verifyPassword(password, await dummyHash);
+    return false;
+  }
   const [algo, n, r, p, saltB64, hashB64] = stored.split("$");
   if (algo !== "scrypt" || !saltB64 || !hashB64) return false;
   const expected = Buffer.from(hashB64, "base64");

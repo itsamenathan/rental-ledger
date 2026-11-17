@@ -142,7 +142,7 @@ describe("feed sync", () => {
     const { db, actor } = setup();
     const feed = cal.createFeed(db, actor, { name: "Broken", url: "http://127.0.0.1:9/nothing.ics" });
     const r = await cal.refreshFeed(db, actor, feed.id);
-    expect(r.error).toBeTruthy();
+    expect(r.error).toMatch(/private network address/);
     expect(cal.listFeeds(db, actor)[0]!.last_error).toBe(r.error);
   });
 });

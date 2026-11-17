@@ -16,9 +16,10 @@ import {
   linkOidcSubject,
   roleCanWrite,
   userCount,
+  userCreateInput,
   verifyPassword,
 } from "../services/auth.ts";
-import { actorOf, clearRateLimit, rateLimit, SESSION_COOKIE, type Env } from "./middleware.ts";
+import { actorOf, clearRateLimit, clientIp, rateLimit, SESSION_COOKIE, type Env } from "./middleware.ts";
 
 export const authRoutes = new Hono<Env>();
 
@@ -51,28 +52,39 @@ authRoutes.get("/config", (c) =>
 const credentials = z.object({ email: z.email().trim().toLowerCase(), password: z.string().min(1).max(200) });
 
 /** First-run: create the initial admin. Only works while no users exist. */
+let setupRunning = false;
 authRoutes.post("/setup", async (c) => {
   const db = getDb();
+  // createUser awaits the password hash between its checks and the insert; one setup at a time keeps it to one admin.
   if (userCount(db) > 0) throw new AppError(403, "Setup already completed");
-  const body = z
-    .object({ email: z.email(), name: z.string().default(""), password: z.string() })
-    .parse(await c.req.json());
-  const user = await createUser(db, null, { ...body, role: "admin" });
-  startSession(c, user.id);
-  return c.json({ user });
+  const body = userCreateInput.omit({ role: true }).parse(await c.req.json());
+  if (!body.password) throw new AppError(400, "Choose a password");
+  // No await between this check and taking the flag.
+  if (setupRunning || userCount(db) > 0) throw new AppError(403, "Setup already completed");
+  setupRunning = true;
+  try {
+    const user = await createUser(db, null, { ...body, role: "admin" });
+    startSession(c, user.id);
+    return c.json({ user });
+  } finally {
+    setupRunning = false;
+  }
 });
 
 authRoutes.post("/login", async (c) => {
   if (config.disablePasswordLogin) throw new AppError(403, "Password login is disabled");
   const { email, password } = credentials.parse(await c.req.json());
-  const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
-  rateLimit(`login:${email}`, 10, 15 * 60_000);
+  const ip = clientIp(c);
+  // Per email *and* address, so someone guessing elsewhere can't lock the real user out; the per-email cap is only
+  // there to slow guessing spread over many addresses.
+  rateLimit(`login:${email}:${ip}`, 10, 15 * 60_000);
   rateLimit(`login-ip:${ip}`, 30, 15 * 60_000);
+  rateLimit(`login-email:${email}`, 100, 15 * 60_000);
   const db = getDb();
   const user = findUserByEmail(db, email);
   const ok = await verifyPassword(password, user?.password_hash ?? null);
   if (!user || !ok || user.disabled) throw new AppError(401, "Invalid email or password");
-  clearRateLimit(`login:${email}`);
+  clearRateLimit(`login:${email}:${ip}`);
   startSession(c, user.id);
   audit(db, webActor(user), "login", "user", user.id);
   return c.json({ user: { id: user.id, email: user.email, name: user.name, role: user.role } });
@@ -164,7 +176,8 @@ authRoutes.get("/oidc/callback", async (c) => {
     const email = typeof claims.email === "string" ? claims.email.toLowerCase() : null;
     const db = getDb();
     let user: (Actor["user"] & { disabled: boolean }) | undefined = findUserByOidcSub(db, claims.sub);
-    if (!user && email && claims.email_verified !== false) {
+    // Only a verified email may claim an existing account: some providers let users type any address.
+    if (!user && email && claims.email_verified === true) {
       const byEmail = findUserByEmail(db, email);
       if (byEmail) {
         linkOidcSubject(db, byEmail.id, claims.sub);
