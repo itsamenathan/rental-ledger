@@ -121,13 +121,13 @@ notes → that account plus the bank text as the reference.
 ## Production (Docker)
 
 ```sh
-docker build -t rental-ledger \
-  --build-arg GIT_SHA=$(git rev-parse HEAD) --build-arg GIT_DATE=$(git log -1 --format=%cs) .
+docker build -t rental-ledger .
 docker run -d -p 3000:3000 -v rental-data:/data -e PUBLIC_URL=https://rental.example.com rental-ledger
 ```
 
-The build args set the version shown under your name in the sidebar (`v2026-09-01 · 5d17935`, linked to the commit);
-without them it shows the build date only. See `compose.example.yaml`. Everything persistent lives in `/data` (`rental.db` plus `uploads/` for receipts);
+The version under your name in the sidebar (`v2026-09-01 · 5d17935`, linked to the commit) is read from `.git` at
+build time. Building from a copy without `.git`, pass `--build-arg GIT_SHA=… --build-arg GIT_DATE=YYYY-MM-DD`, or it
+shows the build date only. See `compose.example.yaml`. Everything persistent lives in `/data` (`rental.db` plus `uploads/` for receipts);
 back up that volume. Run the CLI inside the container with `docker exec <ctr> node server/cli.ts …`.
 
 | Variable                                              | Default                         | Purpose                                                                                                                                 |
