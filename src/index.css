@@ -3485,6 +3485,14 @@ table.conflict thead th {
 .cal-feeds li .grow {
   min-width: 12rem;
 }
+.cal-history {
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+.cal-history h3 {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+}
 .cal-sources {
   margin: -0.25rem 0 0;
 }

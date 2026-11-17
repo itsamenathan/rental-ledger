@@ -79,6 +79,11 @@ describe("statement CSV", () => {
     expect(s.warnings).toEqual([
       'Reservation R9: amounts in columns that aren\'t modeled: "Cancellation payout" $50.00',
     ]);
+    expect(s.reservations[0]!.cancelled).toBe(false); // still has rent: a stay with a partial refund
+    const cancelled = ms.parseStatementCsv(
+      csv(row("G", "vrbo", "2026-10-02", "2026-10-05", "$50.00", "R9", "$0.00", "$50.00").replace("$300.00", "$0.00")),
+    );
+    expect(cancelled.reservations[0]!.cancelled).toBe(true);
     expect(() => ms.parseStatementCsv("a,b\n1,2")).toThrow(/missing column/);
   });
 });

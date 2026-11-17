@@ -73,6 +73,12 @@ release. Add a tool name to select part of the graph. For example, run
   for receipts. Setting a rule on a used-only subcategory saves its `subcategories` row first.
 - Subcategories are free text on transactions (Grist layout, e.g. Management Fee → Acme PM). The `subcategories`
   table only remembers names for suggestions; rename/remove/merge go through `server/services/categories.ts`.
+- Booking calendar (`server/services/calendar.ts`): feed events are upserted by uid on each sync; a missing event is
+  deleted only if it hasn't ended (cancelled). Older stays come from `calendar_events` rows with `source = 'history'`
+  (an imported Airbnb reservations CSV, `feed_id` null, uid = confirmation code, past stays only; syncs never touch
+  them) and from saved manager statements (derived on every read, negative ids, nothing stored). `listEvents` drops a
+  reservation that overlaps one from a higher source (feed > history > statement). The production server refreshes
+  linked feeds every `CALENDAR_REFRESH_MINUTES` (`server/scheduler.ts`, started in `main.ts`, never in `vp dev`).
 - Logging: use `log` from `server/telemetry.ts` (pino), not `console.*` (the CLI's human output is the exception).
   Tracing is automatic for API/MCP requests and SQL; wrap other slow work in `withSpan(name, attrs, fn)`.
 - Never write to Grist; `server/grist-import.ts` must stay GET-only.
@@ -98,8 +104,10 @@ entry) and a smaller Pine Ridge Cabin (2 years, its own calendar and one flagged
   that needs the service worker (installing, offline mode, the outbox); `vp dev` doesn't register one.
 - Logins: `admin@example.com`, `member@example.com`, `viewer@example.com`, password `password`.
 - `scripts/harness info` prints the URL, a write and a read API key (`Authorization: Bearer …`), an admin session
-  cookie for curl, `data/sample-bank-export.csv` for trying CSV import, and `data/sample-airbnb.ics` (one new
-  reservation) for trying "Import .ics file" on the Calendar page.
+  cookie for curl, `data/sample-bank-export.csv` for trying CSV import, `data/sample-airbnb.ics` (one new
+  reservation) for trying "Import .ics file" on the Calendar page, and `data/sample-airbnb-reservations.csv` for
+  "Import reservations CSV" (Settings → property). Like the real export, Harbor View's Airbnb feed only has the last
+  60 days of past stays, so older Airbnb stays show only as VRBO blocks until that CSV is imported.
 - Reset only deletes a data folder the harness created (it has `harness.json`), never a real ledger.
 - Run Node commands through `vp env exec --node 24 …` if `node -p process.features.typescript` prints `false`.
 - When a change needs new kinds of data to test, add it to `generate()` in `server/harness.ts`.

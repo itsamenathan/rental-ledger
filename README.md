@@ -137,6 +137,7 @@ back up that volume. Run the CLI inside the container with `docker exec <ctr> no
 | `SESSION_DAYS`                                        | `30`                            | Session lifetime                                                             |
 | `MAX_UPLOAD_MB`                                       | `20`                            | Receipt size limit                                                           |
 | `MAX_RESTORE_MB`                                      | `1024`                          | Largest backup zip accepted for restore                                      |
+| `CALENDAR_REFRESH_MINUTES`                            | `180`                           | Download linked booking calendars in the background this often (`0` = off)   |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | –                               | Enable SSO. Callback: `$PUBLIC_URL/api/auth/oidc/callback`                   |
 | `OIDC_NAME`                                           | `SSO`                           | Button label                                                                 |
 | `OIDC_AUTO_CREATE`                                    | `false`                         | Create unknown SSO users as members (otherwise the email must already exist) |

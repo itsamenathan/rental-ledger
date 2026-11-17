@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api.ts";
-import { ago, syncText, type Feed, type SyncResult } from "../calendar.ts";
+import { ago, syncText, type Feed, type HistorySummary, type SyncResult } from "../calendar.ts";
 import { fmtDate, monthTitle, shiftMonth, thisMonth, today } from "../format.ts";
 import { propertySettingsPath } from "../scope.ts";
 import { useApi, usePersistentState, useSession, useToast, useProperty } from "../hooks.ts";
@@ -11,7 +11,8 @@ type Kind = "reserved" | "blocked";
 
 interface CalEvent {
   id: number;
-  feed_id: number;
+  feed_id: number | null;
+  source: "feed" | "history" | "statement";
   feed: string;
   kind: Kind;
   start_date: string;
@@ -35,6 +36,7 @@ interface CalendarData {
   nights: Record<string, number>;
   months: MonthSummary[];
   feeds: Feed[];
+  history: HistorySummary;
 }
 
 const KIND_LABEL: Record<Kind, string> = { reserved: "Booked", blocked: "Not available" };
@@ -45,6 +47,10 @@ const addDays = (iso: string, n: number) =>
   new Date(Date.parse(`${iso}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
 
 const eventLabel = (e: CalEvent) => e.summary || KIND_LABEL[e.kind];
+
+const historyText = (h: HistorySummary) =>
+  "; past stays from " +
+  [h.stays && "a reservations export", h.statement_stays && "manager statements"].filter(Boolean).join(" and ");
 
 /** Read-only availability from the imported Airbnb/VRBO calendars. */
 export default function Calendar() {
@@ -109,8 +115,9 @@ export default function Calendar() {
         <div className="head-actions"></div>
       </header>
       <p className="muted">
-        When the house is booked or free, from your Airbnb/VRBO calendars. Each day shows that night; the checkout day
-        is free for the next guest. Private bookings and owner stays only show if you blocked the dates on a platform.
+        When the house is booked or free, from your Airbnb/VRBO calendars, plus past stays from an imported reservations
+        export and your manager statements. Each day shows that night; the checkout day is free for the next guest.
+        Private bookings and owner stays only show if you blocked the dates on a platform.
       </p>
 
       <div className="cal-nav">
@@ -182,7 +189,10 @@ export default function Calendar() {
 
       <p className="muted small cal-sources">
         {!data ? null : !data.feeds.length ? (
-          <>No booking calendars yet. </>
+          <>
+            No booking calendars yet{data.history.stays + data.history.statement_stays ? historyText(data.history) : ""}
+            .{" "}
+          </>
         ) : (
           <>
             From{" "}
@@ -193,7 +203,7 @@ export default function Calendar() {
                 {f.last_error && <span className="neg"> {f.last_error}</span>}
               </span>
             ))}
-            .{" "}
+            {data.history.stays + data.history.statement_stays ? historyText(data.history) : ""}.{" "}
           </>
         )}
         {canWrite && data?.feeds.some((f) => f.url) && (

@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { createApp } from "./app.ts";
 import { config } from "./config.ts";
 import { closeDb, getDb } from "./db.ts";
+import { startScheduler } from "./scheduler.ts";
 import { seedDefaults } from "./seed.ts";
 import { initTelemetry, log, shutdownTelemetry } from "./telemetry.ts";
 
@@ -33,8 +34,11 @@ const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
   log.info({ port: info.port, db: config.databasePath }, "rental ledger listening");
 });
 
+const stopScheduler = startScheduler();
+
 const shutdown = () => {
   log.info("shutting down");
+  stopScheduler();
   server.close();
   closeDb(getDb()); // a restore swaps the handle
   void shutdownTelemetry().finally(() => process.exit(0));

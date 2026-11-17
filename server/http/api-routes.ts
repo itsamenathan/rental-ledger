@@ -314,6 +314,15 @@ api.post("/calendar/feeds/:id/refresh", async (c) => c.json(await calendar.refre
 api.post("/calendar/feeds/:id/import", async (c) =>
   c.json(calendar.syncFeedText(getDb(), actorOf(c), id(c), await c.req.text())),
 );
+/** Past stays imported from a reservations export, and how many saved manager statements add. */
+api.get("/calendar/history", (c) => c.json(calendar.getHistory(getDb(), { property_id: queryProperty(c) })));
+/** Import a reservations export: {csv, listing?, dry_run?, property_id}. */
+api.post("/calendar/history", async (c) =>
+  c.json(calendar.importReservationHistory(getDb(), actorOf(c), await body(c))),
+);
+api.delete("/calendar/history", (c) =>
+  c.json(calendar.clearHistory(getDb(), actorOf(c), { property_id: queryProperty(c) })),
+);
 /** Refresh every linked feed; {stale_minutes} skips feeds synced more recently. */
 api.post("/calendar/refresh", async (c) => {
   const raw = (await c.req.text()) ? await body(c) : {};

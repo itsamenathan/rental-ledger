@@ -394,6 +394,74 @@ function generateSecond(today: Date) {
   };
 }
 
+const airbnbCode = (start: string) => "HM" + createHash("sha256").update(start).digest("hex").slice(0, 8).toUpperCase();
+const GUESTS = [
+  "Avery Park",
+  "Jordan Blake",
+  "Sam Rivera",
+  "Casey Morgan",
+  "Riley Chen",
+  "Taylor Brooks",
+  "Drew Patel",
+];
+
+/**
+ * Airbnb's reservations export (Reservations → Export → CSV) for every Airbnb stay, plus one cancelled request,
+ * for trying "Import reservations CSV". Its codes match the sample .ics feed.
+ */
+export function sampleReservationsCsv(
+  data: Pick<ReturnType<typeof generate>, "stays">,
+  listing: string,
+  today: string,
+) {
+  const us = (iso: string) => `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}/${iso.slice(0, 4)}`;
+  const nights = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+  const rows = data.stays
+    .filter((st) => st.platform === "airbnb")
+    .map((st, i) => {
+      const status = st.start > today ? "Confirmed" : st.end > today ? "Currently hosting" : "Past guest";
+      const n = nights(st.start, st.end);
+      return [
+        airbnbCode(st.start),
+        status,
+        GUESTS[i % GUESTS.length],
+        "",
+        2,
+        0,
+        0,
+        us(st.start),
+        us(st.end),
+        n,
+        us(new Date(Date.parse(st.start) - (20 + (i % 5) * 9) * 86_400_000).toISOString().slice(0, 10)),
+        listing,
+        `$${(n * 185).toFixed(2)}`,
+      ];
+    });
+  const first = data.stays.find((st) => st.platform === "airbnb")!;
+  rows.push([
+    "HMCANCEL01",
+    "Canceled by guest",
+    "Morgan Lee",
+    "",
+    2,
+    0,
+    0,
+    us(first.start),
+    us(first.end),
+    2,
+    us(first.start),
+    listing,
+    "$0.00",
+  ]);
+  const header =
+    "Confirmation code,Status,Guest name,Contact,# of adults,# of children,# of infants,Start date,End date,# of nights,Booked,Listing,Earnings";
+  return (
+    [header, ...rows.map((r) => r.map((v) => (String(v).includes(",") ? `"${String(v)}"` : String(v))).join(","))].join(
+      "\n",
+    ) + "\n"
+  );
+}
+
 /**
  * An iCal export as a platform writes it: its own stays as reservations, the other platform's stays and owner
  * stays as blocks (calendars synced between platforms look like that).
@@ -402,6 +470,8 @@ export function sampleIcs(
   data: Pick<ReturnType<typeof generate>, "stays" | "ownerStays">,
   platform: "airbnb" | "vrbo",
   extra: string[] = [],
+  /** Leave out events that ended before this day (Airbnb only exports recent past stays). */
+  since = "",
 ) {
   const ymd = (d: string) => d.replace(/-/g, "");
   const ev = (uid: string, start: string, end: string, summary: string, description = "") =>
@@ -414,22 +484,23 @@ export function sampleIcs(
       `SUMMARY:${summary}`,
       "END:VEVENT",
     ].join("\r\n");
-  const code = (s: string) => "HM" + createHash("sha256").update(s).digest("hex").slice(0, 8).toUpperCase();
-  const events = data.stays.map((st) => {
-    const uid = `${platform}-${st.start}@harness.example`;
-    if (st.platform !== platform)
-      return ev(uid, st.start, st.end, platform === "airbnb" ? "Airbnb (Not available)" : "Blocked");
-    return platform === "airbnb"
-      ? ev(
-          uid,
-          st.start,
-          st.end,
-          "Reserved",
-          `Reservation URL: https://www.airbnb.com/hosting/reservations/details/${code(st.start)}`,
-        )
-      : ev(uid, st.start, st.end, "Reserved - Guest");
-  });
-  for (const o of data.ownerStays)
+  const events = data.stays
+    .filter((st) => st.end >= since)
+    .map((st) => {
+      const uid = `${platform}-${st.start}@harness.example`;
+      if (st.platform !== platform)
+        return ev(uid, st.start, st.end, platform === "airbnb" ? "Airbnb (Not available)" : "Blocked");
+      return platform === "airbnb"
+        ? ev(
+            uid,
+            st.start,
+            st.end,
+            "Reserved",
+            `Reservation URL: https://www.airbnb.com/hosting/reservations/details/${airbnbCode(st.start)}`,
+          )
+        : ev(uid, st.start, st.end, "Reserved - Guest");
+    });
+  for (const o of data.ownerStays.filter((x) => x.end >= since))
     events.push(
       ev(
         `${platform}-block-${o.start}@harness.example`,
@@ -496,6 +567,8 @@ async function reset() {
 
   const today = process.env.HARNESS_TODAY ? new Date(`${process.env.HARNESS_TODAY}T12:00:00Z`) : new Date();
   const data = generate(today);
+  const todayIso = today.toISOString().slice(0, 10);
+  const airbnbSince = new Date(today.getTime() - 60 * 86_400_000).toISOString().slice(0, 10);
   const receipts: { id: number; row: Row }[] = [];
   tx(db, () => {
     for (const { category, ...rule } of data.receiptRules)
@@ -510,13 +583,15 @@ async function reset() {
     for (const r of data.subcategoryRules) setSubcategoryReceiptRule(db, admin, r);
     for (const o of data.occupancy) rental.upsertOccupancy(db, admin, { ...o, property_id: property.id });
     // Booking calendar: two platform feeds from "files" (no link, so nothing hits the network).
-    const todayIso = today.toISOString().slice(0, 10);
+    const since = (platform: "airbnb" | "vrbo") => (platform === "airbnb" ? airbnbSince : "");
     for (const platform of ["airbnb", "vrbo"] as const) {
       const feed = calendar.createFeed(db, admin, {
         property_id: property.id,
         name: platform === "airbnb" ? "Airbnb (sample file)" : "VRBO (sample file)",
       });
-      calendar.syncFeedText(db, admin, feed.id, sampleIcs(data, platform), todayIso);
+      // Like the real thing, Airbnb's export only has the last couple of months of past stays; the rest is in
+      // sample-airbnb-reservations.csv for trying "Import reservations CSV".
+      calendar.syncFeedText(db, admin, feed.id, sampleIcs(data, platform, [], since(platform)), todayIso);
     }
     for (const year of data.years.slice(0, 2)) {
       rental.setTaxYear(db, admin, { property_id: property.id, year, mortgage_interest: 11240.55 - (year % 10) * 180 });
@@ -565,7 +640,11 @@ async function reset() {
     "SUMMARY:Reserved",
     "END:VEVENT",
   ].join("\r\n");
-  writeFileSync(join(config.dataDir, "sample-airbnb.ics"), sampleIcs(data, "airbnb", [newStay]));
+  writeFileSync(join(config.dataDir, "sample-airbnb.ics"), sampleIcs(data, "airbnb", [newStay], airbnbSince));
+  writeFileSync(
+    join(config.dataDir, "sample-airbnb-reservations.csv"),
+    sampleReservationsCsv(data, property.name, todayIso),
+  );
 
   const port = harnessPort();
   const info = {
@@ -581,6 +660,7 @@ async function reset() {
     receipts: receipts.length,
     sample_csv: join(config.dataDir, "sample-bank-export.csv"),
     sample_ics: join(config.dataDir, "sample-airbnb.ics"),
+    sample_reservations_csv: join(config.dataDir, "sample-airbnb-reservations.csv"),
     seeded_for: today.toISOString().slice(0, 10),
   };
   writeFileSync(join(config.dataDir, MARKER), JSON.stringify(info, null, 2) + "\n");
