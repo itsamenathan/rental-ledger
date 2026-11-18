@@ -130,6 +130,10 @@ build time. Building from a copy without `.git`, pass `--build-arg GIT_SHA=… -
 shows the build date only. See `compose.example.yaml`. Everything persistent lives in `/data` (`rental.db` plus `uploads/` for receipts);
 back up that volume. Run the CLI inside the container with `docker exec <ctr> node server/cli.ts …`.
 
+CI publishes an image for every commit on `main` once the checks pass: `ghcr.io/itsamenathan/rental-ledger:<short sha>`
+(e.g. `:5d17935`) and `:latest`, which follows the newest one. The package is private like the repo, so log in first
+with a token that has `read:packages`: `docker login ghcr.io -u <user>`.
+
 | Variable                                              | Default                         | Purpose                                                                                                                                 |
 | ----------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `PORT`                                                | `3000`                          | HTTP port                                                                                                                               |
