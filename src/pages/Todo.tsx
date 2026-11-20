@@ -41,8 +41,9 @@ function alertNote(a: RecurringAlert) {
 }
 
 /**
- * Everything that needs a look, grouped by what you'd do about it. Every item uses the same row (TodoRow): what it's
- * about, what's wrong, and the buttons that fix it. The groups above the line are what the nav badge counts.
+ * Everything that needs a look, grouped by the part of the app it belongs to. Every item uses the same row (TodoRow):
+ * what it's about, what's wrong, and the buttons that fix it. Group counts add up to the nav badge (recurring notes
+ * and receipts aren't counted).
  */
 export default function Todo() {
   const { key, qs: pq, path: scoped } = useProperty();
@@ -99,19 +100,20 @@ export default function Todo() {
       {!!total && <p className="muted small">{plural(total, "thing needs", "things need")} a look.</p>}
       {total === 0 && (
         <div className="card all-clear">
-          <strong>✓ All caught up.</strong> Nothing is flagged, every expense has a tax treatment, and bills, manager
-          statements and occupancy all check out.
+          <strong>✓ All caught up.</strong>
         </div>
       )}
 
-      {!!flagged.data?.total && (
-        <Group
-          title="Check flagged entries"
-          count={flagged.data.total}
-          hint="Fix anything that's wrong, then mark it OK."
-        >
-          {flagged.data.items.map((tx) => (
-            <EntryRow key={tx.id} tx={tx} property={propName(tx.property_id)} onOpen={() => setEditing(tx.id)}>
+      {(!!flagged.data?.total || !!unallocated.data?.total) && (
+        <Group title="Transactions" count={(flagged.data?.total ?? 0) + (unallocated.data?.total ?? 0)}>
+          {flagged.data?.items.map((tx) => (
+            <EntryRow
+              key={`f${tx.id}`}
+              tx={tx}
+              problem={tx.review_note ? `Flagged: ${tx.review_note}` : "Flagged for review"}
+              property={propName(tx.property_id)}
+              onOpen={() => setEditing(tx.id)}
+            >
               {canWrite && (
                 <button
                   className="btn primary small"
@@ -122,17 +124,14 @@ export default function Todo() {
               )}
             </EntryRow>
           ))}
-        </Group>
-      )}
-
-      {!!unallocated.data?.total && (
-        <Group
-          title="Rental only, or the whole property?"
-          count={unallocated.data.total}
-          hint="Left out of the tax report until you pick. Rental only is deducted in full; whole property is split by rental days."
-        >
-          {unallocated.data.items.map((tx) => (
-            <EntryRow key={tx.id} tx={tx} property={propName(tx.property_id)} onOpen={() => setEditing(tx.id)}>
+          {unallocated.data?.items.map((tx) => (
+            <EntryRow
+              key={`u${tx.id}`}
+              tx={tx}
+              problem="Rental only or whole property?"
+              property={propName(tx.property_id)}
+              onOpen={() => setEditing(tx.id)}
+            >
               {canWrite && (
                 <>
                   <button
@@ -154,17 +153,9 @@ export default function Todo() {
         </Group>
       )}
 
-      {bills.length > 0 && (
-        <Group
-          title="Recurring bills"
-          count={bills.length}
-          hint={
-            <>
-              Compared with what you usually pay. <Link to={scoped("/recurring")}>All recurring bills →</Link>
-            </>
-          }
-        >
-          {bills.map((a) => (
+      {alerts.length > 0 && (
+        <Group title="Recurring bills" count={bills.length}>
+          {[...bills, ...notes].map((a) => (
             <AlertRow
               key={`${a.series_key}|${a.type}|${a.month}`}
               alert={a}
@@ -177,11 +168,7 @@ export default function Todo() {
       )}
 
       {managerMonths.length > 0 && (
-        <Group
-          title="Manager statements"
-          count={managerMonths.length}
-          hint="The statement or invoice lists something the ledger doesn't have, or a difference nobody has explained."
-        >
+        <Group title="Manager statements" count={managerMonths.length}>
           {managerMonths.map((m) => (
             <TodoRow
               key={`${m.property_id}-${m.month}`}
@@ -189,7 +176,7 @@ export default function Todo() {
               property={propName(m.property_id)}
               note={
                 [
-                  m.to_add ? `${plural(m.to_add, "entry", "entries")} to add` : "",
+                  m.to_add ? `${plural(m.to_add, "entry", "entries")} missing from the ledger` : "",
                   m.to_check ? `${plural(m.to_check, "difference")} to explain` : "",
                 ]
                   .filter(Boolean)
@@ -204,50 +191,20 @@ export default function Todo() {
         </Group>
       )}
 
-      {ownerStays.length > 0 && (
-        <Group
-          title="Did you stay here?"
-          count={ownerStays.length}
-          hint="The calendars were blocked with no guest. Your own stays count as personal days at tax time."
-          list={false}
-        >
-          <CandidateList items={ownerStays} onChange={reloadAll} />
+      {(ownerStays.length > 0 || guestNights.length > 0) && (
+        <Group title="Occupancy" count={ownerStays.length + guestNights.length} list={false}>
+          {ownerStays.length > 0 && <CandidateList items={ownerStays} onChange={reloadAll} />}
+          {guestNights.length > 0 && <GuestNightList items={guestNights} onChange={reloadAll} />}
         </Group>
       )}
 
-      {guestNights.length > 0 && (
-        <Group
-          title="Guest nights don't match the calendar"
-          count={guestNights.length}
-          hint="Keep your numbers if the calendar is missing direct bookings."
-          list={false}
-        >
-          <GuestNightList items={guestNights} onChange={reloadAll} />
-        </Group>
-      )}
-
-      {(notes.length > 0 || missingReceipts > 0) && (
-        <Group title="Worth a look" hint="Not counted in the badge. Nothing here is necessarily wrong.">
-          {notes.map((a) => (
-            <AlertRow
-              key={`${a.series_key}|${a.type}|${a.month}`}
-              alert={a}
-              property={propName(seriesOf(a)?.property_id ?? 0)}
-            >
-              <RecurringActions alert={a} series={seriesOf(a)} onChanged={reloadAll} />
-            </AlertRow>
-          ))}
-          {missingReceipts > 0 && (
-            <TodoRow
-              title="Receipts"
-              when={String(year)}
-              note={`${plural(missingReceipts, "expense")} that should have a receipt and don't.`}
-            >
-              <Link className="btn small" to={scoped(`/files?year=${year}&missing=1`)}>
-                See them
-              </Link>
-            </TodoRow>
-          )}
+      {missingReceipts > 0 && (
+        <Group title="Receipts">
+          <TodoRow title={`${year} receipts`} note={`${plural(missingReceipts, "expense")} without a receipt.`}>
+            <Link className="btn small" to={scoped(`/files?year=${year}&missing=1`)}>
+              See them
+            </Link>
+          </TodoRow>
         </Group>
       )}
 
@@ -259,13 +216,11 @@ export default function Todo() {
 function Group({
   title,
   count,
-  hint,
   list = true,
   children,
 }: {
   title: string;
   count?: number;
-  hint: ReactNode;
   /** false when the children bring their own list */
   list?: boolean;
   children: ReactNode;
@@ -277,20 +232,21 @@ function Group({
           {title} {!!count && <span className="nav-count inline">{count}</span>}
         </h2>
       </div>
-      <p className="muted small">{hint}</p>
       {list ? <ul className="todo-list">{children}</ul> : children}
     </section>
   );
 }
 
-/** A ledger entry: category and vendor, its date, the note that explains why it's here. Click to edit. */
+/** A ledger entry: category and vendor, its date, what's wrong with it (and its description). Click to edit. */
 function EntryRow({
   tx,
+  problem,
   property,
   onOpen,
   children,
 }: {
   tx: Transaction;
+  problem: string;
   property?: string;
   onOpen: () => void;
   children: ReactNode;
@@ -301,7 +257,12 @@ function EntryRow({
       title={who ? `${tx.category} · ${who}` : tx.category}
       when={fmtDate(tx.date)}
       property={property}
-      note={tx.review_note ? `⚑ ${tx.review_note}` : tx.description}
+      note={
+        <>
+          {problem}
+          {tx.description && <span className="muted"> · {tx.description}</span>}
+        </>
+      }
       amount={tx.amount}
       onOpen={onOpen}
     >

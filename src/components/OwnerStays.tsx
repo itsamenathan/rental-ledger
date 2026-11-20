@@ -79,7 +79,9 @@ export function CandidateList({
           key={keyOf(c)}
           title={rangeLabel(c)}
           property={c.property}
-          note={showReason ? c.reason : `Blocked on ${c.blocked_on.join(" and ")} with no guest booked`}
+          note={
+            showReason ? c.reason : `Blocked on ${c.blocked_on.join(" and ")} with no guest. Was this a personal stay?`
+          }
         >
           {canWrite && (
             <>
@@ -157,17 +159,13 @@ export function GuestNightList({
       {items.map((m) => (
         <TodoRow
           key={`${m.property_id}/${m.month}`}
-          title={monthTitle(m.month)}
+          title={`${monthTitle(m.month)} guest nights`}
           property={m.property}
-          note={
-            <>
-              Calendar: {plural(m.calendar!.nights_booked, "night")}, {plural(m.calendar!.check_ins, "check-in")}. You
-              entered:{" "}
-              {m.stored
-                ? `${plural(m.stored.nights_booked, "night")}, ${plural(m.stored.check_ins, "check-in")}.`
-                : "nothing yet."}
-            </>
-          }
+          note={`Calendar has ${plural(m.calendar!.nights_booked, "night")}, ${plural(m.calendar!.check_ins, "check-in")}; you entered ${
+            m.stored
+              ? `${plural(m.stored.nights_booked, "night")}, ${plural(m.stored.check_ins, "check-in")}`
+              : "nothing"
+          }.`}
         >
           {canWrite && (
             <button className="btn small primary" onClick={() => apply(m)}>
