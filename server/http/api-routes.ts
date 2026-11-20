@@ -178,10 +178,12 @@ api.post("/uploads", async (c) => {
   const form = await c.req.formData();
   const f = form.get("file");
   if (!(f instanceof File)) throw badRequest('Send multipart/form-data with a "file" field');
+  const preview = form.get("preview");
   const staged = await uploads.stageUpload(getDb(), actorOf(c), {
     filename: f.name,
     contentType: f.type || "application/octet-stream",
     data: new Uint8Array(await f.arrayBuffer()),
+    preview: preview instanceof File ? new Uint8Array(await preview.arrayBuffer()) : undefined,
   });
   return c.json(staged, 201);
 });
@@ -200,6 +202,14 @@ api.get("/attachments/:id", async (c) => {
     "Cache-Control": "private, max-age=3600",
   });
 });
+api.get("/attachments/:id/preview", (c) =>
+  c.body(new Uint8Array(files.readAttachmentPreview(getDb(), id(c))), 200, {
+    "Content-Type": "image/jpeg",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+    "Cache-Control": "private, max-age=3600",
+  }),
+);
 api.patch("/attachments/:id", async (c) =>
   c.json(await files.updateAttachment(getDb(), actorOf(c), id(c), await body(c))),
 );

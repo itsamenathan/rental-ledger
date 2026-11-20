@@ -10,7 +10,7 @@ import { tx, type DB } from "../db.ts";
 import { pendingUploads } from "../db/schema.ts";
 import { audit, badRequest, requireWrite, type Actor } from "../context.ts";
 import { attachStored } from "./attachments.ts";
-import { checkUpload, cleanFilename, releaseFile, sha256, storeBytes } from "./storage.ts";
+import { checkPreview, checkUpload, cleanFilename, releaseFile, savePreview, sha256, storeBytes } from "./storage.ts";
 
 export const STALE_HOURS = 24;
 
@@ -32,15 +32,19 @@ const cols = {
 
 export const uploadIds = z.array(z.number().int().positive()).max(50);
 
-/** Store a receipt for an entry that hasn't been saved yet. */
+/**
+ * Store a receipt for an entry that hasn't been saved yet. `preview` is an optional JPEG picture of a PDF (the
+ * scanner sends its first page) shown in place of a generic PDF icon.
+ */
 export async function stageUpload(
   db: DB,
   actor: Actor,
-  file: { filename: string; contentType: string; data: Uint8Array },
+  file: { filename: string; contentType: string; data: Uint8Array; preview?: Uint8Array },
 ): Promise<PendingUpload> {
   requireWrite(actor);
   await pruneStaleUploads(db);
   const { contentType, ext } = checkUpload(file);
+  if (file.preview) checkPreview(contentType, file.preview);
   const sha = sha256(file.data);
   const filename = cleanFilename(file.filename, `receipt.${ext}`);
   return storeBytes(
@@ -61,6 +65,7 @@ export async function stageUpload(
           })
           .returning(cols)
           .get();
+        if (file.preview) savePreview(db, sha, file.preview);
         audit(db, actor, "create", "pending_upload", row.id, { filename, size: row.size });
         return row;
       }),

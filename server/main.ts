@@ -20,7 +20,11 @@ const indexHtml = readFileSync(resolve(dist, "index.html"), "utf8");
 
 app.use(
   "/assets/*",
-  serveStatic({ root: dist, onFound: (_p, c) => c.header("Cache-Control", "public, max-age=31536000, immutable") }),
+  serveStatic({
+    root: dist,
+    precompressed: true, // .gz files written by the build (vite.config.ts `precompress`)
+    onFound: (_p, c) => c.header("Cache-Control", "public, max-age=31536000, immutable"),
+  }),
 );
 // The service worker and manifest must be re-checked on every load so installed apps pick up new versions.
 const revalidate = serveStatic({ root: dist, onFound: (_p, c) => c.header("Cache-Control", "no-cache") });

@@ -413,7 +413,11 @@ function FileRow({
   return (
     <li className="file-row">
       <button className="file-thumb" onClick={onView} aria-label={`View ${f.filename}`}>
-        {isImage(f) ? <img src={f.url} alt="" loading="lazy" /> : <span>{typeLabel(f)}</span>}
+        {isImage(f) || f.preview_url ? (
+          <img src={isImage(f) ? f.url : f.preview_url!} alt="" loading="lazy" />
+        ) : (
+          <span>{typeLabel(f)}</span>
+        )}
       </button>
       <div className="file-main">
         {renaming ? (

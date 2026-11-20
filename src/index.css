@@ -1174,7 +1174,7 @@ tr.dirty td {
 }
 .receipt-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
 }
 .receipt-btn {
@@ -3624,4 +3624,414 @@ table.conflict thead th {
 }
 .cal-sources {
   margin: -0.25rem 0 0;
+}
+
+/* ---------- document scanner (src/scanner/Scanner.tsx) ---------- */
+.scanner {
+  position: fixed;
+  inset: 0;
+  z-index: 70; /* above the entry form's modal */
+  display: flex;
+  flex-direction: column;
+  background: #111110;
+  color: #f0efec;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.scanner .btn {
+  background: #2a2a28;
+  border-color: #3a3a37;
+  color: #f0efec;
+}
+.scanner .btn.primary {
+  background: #4fae8a;
+  border-color: #4fae8a;
+  color: #0b1a14;
+}
+.scanner .muted {
+  color: #a9a8a2;
+}
+.scanner-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+}
+.scanner-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.scanner-icon {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.scanner-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+.scanner-msg {
+  flex-direction: column;
+  gap: 0.5rem;
+  text-align: center;
+  color: #d8d7d2;
+}
+.scanner-msg .small {
+  color: #a9a8a2;
+  font-size: 0.85rem;
+  max-width: 28rem;
+}
+.scanner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.scan-frame {
+  position: relative;
+  flex: none;
+}
+.scan-frame canvas {
+  display: block;
+}
+.scan-frame.page {
+  box-shadow: 0 4px 24px rgb(0 0 0 / 50%);
+  background: #fff;
+}
+.scan-frame.rendering canvas {
+  opacity: 0.6;
+}
+.scan-frame svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  touch-action: none;
+}
+.scan-shade {
+  fill: rgb(0 0 0 / 45%);
+  pointer-events: none;
+}
+.scan-outline {
+  fill: none;
+  stroke: #4fae8a;
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.scan-handle {
+  fill: rgb(79 174 138 / 25%);
+  stroke: #fff;
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.scan-handle.on {
+  fill: rgb(79 174 138 / 55%);
+}
+.scan-handle-hit {
+  fill: transparent;
+  cursor: grab;
+  touch-action: none;
+}
+.scan-loupe {
+  position: absolute;
+  top: -0.5rem;
+  left: -0.5rem;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 50%);
+  pointer-events: none;
+}
+.scan-loupe.right {
+  left: auto;
+  right: -0.5rem;
+}
+.scanner-tip {
+  margin: 0;
+  padding: 0 1rem 0.25rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #a9a8a2;
+}
+.scanner-tools {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem 0.25rem;
+}
+.scanner-tools .segmented {
+  background: #2a2a28;
+}
+.scanner-tools .segmented button {
+  color: #d8d7d2;
+}
+.scanner-tools .segmented button.on {
+  background: #4fae8a;
+  color: #0b1a14;
+}
+.scanner-foot {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem 0.9rem;
+}
+.scanner-foot .btn {
+  flex: 1;
+  padding-inline: 0.5rem;
+}
+.scanner-pages {
+  list-style: none;
+  display: flex;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0 0.75rem 0.25rem;
+  overflow-x: auto;
+}
+.scanner-pages li {
+  position: relative;
+  flex: none;
+}
+.scanner-pages img {
+  display: block;
+  height: 56px;
+  border-radius: 4px;
+  background: #fff;
+}
+.scanner-pages button {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 0;
+  background: #2a2a28;
+  color: #f0efec;
+  line-height: 1;
+  cursor: pointer;
+}
+.scanner-busy {
+  position: absolute;
+  left: 50%;
+  bottom: 5.5rem;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 75%);
+  font-size: 0.9rem;
+}
+.scanner .tile-spinner {
+  position: static;
+  width: 22px;
+  height: 22px;
+}
+.scan-hint .link {
+  font-size: inherit;
+}
+
+/* The scanner's own camera */
+.scan-camera {
+  position: relative;
+  padding: 0;
+  background: #000;
+}
+.scan-camera {
+  container-type: size;
+}
+/* Exactly the picture's size within the stage (like object-fit: contain), so overlays land on the image */
+.scan-camera-frame {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  aspect-ratio: var(--shape);
+  width: min(100cqw, 100cqh * var(--shape));
+  overflow: hidden;
+}
+.scan-camera video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.scan-focus-ring {
+  position: absolute;
+  width: 4.5rem;
+  height: 4.5rem;
+  margin: -2.25rem 0 0 -2.25rem;
+  border: 2px solid #ffd54a;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: scan-focus 0.9s ease-out forwards;
+}
+@keyframes scan-focus {
+  0% {
+    transform: scale(1.5);
+    opacity: 1;
+  }
+  40% {
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.scan-flash {
+  position: absolute;
+  inset: 0;
+  background: #fff;
+  pointer-events: none;
+  animation: scan-flash 0.25s ease-out forwards;
+}
+@keyframes scan-flash {
+  from {
+    opacity: 0.7;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.scan-camera-starting {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: #a9a8a2;
+  font-size: 0.9rem;
+}
+
+/* Camera footer: side buttons | shutter | side buttons, like a phone camera app */
+.scan-camera-foot {
+  align-items: center;
+  padding: 0.75rem 0.75rem calc(1rem + env(safe-area-inset-bottom));
+}
+.scan-camera-side {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+.scan-side-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #f0efec;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.scan-side-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 12%);
+  transition:
+    transform 0.12s,
+    background 0.12s;
+}
+.scan-side-btn:active:not(:disabled) .scan-side-icon {
+  transform: scale(0.92);
+  background: rgb(255 255 255 / 20%);
+}
+.scan-side-btn.primary .scan-side-icon {
+  background: #4fae8a; /* the scanner's own primary colour (it's always dark) */
+  color: #0b1a14;
+}
+.scan-side-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.scan-side-label {
+  font-size: 0.72rem;
+  color: #c9c8c2;
+}
+.scan-side-count {
+  position: absolute;
+  top: -0.2rem;
+  right: -0.2rem;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: #f0efec;
+  color: #111110;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  text-align: center;
+}
+.scan-shutter {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 4.5rem;
+  height: 4.5rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 3px solid #f0efec;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.scan-shutter > span {
+  width: 3.6rem;
+  height: 3.6rem;
+  border-radius: 50%;
+  background: #f0efec;
+  transition: transform 0.1s;
+}
+.scan-shutter:active:not(:disabled) > span {
+  transform: scale(0.86);
+}
+.scan-shutter:disabled {
+  opacity: 0.4;
+}
+/* A frosted hint over the bottom of the picture that fades away */
+.scan-camera-hint {
+  position: absolute;
+  bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  background: rgb(20 20 18 / 55%);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 25%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #f6f5f1;
+  font-size: 0.8rem;
+  pointer-events: none;
+  animation: scan-hint 4s ease-in forwards;
+}
+@keyframes scan-hint {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }

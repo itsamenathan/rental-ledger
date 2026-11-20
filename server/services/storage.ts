@@ -7,9 +7,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { DB } from "../db.ts";
-import { attachments, managerDocuments, pendingUploads } from "../db/schema.ts";
+import { attachments, filePreviews, managerDocuments, pendingUploads } from "../db/schema.ts";
 import { config } from "../config.ts";
 import { AppError, badRequest } from "../context.ts";
 
@@ -117,5 +117,41 @@ export const readStored = (key: string) => readFile(pathFor(key));
 /** Call after deleting a row that pointed at `key`: removes the file once nothing references it. */
 export async function releaseFile(db: DB, key: string) {
   // Checked and removed with no await in between the check and the row deletes that came before it.
-  if (!referenced(db, key)) await unlink(pathFor(key)).catch(() => {});
+  if (referenced(db, key)) return;
+  dropOrphanPreviews(db);
+  await unlink(pathFor(key)).catch(() => {});
+}
+
+/** Pictures of non-image files are small: a phone-made JPEG of a page, a few hundred pixels wide. */
+export const MAX_PREVIEW_BYTES = 300 * 1024;
+
+/** Validate a preview picture sent with an upload: a JPEG of reasonable size, only for a PDF. */
+export function checkPreview(contentType: string, data: Uint8Array) {
+  if (contentType !== "application/pdf") throw badRequest("A preview picture can only go with a PDF");
+  if (data.byteLength > MAX_PREVIEW_BYTES) throw new AppError(413, "Preview picture too large");
+  if (data.byteLength < 4 || data[0] !== 0xff || data[1] !== 0xd8 || data[2] !== 0xff)
+    throw badRequest("The preview picture must be a JPEG");
+}
+
+/** Remember a picture for the stored file `sha` (synchronous; the first one saved for a file is kept). */
+export function savePreview(db: DB, sha: string, data: Uint8Array) {
+  db.insert(filePreviews)
+    .values({ sha256: sha, data: Buffer.from(data) })
+    .onConflictDoNothing()
+    .run();
+}
+
+export function readPreview(db: DB, sha: string): Buffer | undefined {
+  return db.select({ data: filePreviews.data }).from(filePreviews).where(eq(filePreviews.sha256, sha)).get()?.data;
+}
+
+/** Remove pictures of files that no row references any more (database only, so it's safe next to releaseFile). */
+export function dropOrphanPreviews(db: DB) {
+  db.delete(filePreviews)
+    .where(
+      sql`${filePreviews.sha256} NOT IN (SELECT ${attachments.sha256} FROM ${attachments}
+        UNION SELECT ${managerDocuments.sha256} FROM ${managerDocuments}
+        UNION SELECT ${pendingUploads.sha256} FROM ${pendingUploads})`,
+    )
+    .run();
 }

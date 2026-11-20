@@ -3,7 +3,7 @@
  * server/db/migrations. Migrations are applied automatically on startup.
  */
 import { sql } from "drizzle-orm";
-import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { blob, check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 const createdAt = () => text("created_at").notNull().default(now);
@@ -219,6 +219,17 @@ export const pendingUploads = sqliteTable(
   },
   (t) => [index("pending_uploads_key").on(t.storageKey), index("pending_uploads_sha").on(t.sha256)],
 );
+
+/**
+ * A small JPEG picture of a stored file that isn't an image itself (a scanned PDF's first page, made by the scanner on
+ * the phone), keyed by the file's sha256 so every row sharing the file shares it. Removed with the file's last
+ * reference (`dropOrphanPreviews` in `server/services/storage.ts`).
+ */
+export const filePreviews = sqliteTable("file_previews", {
+  sha256: text("sha256").primaryKey(),
+  data: blob("data", { mode: "buffer" }).notNull(),
+  createdAt: createdAt(),
+});
 
 /**
  * Property-manager paperwork saved for re-checking later: owner-statement CSVs and invoices, one row per file.

@@ -92,6 +92,13 @@
       "when": 1794892287795,
       "tag": "0012_pending-uploads",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1795148354895,
+      "tag": "0013_file-previews",
+      "breakpoints": true
     }
   ]
 }

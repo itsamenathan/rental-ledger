@@ -75,6 +75,8 @@ export interface Attachment {
   content_type: string;
   size: number;
   created_at: string;
+  /** A picture of the file is at `/api/attachments/:id/preview` (scanned PDFs). */
+  has_preview?: boolean;
 }
 
 export interface TxList {
@@ -150,6 +152,8 @@ export interface LibraryFile {
   month: string;
   date: string;
   url: string;
+  /** A picture of a file that isn't an image (a scanned PDF's first page). */
+  preview_url: string | null;
   manager: { id: number; kind: "statement" | "invoice"; month: string; reference: string; property: string } | null;
   links: {
     attachment_id: number;
