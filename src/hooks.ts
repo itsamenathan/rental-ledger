@@ -57,8 +57,10 @@ export const useToast = () => useContext(ToastCtx);
 
 // ---------------- persisted UI state ----------------
 
-export function usePersistentState<T>(key: string, initial: T) {
+/** `opened`, when given (e.g. from a link's ?month=), wins over the saved value and becomes the new one. */
+export function usePersistentState<T>(key: string, initial: T, opened?: T) {
   const [v, setV] = useState<T>(() => {
+    if (opened !== undefined) return opened;
     try {
       const s = localStorage.getItem(key);
       return s ? (JSON.parse(s) as T) : initial;

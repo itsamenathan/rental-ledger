@@ -295,5 +295,9 @@ describe("one list everywhere", () => {
     expect(sorted(tax?.ids ?? [])).toEqual(service);
     expect(sorted(filter.items.map((t) => t.id))).toEqual(service);
     expect(todo.missing_receipts).toBe(service.length);
+    expect(todo.tax_season).toBe(false);
+    // in tax season the count is for last year
+    const spring = todoSummary(db, { today: "2027-02-01" });
+    expect(spring).toMatchObject({ tax_season: true, receipts_year: 2026, missing_receipts: service.length });
   });
 });

@@ -310,4 +310,4 @@ export function addLinkFor(
 }
 
 export const dismissRecurring = (series_key: string, month: string | null, note = "") =>
-  api("recurring/dismissals", { method: "POST", json: { series_key, month, note } });
+  api<{ id: number }>("recurring/dismissals", { method: "POST", json: { series_key, month, note } });
