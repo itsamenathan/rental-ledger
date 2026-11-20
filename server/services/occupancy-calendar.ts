@@ -8,7 +8,14 @@
 import { and, asc, eq, min } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
-import { calendarEvents, calendarFeeds, occupancy, ownerStayDismissals, properties } from "../db/schema.ts";
+import {
+  calendarEvents,
+  calendarFeeds,
+  occupancy,
+  occupancyCalendarKeeps,
+  ownerStayDismissals,
+  properties,
+} from "../db/schema.ts";
 import { audit, badRequest, notFound, requireWrite, type Actor } from "../context.ts";
 import { addDays, calendarMonths, nightsBetween, type CalendarEvent } from "./calendar.ts";
 import { resolvePropertyId } from "./ledger.ts";
@@ -41,6 +48,26 @@ export interface MonthCompare {
    * feed is new), when no imported reservation history covers the month: that platform's stays may be missing.
    */
   incomplete: string[];
+  /**
+   * "Keep mine": the user said the saved numbers are right while the calendar and saved numbers were exactly these.
+   * Null when never kept or when either side has changed since (then the month is asked about again).
+   */
+  kept: { id: number; note: string; created_at: string } | null;
+  /** for months that differ: the reservations the calendar counted, so the missing or extra stay can be found */
+  stays: CountedStay[];
+}
+
+export interface CountedStay {
+  start_date: string;
+  end_date: string;
+  /** nights of this stay counted in the month (a night held by another reservation isn't counted twice) */
+  nights_in_month: number;
+  /** checks in during the month (counts as one of its check-ins) */
+  check_in: boolean;
+  source: CalendarEvent["source"];
+  /** the feed's name, "Reservation history" or "Manager statement (…)" */
+  feed: string;
+  summary: string;
 }
 
 /** Each feed of the property with the start of its earliest event (null when it has none). */
@@ -55,6 +82,33 @@ function feedCoverage(db: DB, propertyId: number) {
     .all();
 }
 
+/** The reservations holding nights in `month` (from calendarMonths' night → event map), in date order. */
+function countedStays(best: Map<string, CalendarEvent>, month: string): CountedStay[] {
+  const out = new Map<CalendarEvent, CountedStay>();
+  const end = `${nextMonthOf(month)}-01`;
+  for (let d = `${month}-01`; d < end; d = addDays(d, 1)) {
+    const ev = best.get(d);
+    if (!ev || ev.kind !== "reserved") continue;
+    let s = out.get(ev);
+    if (!s) {
+      s = {
+        start_date: ev.start_date,
+        end_date: ev.end_date,
+        nights_in_month: 0,
+        check_in: false,
+        source: ev.source,
+        feed: ev.feed,
+        summary: ev.summary,
+      };
+      out.set(ev, s);
+    }
+    s.nights_in_month++;
+    // the same rule as calendarMonths: a check-in is the first night a reservation holds
+    if (best.get(addDays(d, -1)) !== ev) s.check_in = true;
+  }
+  return [...out.values()].sort((a, b) => a.start_date.localeCompare(b.start_date));
+}
+
 /** Calendar vs saved guest nights for each month of `year`, for one property. */
 export function compareOccupancyCalendar(
   db: DB,
@@ -64,7 +118,7 @@ export function compareOccupancyCalendar(
   const year = raw.year;
   if (!Number.isInteger(year) || year < 2000 || year > 2100) throw badRequest("Pass a year");
   const thisMonth = (raw.today ?? isoToday()).slice(0, 7);
-  const { months: cal, loaded } = calendarMonths(db, propertyId, `${year}-01`, `${year}-12`);
+  const { months: cal, loaded, best } = calendarMonths(db, propertyId, `${year}-01`, `${year}-12`);
   const feeds = feedCoverage(db, propertyId);
   const history = loaded.filter((e) => e.source === "history");
   const saved = db
@@ -72,6 +126,7 @@ export function compareOccupancyCalendar(
     .from(occupancy)
     .where(eq(occupancy.propertyId, propertyId))
     .all();
+  const keeps = db.select().from(occupancyCalendarKeeps).where(eq(occupancyCalendarKeeps.propertyId, propertyId)).all();
   const months = yearMonths(year).map((month): MonthCompare => {
     const c = cal.find((m) => m.month === month)!;
     const s = saved.find((r) => r.month === month);
@@ -81,16 +136,27 @@ export function compareOccupancyCalendar(
     const incomplete = hasHistory
       ? []
       : feeds.filter((f) => f.first == null || f.first > `${month}-01`).map((f) => f.name);
-    const base = { month, stored, calendar: null, calendar_lower: false, incomplete };
+    const base = { month, stored, calendar: null, calendar_lower: false, incomplete, kept: null, stays: [] };
     if (month >= thisMonth) return { ...base, status: "not_ended" };
     if (c.booked_nights === 0) return { ...base, status: "no_data" };
     const calendar = { nights_booked: c.booked_nights, check_ins: c.check_ins };
     const same = stored && stored.nights_booked === calendar.nights_booked && stored.check_ins === calendar.check_ins;
+    if (same) return { ...base, calendar, status: "match" };
+    const k = keeps.find(
+      (x) =>
+        x.month === month &&
+        x.calendarNights === calendar.nights_booked &&
+        x.calendarCheckIns === calendar.check_ins &&
+        x.storedNights === (stored?.nights_booked ?? null) &&
+        x.storedCheckIns === (stored?.check_ins ?? null),
+    );
     return {
       ...base,
       calendar,
-      status: same ? "match" : "differs",
+      status: "differs",
       calendar_lower: !!stored && calendar.nights_booked < stored.nights_booked,
+      kept: k ? { id: k.id, note: k.note, created_at: k.createdAt } : null,
+      stays: countedStays(best, month),
     };
   });
   return {
@@ -165,6 +231,73 @@ export function applyCalendarToOccupancy(db: DB, actor: Actor | null, raw: unkno
     }
   });
   return { property_id: propertyId, applied, skipped };
+}
+
+export const keepInput = z.object({
+  property: z.union([z.number().int(), z.string()]).optional(),
+  property_id: z.number().int().optional(),
+  month: z.string().regex(monthRe, "Use YYYY-MM"),
+  note: z.string().max(500).default(""),
+});
+
+/**
+ * "Keep mine": the saved guest nights are right (a direct booking, a stay moved by hand…), so stop asking about the
+ * month. Both sides' current numbers are remembered; if either changes, the month is compared again.
+ */
+export function keepOccupancyNumbers(db: DB, actor: Actor, raw: unknown, today = isoToday()) {
+  requireWrite(actor);
+  const i = keepInput.parse(raw);
+  const propertyId = resolvePropertyId(db, i.property_id ?? i.property);
+  const c = compareOccupancyCalendar(db, {
+    property_id: propertyId,
+    year: Number(i.month.slice(0, 4)),
+    today,
+  }).months.find((m) => m.month === i.month)!;
+  if (c.status !== "differs") throw badRequest("The calendar and the saved numbers don't differ for that month");
+  const values = {
+    calendarNights: c.calendar!.nights_booked,
+    calendarCheckIns: c.calendar!.check_ins,
+    storedNights: c.stored?.nights_booked ?? null,
+    storedCheckIns: c.stored?.check_ins ?? null,
+    note: i.note,
+  };
+  return tx(db, () => {
+    const before = db
+      .select()
+      .from(occupancyCalendarKeeps)
+      .where(and(eq(occupancyCalendarKeeps.propertyId, propertyId), eq(occupancyCalendarKeeps.month, i.month)))
+      .get();
+    if (before) db.delete(occupancyCalendarKeeps).where(eq(occupancyCalendarKeeps.id, before.id)).run();
+    const row = db
+      .insert(occupancyCalendarKeeps)
+      .values({ propertyId, month: i.month, ...values, createdBy: actor.user.id })
+      .returning({ id: occupancyCalendarKeeps.id })
+      .get();
+    audit(db, actor, "create", "occupancy_calendar_keep", row.id, {
+      property_id: propertyId,
+      month: i.month,
+      calendar: c.calendar,
+      stored: c.stored,
+      note: i.note,
+    });
+    return { ok: true, id: row.id };
+  });
+}
+
+/** Ask about a kept month again. */
+export function unkeepOccupancyNumbers(db: DB, actor: Actor, id: number) {
+  requireWrite(actor);
+  return tx(db, () => {
+    const before = db.select().from(occupancyCalendarKeeps).where(eq(occupancyCalendarKeeps.id, id)).get();
+    if (!before) throw notFound("Kept month");
+    db.delete(occupancyCalendarKeeps).where(eq(occupancyCalendarKeeps.id, id)).run();
+    audit(db, actor, "delete", "occupancy_calendar_keep", id, {
+      property_id: before.propertyId,
+      month: before.month,
+      note: before.note,
+    });
+    return { ok: true };
+  });
 }
 
 // ======================= owner stays to confirm =======================
@@ -393,7 +526,7 @@ export function occupancyAttention(db: DB, opts: { propertyId?: number; today?: 
       for (const c of ownerStayCandidates(db, { property_id: p.id, year: y, today }).candidates)
         if (c.signal === "strong") stays.set(`${c.start_date}/${c.end_date}`, c);
       for (const m of compareOccupancyCalendar(db, { property_id: p.id, year: y, today }).months)
-        if (m.status === "differs" && !m.incomplete.length) months.push(m);
+        if (m.status === "differs" && !m.incomplete.length && !m.kept) months.push(m);
     }
     if (stays.size || months.length)
       out.push({ property_id: p.id, property: p.name, owner_stays: [...stays.values()], guest_nights: months });

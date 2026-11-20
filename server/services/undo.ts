@@ -14,7 +14,12 @@ import { dismiss, undismiss } from "./recurring.ts";
 import { addReceiptExclusion, listReceiptExclusions, removeReceiptExclusion } from "./receipts.ts";
 import { setSubcategoryReceiptRule } from "./categories.ts";
 import { addOwnerStay, deleteOwnerStay } from "./owner-stays.ts";
-import { dismissCandidate, undismissCandidate } from "./occupancy-calendar.ts";
+import {
+  dismissCandidate,
+  keepOccupancyNumbers,
+  undismissCandidate,
+  unkeepOccupancyNumbers,
+} from "./occupancy-calendar.ts";
 
 type Row = typeof auditLog.$inferSelect;
 type Changes = Record<string, unknown>;
@@ -285,6 +290,16 @@ function plan(r: Row): Plan | null {
     case "owner_stay_dismissal:delete":
       return typeof c.start_date === "string"
         ? { describe: "Mark it as not a stay again", run: (db, a) => dismissCandidate(db, a, c) }
+        : null;
+    case "occupancy_calendar_keep:create":
+      return id ? { describe: "Ask about the month again", run: (db, a) => unkeepOccupancyNumbers(db, a, id) } : null;
+    case "occupancy_calendar_keep:delete":
+      return typeof c.month === "string"
+        ? {
+            describe: `Keep the saved guest nights for ${c.month} again`,
+            run: (db, a) =>
+              keepOccupancyNumbers(db, a, { property_id: c.property_id, month: c.month, note: c.note ?? "" }),
+          }
         : null;
   }
   return null;

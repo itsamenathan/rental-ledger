@@ -130,7 +130,9 @@ release. Add a tool name to select part of the graph. For example, run
   reservation history covers it, and the tax report's "before you file" item skips those months.
   `applyCalendarToOccupancy` writes only nights_booked/check_ins through `upsertOccupancy` (passing the stored
   owner_nights/notes/available through, since zod fills defaults) and skips lower calendar numbers without
-  `confirm_lower`. `ownerStayCandidates` groups block-held nights (no reservation from any source) while they share a
+  `confirm_lower`. "Keep mine" (`keepOccupancyNumbers`, `occupancy_calendar_keeps`) snapshots both sides' nights and
+  check-ins; `MonthCompare.kept` is set only while they still match, so a change on either side asks again. Kept months
+  leave To do and the tax report check. Differing months carry `stays` (the reservations counted) for the To do row. `ownerStayCandidates` groups block-held nights (no reservation from any source) while they share a
   block event; only feeds whose data reaches the range vote (strong = blocked on every covering feed, unclear = one
   covering feed, weak = open on another feed, a 1-night block next to a guest, or > 31 nights). "Not a stay" is
   `owner_stay_dismissals` (exact start/end). The confident items (strong blocks, and fully covered months that

@@ -1,10 +1,12 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { api } from "../api.ts";
 import { monthTitle } from "../format.ts";
 import { useApi, useSession, useToast } from "../hooks.ts";
 import TodoRow from "./TodoRow.tsx";
 import { scopePath } from "../scope.ts";
 import {
+  dayLabel,
   kindLabel,
   plural,
   rangeLabel,
@@ -142,18 +144,33 @@ export function CandidateList({
   );
 }
 
-/** Months where the calendar's guest nights differ from the saved ones, with "Use calendar" (To do page); wrap in a ul.todo-list. */
-export function GuestNightList({
-  items,
-  onChange,
-}: {
-  items: (MonthCompare & { property_id: number; property?: string })[];
-  onChange: () => void;
-}) {
+type GuestMonth = MonthCompare & { property_id: number; property?: string };
+
+/**
+ * Months where the calendar's guest nights differ from the saved ones (To do page); wrap in a ul.todo-list. Tapping a
+ * row lists the reservations the calendar counted. "Use calendar" copies its numbers; "Keep mine" says the saved ones
+ * are right (asked again only if either side changes).
+ */
+export function GuestNightList({ items, onChange }: { items: GuestMonth[]; onChange: () => void }) {
+  return (
+    <>
+      {items.map((m) => (
+        <GuestNightRow key={`${m.property_id}/${m.month}`} m={m} onChange={onChange} />
+      ))}
+    </>
+  );
+}
+
+function GuestNightRow({ m, onChange }: { m: GuestMonth; onChange: () => void }) {
   const { canWrite } = useSession();
   const toast = useToast();
   const run = useRun(onChange);
-  const apply = (m: MonthCompare & { property_id: number }) => {
+  const [showStays, setShowStays] = useState(false);
+  const [keeping, setKeeping] = useState(false);
+  const [note, setNote] = useState("");
+  const cal = m.calendar!;
+
+  const apply = () => {
     if (
       m.calendar_lower &&
       !confirm(
@@ -170,28 +187,123 @@ export function GuestNightList({
       for (const s of r.skipped) toast({ text: s.reason, kind: "error" });
     });
   };
+  const keep = () =>
+    void run(async () => {
+      const r = await api<{ id: number }>("occupancy/calendar/keep", {
+        method: "POST",
+        json: { property_id: m.property_id, month: m.month, note: note.trim() },
+      });
+      setKeeping(false);
+      toast({
+        text: `${monthTitle(m.month)}: kept your numbers`,
+        kind: "ok",
+        action: {
+          label: "Undo",
+          run: () => void run(() => api(`occupancy/calendar/keep/${r.id}`, { method: "DELETE" })),
+        },
+      });
+    });
+
+  const keepForm = keeping && (
+    <form
+      className="guest-keep"
+      onSubmit={(e) => {
+        e.preventDefault();
+        keep();
+      }}
+    >
+      <input
+        aria-label="Why your numbers are right (optional)"
+        placeholder="Why? (optional, e.g. direct booking Sep 12–15)"
+        value={note}
+        maxLength={500}
+        onChange={(e) => setNote(e.target.value)}
+        autoFocus
+      />
+      <button className="btn small primary">Keep mine</button>
+      <button type="button" className="btn small ghost" onClick={() => setKeeping(false)}>
+        Cancel
+      </button>
+    </form>
+  );
+
   return (
-    <>
-      {items.map((m) => (
-        <TodoRow
-          key={`${m.property_id}/${m.month}`}
-          title={`${monthTitle(m.month)} guest nights`}
-          property={m.property}
-          to={scopePath(String(m.property_id), `/occupancy?year=${m.month.slice(0, 4)}`)}
-          note={`Calendar has ${plural(m.calendar!.nights_booked, "night")}, ${plural(m.calendar!.check_ins, "check-in")}; you entered ${
-            m.stored
-              ? `${plural(m.stored.nights_booked, "night")}, ${plural(m.stored.check_ins, "check-in")}`
-              : "nothing"
-          }.`}
-        >
-          {canWrite && (
-            <button className="btn small primary" onClick={() => apply(m)}>
-              Use calendar
-            </button>
-          )}
-        </TodoRow>
-      ))}
-    </>
+    <TodoRow
+      title={`${monthTitle(m.month)} guest nights`}
+      property={m.property}
+      onOpen={() => setShowStays((v) => !v)}
+      note={
+        <>
+          Calendar has {plural(cal.nights_booked, "night")}, {plural(cal.check_ins, "check-in")}; you entered{" "}
+          {m.stored
+            ? `${plural(m.stored.nights_booked, "night")}, ${plural(m.stored.check_ins, "check-in")}`
+            : "nothing"}
+          .{" "}
+          <span className="todo-more" aria-expanded={showStays}>
+            {showStays ? "Hide stays" : `Show the calendar's ${plural(m.stays.length, "stay")}`}
+          </span>
+        </>
+      }
+      below={
+        (keepForm || showStays) && (
+          <>
+            {keepForm}
+            {showStays && <CountedStays m={m} />}
+          </>
+        )
+      }
+    >
+      {canWrite && (
+        <>
+          <button className="btn small primary" onClick={apply}>
+            Use calendar
+          </button>
+          <button className="btn small ghost" onClick={() => setKeeping((v) => !v)} aria-expanded={keeping}>
+            Keep mine
+          </button>
+        </>
+      )}
+    </TodoRow>
+  );
+}
+
+/** The reservations behind a month's calendar numbers, with links to see the month in full. */
+function CountedStays({ m }: { m: GuestMonth }) {
+  const month = m.month.slice(5);
+  const at = (to: string) => scopePath(String(m.property_id), to);
+  return (
+    <ul className="todo-sub">
+      {m.stays.map((s) => {
+        // runs past the month (checkout later than the 1st of the next month)
+        const after = s.end_date.slice(5, 7) !== month && s.end_date.slice(8) !== "01";
+        // "Reserved · HM29A5102C" → the confirmation code; a bare "Reserved" / "Reserved - Guest" adds nothing
+        const detail = s.summary.replace(/^\s*reserved\s*[-·:]?\s*/i, "").trim();
+        const extra = detail && !/^guest$/i.test(detail) ? ` · ${detail}` : "";
+        return (
+          <li key={`${s.start_date}/${s.feed}`}>
+            <span>
+              {dayLabel(s.start_date)} – {dayLabel(s.end_date)}
+              <span className="muted">
+                {" "}
+                · {s.feed}
+                {extra}
+              </span>
+            </span>
+            <span className="muted">
+              {plural(s.nights_in_month, "night")}
+              {!s.check_in ? " (checked in the month before)" : after ? " in this month" : ""}
+            </span>
+            <span />
+          </li>
+        );
+      })}
+      <li className="todo-sub-links">
+        <span>
+          <Link to={at(`/calendar?month=${m.month}`)}>Open the calendar</Link> ·{" "}
+          <Link to={at(`/occupancy?year=${m.month.slice(0, 4)}`)}>Open occupancy</Link>
+        </span>
+      </li>
+    </ul>
   );
 }
 

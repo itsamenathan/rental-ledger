@@ -339,6 +339,11 @@ api.get("/occupancy/calendar", (c) =>
 api.post("/occupancy/calendar/apply", async (c) =>
   c.json(occCal.applyCalendarToOccupancy(getDb(), actorOf(c), await body(c))),
 );
+/** "Keep mine": the saved guest nights of {month, property_id, note?} are right; stop asking until a number changes. */
+api.post("/occupancy/calendar/keep", async (c) =>
+  c.json(occCal.keepOccupancyNumbers(getDb(), actorOf(c), await body(c)), 201),
+);
+api.delete("/occupancy/calendar/keep/:id", (c) => c.json(occCal.unkeepOccupancyNumbers(getDb(), actorOf(c), id(c))));
 
 // ---------------- owner stays ----------------
 

@@ -2216,6 +2216,22 @@ a.todo-main {
 .occ-note {
   margin: 0.5rem 0.75rem;
 }
+/* "Kept" next to a month whose saved guest nights were kept over the calendar's; opens the reason below */
+.kept-badge {
+  margin-left: 0.5rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: var(--surface-2);
+}
+.kept-detail td {
+  background: var(--surface-2);
+  text-align: left;
+}
+.kept-detail p {
+  margin: 0 0 0.4rem;
+}
 .owner-stay-list li {
   display: flex;
   justify-content: space-between;
@@ -2263,6 +2279,26 @@ a.todo-main {
 /* under a To do row: the entries of a possible duplicate, each with its own Delete */
 .todo-below {
   grid-column: 1 / -1;
+}
+/* "Show the calendar's stays" inside a row's note (the whole row is the toggle) */
+.todo-more {
+  color: var(--accent);
+  white-space: nowrap;
+}
+.todo-list .todo-sub li.todo-sub-links {
+  grid-template-columns: 1fr;
+}
+/* "Keep mine" on a guest-nights row: an optional reason, then confirm */
+.guest-keep {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.guest-keep input {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 .todo-sub {
   list-style: none;

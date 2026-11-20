@@ -73,4 +73,19 @@ export interface MonthCompare {
   stored: { nights_booked: number; check_ins: number } | null;
   calendar_lower: boolean;
   incomplete: string[];
+  /** "Keep mine" while both sides still have these numbers */
+  kept: { id: number; note: string; created_at: string } | null;
+  /** the reservations the calendar counted (months that differ) */
+  stays: CountedStay[];
+}
+
+/** A reservation counted in a month's calendar nights. */
+export interface CountedStay {
+  start_date: string;
+  end_date: string;
+  nights_in_month: number;
+  check_in: boolean;
+  source: "feed" | "history" | "statement";
+  feed: string;
+  summary: string;
 }
