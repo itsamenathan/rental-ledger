@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api.ts";
 import { monthTitle } from "../format.ts";
 import { useApi, useSession, useToast } from "../hooks.ts";
+import TodoRow from "./TodoRow.tsx";
 import {
   kindLabel,
   plural,
@@ -74,19 +75,14 @@ export function CandidateList({
   return (
     <ul className="todo-list">
       {items.map((c) => (
-        <li key={keyOf(c)}>
-          <div className="todo-main as-text">
-            <span className="todo-what">
-              <strong>{rangeLabel(c)}</strong>
-              {c.property && <span className="muted"> · {c.property}</span>}
-            </span>
-            <span className="todo-note">
-              {showReason ? c.reason : `Blocked on ${c.blocked_on.join(" and ")} with no guest booked`}
-            </span>
-          </div>
-          <span />
+        <TodoRow
+          key={keyOf(c)}
+          title={rangeLabel(c)}
+          property={c.property}
+          note={showReason ? c.reason : `Blocked on ${c.blocked_on.join(" and ")} with no guest booked`}
+        >
           {canWrite && (
-            <span className="todo-actions">
+            <>
               <KindToggle
                 small
                 value={kinds[keyOf(c)] ?? "owner"}
@@ -108,7 +104,7 @@ export function CandidateList({
                 Add stay
               </button>
               <button
-                className="btn small"
+                className="btn small ghost"
                 onClick={() =>
                   void run(() =>
                     api("owner-stays/dismissals", {
@@ -120,9 +116,9 @@ export function CandidateList({
               >
                 Not a stay
               </button>
-            </span>
+            </>
           )}
-        </li>
+        </TodoRow>
       ))}
     </ul>
   );
@@ -159,29 +155,26 @@ export function GuestNightList({
   return (
     <ul className="todo-list">
       {items.map((m) => (
-        <li key={`${m.property_id}/${m.month}`}>
-          <div className="todo-main as-text">
-            <span className="todo-what">
-              <strong>{monthTitle(m.month)}</strong>
-              {m.property && <span className="muted"> · {m.property}</span>}
-            </span>
-            <span className="todo-note">
-              Calendar {plural(m.calendar!.nights_booked, "night")}, {plural(m.calendar!.check_ins, "check-in")} · you
-              entered{" "}
+        <TodoRow
+          key={`${m.property_id}/${m.month}`}
+          title={monthTitle(m.month)}
+          property={m.property}
+          note={
+            <>
+              Calendar: {plural(m.calendar!.nights_booked, "night")}, {plural(m.calendar!.check_ins, "check-in")}. You
+              entered:{" "}
               {m.stored
-                ? `${plural(m.stored.nights_booked, "night")}, ${plural(m.stored.check_ins, "check-in")}`
-                : "nothing"}
-            </span>
-          </div>
-          <span />
+                ? `${plural(m.stored.nights_booked, "night")}, ${plural(m.stored.check_ins, "check-in")}.`
+                : "nothing yet."}
+            </>
+          }
+        >
           {canWrite && (
-            <span className="todo-actions">
-              <button className="btn small" onClick={() => apply(m)}>
-                Use calendar
-              </button>
-            </span>
+            <button className="btn small primary" onClick={() => apply(m)}>
+              Use calendar
+            </button>
           )}
-        </li>
+        </TodoRow>
       ))}
     </ul>
   );

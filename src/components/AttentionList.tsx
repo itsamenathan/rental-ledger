@@ -3,6 +3,7 @@ import { Link, useLocation } from "react-router";
 import { addLinkFor, dismissRecurring, qs, type RecurringAlert, type RecurringSeries } from "../api.ts";
 import { dateInMonth, monthShort } from "../format.ts";
 import { useSession, useToast, useScopedPath } from "../hooks.ts";
+import { scopePath } from "../scope.ts";
 
 const ICON: Record<RecurringAlert["type"], string> = {
   missing: "?",
@@ -23,23 +24,9 @@ export default function AttentionList({
   limit?: number;
   onChanged: () => void;
 }) {
-  const scoped = useScopedPath();
-  const { canWrite } = useSession();
-  const here = useLocation().pathname;
-  const toast = useToast();
   const [showAll, setShowAll] = useState(false);
   const shown = limit && !showAll ? alerts.slice(0, limit) : alerts;
   if (!alerts.length) return <p className="muted small">Nothing missing. All recurring bills look up to date.</p>;
-
-  const dismiss = async (a: RecurringAlert, whole: boolean) => {
-    try {
-      await dismissRecurring(a.series_key, whole ? null : a.month);
-      toast({ text: whole ? `Stopped tracking ${a.label}` : "Got it, won't flag that again", kind: "ok" });
-      onChanged();
-    } catch (e) {
-      toast({ text: (e as Error).message, kind: "error" });
-    }
-  };
 
   return (
     <>
@@ -52,43 +39,7 @@ export default function AttentionList({
               <div className="attention-body">
                 <div>{a.message}</div>
                 <div className="attention-actions">
-                  <Link to={scoped(`/months/${a.month}`)} className="link small">
-                    Open {monthShort(a.month)}
-                  </Link>
-                  {canWrite && (
-                    <>
-                      {a.type === "missing" && s && (
-                        <Link
-                          className="btn small"
-                          to={scoped(addLinkFor(s, dateInMonth(a.month, s.expected_day), here))}
-                        >
-                          Add it
-                        </Link>
-                      )}
-                      {a.type === "duplicate" && a.ids && (
-                        <Link
-                          className="btn small"
-                          to={scoped(
-                            `/transactions${qs({ month: a.month, category: s?.category_id, vendor: s?.vendor || undefined, q: s?.subcategory || undefined })}`,
-                          )}
-                        >
-                          Review
-                        </Link>
-                      )}
-                      <button className="btn small ghost" onClick={() => void dismiss(a, false)}>
-                        {a.type === "missing"
-                          ? "Nothing was due"
-                          : a.type === "duplicate"
-                            ? "Not a duplicate"
-                            : "Looks right"}
-                      </button>
-                      {a.type === "missing" && (
-                        <button className="link small" onClick={() => void dismiss(a, true)}>
-                          Stop tracking {a.label}
-                        </button>
-                      )}
-                    </>
-                  )}
+                  <RecurringActions alert={a} series={s} onChanged={onChanged} />
                 </div>
               </div>
             </li>
@@ -99,6 +50,66 @@ export default function AttentionList({
         <button className="link small" onClick={() => setShowAll((v) => !v)}>
           {showAll ? "Show fewer" : `Show all ${alerts.length}`}
         </button>
+      )}
+    </>
+  );
+}
+
+/** "Open month", the fix ("Add it" / "Review") and "it's fine" for one alert. Links go to the bill's own property. */
+export function RecurringActions({
+  alert: a,
+  series: s,
+  onChanged,
+}: {
+  alert: RecurringAlert;
+  series?: RecurringSeries;
+  onChanged: () => void;
+}) {
+  const scoped = useScopedPath();
+  const at = (to: string) => (s ? scopePath(String(s.property_id), to) : scoped(to));
+  const { canWrite } = useSession();
+  const here = useLocation().pathname;
+  const toast = useToast();
+  const dismiss = async (whole: boolean) => {
+    try {
+      await dismissRecurring(a.series_key, whole ? null : a.month);
+      toast({ text: whole ? `Stopped tracking ${a.label}` : "Got it, won't flag that again", kind: "ok" });
+      onChanged();
+    } catch (e) {
+      toast({ text: (e as Error).message, kind: "error" });
+    }
+  };
+  return (
+    <>
+      <Link to={at(`/months/${a.month}`)} className="link small">
+        Open {monthShort(a.month)}
+      </Link>
+      {canWrite && (
+        <>
+          {a.type === "missing" && s && (
+            <Link className="btn small primary" to={at(addLinkFor(s, dateInMonth(a.month, s.expected_day), here))}>
+              Add it
+            </Link>
+          )}
+          {a.type === "duplicate" && a.ids && (
+            <Link
+              className="btn small primary"
+              to={at(
+                `/transactions${qs({ month: a.month, category: s?.category_id, vendor: s?.vendor || undefined, q: s?.subcategory || undefined })}`,
+              )}
+            >
+              Review
+            </Link>
+          )}
+          <button className="btn small ghost" onClick={() => void dismiss(false)}>
+            {a.type === "missing" ? "Nothing was due" : a.type === "duplicate" ? "Not a duplicate" : "Looks right"}
+          </button>
+          {a.type === "missing" && (
+            <button className="link small" onClick={() => void dismiss(true)}>
+              Stop tracking
+            </button>
+          )}
+        </>
       )}
     </>
   );

@@ -1,13 +1,14 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
-import { api, type Recurring, type Transaction, type TxList } from "../api.ts";
-import AttentionList from "../components/AttentionList.tsx";
+import { api, type Recurring, type RecurringAlert, type Transaction, type TxList } from "../api.ts";
+import { RecurringActions } from "../components/AttentionList.tsx";
+import TodoRow from "../components/TodoRow.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { CandidateList, GuestNightList } from "../components/OwnerStays.tsx";
 import type { MonthCompare, StayCandidate } from "../owner-stays.ts";
-import { fmtDate, monthTitle } from "../format.ts";
+import { fmtDate, money, monthTitle } from "../format.ts";
 import { useApi, useSession, useToast, useProperty } from "../hooks.ts";
-import { Amount } from "../lib.tsx";
+import { scopePath } from "../scope.ts";
 
 export interface TodoSummary {
   total: number;
@@ -28,27 +29,47 @@ export interface TodoSummary {
 }
 
 const year = new Date().getFullYear();
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** One place for everything that needs a look: flagged entries, missing tax treatment, recurring-bill alerts. */
+/** What's wrong with a recurring bill, without repeating its name (the row's title). */
+function alertNote(a: RecurringAlert) {
+  if (a.type === "missing")
+    return `Nothing recorded for ${monthTitle(a.month)}. Usually about ${money(Math.abs(a.expected_amount))}.`;
+  if (a.type === "duplicate") return `Recorded twice in ${monthTitle(a.month)}. Possible duplicate.`;
+  const rest = a.message.startsWith(a.label) ? a.message.slice(a.label.length).trim() : a.message;
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
+}
+
+/**
+ * Everything that needs a look, grouped by what you'd do about it. Every item uses the same row (TodoRow): what it's
+ * about, what's wrong, and the buttons that fix it. The groups above the line are what the nav badge counts.
+ */
 export default function Todo() {
-  const { path: scoped, qs: pq } = useProperty();
+  const { key, qs: pq, path: scoped } = useProperty();
+  const { overview, canWrite } = useSession();
   const flagged = useApi<TxList>(`transactions?needs_review=true&sort=date_asc&limit=500&${pq}`);
   const unallocated = useApi<TxList>(`transactions?kind=expense&allocation=none&sort=date_asc&limit=500&${pq}`);
   const rec = useApi<Recurring>(`recurring?${pq}`);
   const summary = useApi<TodoSummary>(`todo?${pq}`);
-  const managerMonths = summary.data?.manager_months ?? [];
+  const [editing, setEditing] = useState<number | null>(null);
+  const toast = useToast();
+
+  // Name each item's property only when the page covers several.
+  const all = key === "all";
+  const propName = (id: number) => (all ? overview.properties.find((p) => p.id === id)?.name : undefined);
+
   const occ = summary.data?.occupancy_items ?? [];
-  // the property name only matters when the list covers several
-  const name = (o: (typeof occ)[number]) => (occ.length > 1 ? o.property : undefined);
   const ownerStays = occ.flatMap((o) =>
-    o.owner_stays.map((c) => ({ ...c, property_id: o.property_id, property: name(o) })),
+    o.owner_stays.map((c) => ({ ...c, property_id: o.property_id, property: propName(o.property_id) })),
   );
   const guestNights = occ.flatMap((o) =>
-    o.guest_nights.map((m) => ({ ...m, property_id: o.property_id, property: name(o) })),
+    o.guest_nights.map((m) => ({ ...m, property_id: o.property_id, property: propName(o.property_id) })),
   );
-  const [editing, setEditing] = useState<number | null>(null);
-  const { canWrite } = useSession();
-  const toast = useToast();
+  const managerMonths = summary.data?.manager_months ?? [];
+  const alerts = rec.data?.alerts ?? [];
+  const bills = alerts.filter((a) => a.level === "warning");
+  const notes = alerts.filter((a) => a.level === "info");
+  const seriesOf = (a: RecurringAlert) => rec.data?.series.find((x) => x.key === a.series_key);
 
   const reloadAll = () => {
     void flagged.reload();
@@ -67,155 +88,167 @@ export default function Todo() {
     }
   };
 
-  const loaded = flagged.data && unallocated.data && rec.data;
-  const warnings = rec.data?.alerts.filter((a) => a.level === "warning") ?? [];
-  const notes = rec.data?.alerts.filter((a) => a.level === "info") ?? [];
-  const nothing =
-    loaded &&
-    !flagged.data!.total &&
-    !unallocated.data!.total &&
-    !rec.data!.alerts.length &&
-    !managerMonths.length &&
-    !occ.length;
+  const total = summary.data?.total;
+  const missingReceipts = summary.data?.missing_receipts ?? 0;
 
   return (
     <div className="page">
       <header className="page-head">
         <h1>To do</h1>
       </header>
-      {nothing && (
+      {!!total && <p className="muted small">{plural(total, "thing needs", "things need")} a look.</p>}
+      {total === 0 && (
         <div className="card all-clear">
-          <strong>✓ All caught up.</strong> Nothing is flagged, every expense has a tax treatment, and recurring bills
-          are up to date.
+          <strong>✓ All caught up.</strong> Nothing is flagged, every expense has a tax treatment, and bills, manager
+          statements and occupancy all check out.
         </div>
       )}
 
-      {flagged.data && flagged.data.total > 0 && (
-        <Section
-          title="Check these entries"
+      {!!flagged.data?.total && (
+        <Group
+          title="Check flagged entries"
           count={flagged.data.total}
-          help="Flagged by you, an import, or an AI agent that wasn't sure. Fix anything that's wrong, then mark it OK."
+          hint="Fix anything that's wrong, then mark it OK."
         >
-          <EntryList items={flagged.data.items} onOpen={setEditing}>
-            {(tx) =>
-              canWrite && (
+          {flagged.data.items.map((tx) => (
+            <EntryRow key={tx.id} tx={tx} property={propName(tx.property_id)} onOpen={() => setEditing(tx.id)}>
+              {canWrite && (
                 <button
                   className="btn primary small"
                   onClick={() => void patch(tx.id, { needs_review: false }, "Marked OK")}
                 >
-                  ✓ Looks right
+                  Looks right
                 </button>
-              )
-            }
-          </EntryList>
-        </Section>
+              )}
+            </EntryRow>
+          ))}
+        </Group>
       )}
 
-      {unallocated.data && unallocated.data.total > 0 && (
-        <Section
-          title="Only the rental, or the whole property?"
+      {!!unallocated.data?.total && (
+        <Group
+          title="Rental only, or the whole property?"
           count={unallocated.data.total}
-          help="These expenses are left out of the tax report until you pick. Rental-only (direct) is deducted in full; whole-property (indirect) is split by rental days."
+          hint="Left out of the tax report until you pick. Rental only is deducted in full; whole property is split by rental days."
         >
-          <EntryList items={unallocated.data.items} onOpen={setEditing}>
-            {(tx) =>
-              canWrite && (
+          {unallocated.data.items.map((tx) => (
+            <EntryRow key={tx.id} tx={tx} property={propName(tx.property_id)} onOpen={() => setEditing(tx.id)}>
+              {canWrite && (
                 <>
                   <button
                     className="btn small"
-                    onClick={() => void patch(tx.id, { allocation: "direct" }, "Set to direct")}
+                    onClick={() => void patch(tx.id, { allocation: "direct" }, "Set to rental only")}
                   >
                     Rental only
                   </button>
                   <button
                     className="btn small"
-                    onClick={() => void patch(tx.id, { allocation: "indirect" }, "Set to indirect")}
+                    onClick={() => void patch(tx.id, { allocation: "indirect" }, "Set to whole property")}
                   >
                     Whole property
                   </button>
                 </>
-              )
-            }
-          </EntryList>
-        </Section>
+              )}
+            </EntryRow>
+          ))}
+        </Group>
       )}
 
-      {rec.data && rec.data.alerts.length > 0 && (
-        <Section
+      {bills.length > 0 && (
+        <Group
           title="Recurring bills"
-          count={warnings.length}
-          help={
+          count={bills.length}
+          hint={
             <>
-              Based on what you usually pay each month or quarter.{" "}
-              <Link to={scoped("/recurring")}>See everything it tracks →</Link>
+              Compared with what you usually pay. <Link to={scoped("/recurring")}>All recurring bills →</Link>
             </>
           }
         >
-          <AttentionList alerts={[...warnings, ...notes]} series={rec.data.series} onChanged={reloadAll} />
-        </Section>
+          {bills.map((a) => (
+            <AlertRow
+              key={`${a.series_key}|${a.type}|${a.month}`}
+              alert={a}
+              property={propName(seriesOf(a)?.property_id ?? 0)}
+            >
+              <RecurringActions alert={a} series={seriesOf(a)} onChanged={reloadAll} />
+            </AlertRow>
+          ))}
+        </Group>
       )}
 
       {managerMonths.length > 0 && (
-        <Section
+        <Group
           title="Manager statements"
           count={managerMonths.length}
-          help="Months where the manager's statement or invoice has entries missing from the ledger, or a difference nobody has explained yet."
+          hint="The statement or invoice lists something the ledger doesn't have, or a difference nobody has explained."
         >
-          <ul className="plain-list">
-            {managerMonths.map((m) => (
-              <li key={`${m.property_id}-${m.month}`}>
-                <Link to={scoped(`/statement/${m.month}`)}>{monthTitle(m.month)}</Link>{" "}
-                <span className="muted">
-                  {[
-                    m.to_add ? `${m.to_add} ${m.to_add === 1 ? "entry" : "entries"} to add` : "",
-                    m.to_check ? `${m.to_check} ${m.to_check === 1 ? "thing" : "things"} to check` : "",
-                  ]
-                    .filter(Boolean)
-                    .join(", ")}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Section>
+          {managerMonths.map((m) => (
+            <TodoRow
+              key={`${m.property_id}-${m.month}`}
+              title={`${monthTitle(m.month)} statement`}
+              property={propName(m.property_id)}
+              note={
+                [
+                  m.to_add ? `${plural(m.to_add, "entry", "entries")} to add` : "",
+                  m.to_check ? `${plural(m.to_check, "difference")} to explain` : "",
+                ]
+                  .filter(Boolean)
+                  .join(", ") + "."
+              }
+            >
+              <Link className="btn small primary" to={scopePath(String(m.property_id), `/statement/${m.month}`)}>
+                Open statement
+              </Link>
+            </TodoRow>
+          ))}
+        </Group>
       )}
 
       {ownerStays.length > 0 && (
-        <Section
+        <Group
           title="Did you stay here?"
           count={ownerStays.length}
-          help={
-            <>
-              Blocked on every booking calendar with no guest. Your stays count as personal days at tax time.{" "}
-              <Link to={scoped("/occupancy")}>Occupancy →</Link>
-            </>
-          }
+          hint="The calendars were blocked with no guest. Your own stays count as personal days at tax time."
+          list={false}
         >
           <CandidateList items={ownerStays} onChange={reloadAll} />
-        </Section>
+        </Group>
       )}
 
       {guestNights.length > 0 && (
-        <Section
+        <Group
           title="Guest nights don't match the calendar"
           count={guestNights.length}
-          help="Keep yours if the calendar is missing direct bookings."
+          hint="Keep your numbers if the calendar is missing direct bookings."
+          list={false}
         >
           <GuestNightList items={guestNights} onChange={reloadAll} />
-        </Section>
+        </Group>
       )}
 
-      {!!summary.data?.missing_receipts && (
-        <section className="card">
-          <Link className="section-toggle" to={scoped(`/files?year=${year}&missing=1`)}>
-            <span>
-              Receipts <span className="muted small">optional</span>
-            </span>
-            <span className="muted small">
-              {summary.data.missing_receipts} {summary.data.missing_receipts === 1 ? "expense" : "expenses"} in {year}{" "}
-              without one →
-            </span>
-          </Link>
-        </section>
+      {(notes.length > 0 || missingReceipts > 0) && (
+        <Group title="Worth a look" hint="Not counted in the badge. Nothing here is necessarily wrong.">
+          {notes.map((a) => (
+            <AlertRow
+              key={`${a.series_key}|${a.type}|${a.month}`}
+              alert={a}
+              property={propName(seriesOf(a)?.property_id ?? 0)}
+            >
+              <RecurringActions alert={a} series={seriesOf(a)} onChanged={reloadAll} />
+            </AlertRow>
+          ))}
+          {missingReceipts > 0 && (
+            <TodoRow
+              title="Receipts"
+              when={String(year)}
+              note={`${plural(missingReceipts, "expense")} that should have a receipt and don't.`}
+            >
+              <Link className="btn small" to={scoped(`/files?year=${year}&missing=1`)}>
+                See them
+              </Link>
+            </TodoRow>
+          )}
+        </Group>
       )}
 
       {editing && <TxEditModal id={editing} onClose={() => setEditing(null)} onChanged={reloadAll} />}
@@ -223,57 +256,64 @@ export default function Todo() {
   );
 }
 
-function Section({
+function Group({
   title,
   count,
-  help,
+  hint,
+  list = true,
   children,
 }: {
   title: string;
-  count: number;
-  help: ReactNode;
+  count?: number;
+  hint: ReactNode;
+  /** false when the children bring their own list */
+  list?: boolean;
   children: ReactNode;
 }) {
   return (
     <section className="card">
       <div className="section-head">
         <h2>
-          {title} {count > 0 && <span className="nav-count inline">{count}</span>}
+          {title} {!!count && <span className="nav-count inline">{count}</span>}
         </h2>
       </div>
-      <p className="muted small">{help}</p>
-      {children}
+      <p className="muted small">{hint}</p>
+      {list ? <ul className="todo-list">{children}</ul> : children}
     </section>
   );
 }
 
-function EntryList({
-  items,
+/** A ledger entry: category and vendor, its date, the note that explains why it's here. Click to edit. */
+function EntryRow({
+  tx,
+  property,
   onOpen,
   children,
 }: {
-  items: Transaction[];
-  onOpen: (id: number) => void;
-  children: (tx: Transaction) => ReactNode;
+  tx: Transaction;
+  property?: string;
+  onOpen: () => void;
+  children: ReactNode;
 }) {
+  const who = tx.subcategory || tx.vendor;
   return (
-    <ul className="todo-list">
-      {items.map((tx) => (
-        <li key={tx.id}>
-          <button className="todo-main" onClick={() => onOpen(tx.id)}>
-            <span className="todo-what">
-              <strong>{tx.category}</strong>
-              {(tx.subcategory || tx.vendor) && <span> · {tx.subcategory || tx.vendor}</span>}
-              <span className="muted small"> · {fmtDate(tx.date)}</span>
-            </span>
-            {(tx.review_note || tx.description) && (
-              <span className="todo-note">{tx.review_note ? `⚑ ${tx.review_note}` : tx.description}</span>
-            )}
-          </button>
-          <Amount value={tx.amount} />
-          <span className="todo-actions">{children(tx)}</span>
-        </li>
-      ))}
-    </ul>
+    <TodoRow
+      title={who ? `${tx.category} · ${who}` : tx.category}
+      when={fmtDate(tx.date)}
+      property={property}
+      note={tx.review_note ? `⚑ ${tx.review_note}` : tx.description}
+      amount={tx.amount}
+      onOpen={onOpen}
+    >
+      {children}
+    </TodoRow>
+  );
+}
+
+function AlertRow({ alert: a, property, children }: { alert: RecurringAlert; property?: string; children: ReactNode }) {
+  return (
+    <TodoRow title={a.label} property={property} note={alertNote(a)}>
+      {children}
+    </TodoRow>
   );
 }
