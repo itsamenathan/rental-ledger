@@ -14,16 +14,23 @@ import {
   type StayKind,
 } from "../owner-stays.ts";
 
-function KindSelect({ value, onChange }: { value: StayKind | ""; onChange: (v: StayKind | "") => void }) {
+/** Who stayed: one tap instead of a dropdown. */
+function KindToggle({ value, onChange }: { value: StayKind; onChange: (v: StayKind) => void }) {
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value as StayKind | "")} aria-label="Kind of stay">
-      <option value="">Kind</option>
+    <div className="segmented" role="radiogroup" aria-label="Who stayed">
       {STAY_KINDS.map((k) => (
-        <option key={k.value} value={k.value}>
+        <button
+          key={k.value}
+          type="button"
+          role="radio"
+          aria-checked={value === k.value}
+          className={value === k.value ? "on" : ""}
+          onClick={() => onChange(k.value)}
+        >
           {k.label}
-        </option>
+        </button>
       ))}
-    </select>
+    </div>
   );
 }
 
@@ -53,7 +60,6 @@ export function CandidateList({
   const { canWrite } = useSession();
   const toast = useToast();
   const run = useRun(onChange);
-  const [kinds, setKinds] = useState<Record<string, StayKind | "">>({});
   const keyOf = (c: { property_id: number; start_date: string; end_date: string }) =>
     `${c.property_id}/${c.start_date}/${c.end_date}`;
   return (
@@ -72,7 +78,6 @@ export function CandidateList({
           <span />
           {canWrite && (
             <span className="todo-actions">
-              <KindSelect value={kinds[keyOf(c)] ?? ""} onChange={(v) => setKinds((k) => ({ ...k, [keyOf(c)]: v }))} />
               <button
                 className="btn small primary"
                 onClick={() =>
@@ -81,7 +86,6 @@ export function CandidateList({
                       property_id: c.property_id,
                       start_date: c.start_date,
                       end_date: c.end_date,
-                      kind: kinds[keyOf(c)] || null,
                     }),
                   )
                 }
@@ -189,7 +193,7 @@ export function OwnerStaysPanel({
   const run = useRun(onChange);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
-  const [kind, setKind] = useState<StayKind | "">("");
+  const [kind, setKind] = useState<StayKind>("owner");
   const [showBlocks, setShowBlocks] = useState(false);
   const [version, setVersion] = useState(0);
   const blocks = useApi<{ candidates: StayCandidate[] }>(
@@ -203,10 +207,9 @@ export function OwnerStaysPanel({
 
   const add = () =>
     run(async () => {
-      await saveOwnerStay(toast, { property_id: propertyId, start_date: start, end_date: end, kind: kind || null });
+      await saveOwnerStay(toast, { property_id: propertyId, start_date: start, end_date: end, kind });
       setStart("");
       setEnd("");
-      setKind("");
     });
   const remove = (s: OwnerStay) => {
     if (confirm(`Delete the owner stay ${rangeLabel(s)}?`))
@@ -250,20 +253,25 @@ export function OwnerStaysPanel({
       )}
       {canWrite && (
         <form
-          className="inline-form owner-stay-form"
+          className="owner-stay-form"
           onSubmit={(e) => {
             e.preventDefault();
             void add();
           }}
         >
-          <label className="small">
-            Arrive <input type="date" value={start} onChange={(e) => setStart(e.target.value)} required />
+          <label className="field">
+            <span>Arrive</span>
+            <input type="date" value={start} onChange={(e) => setStart(e.target.value)} required />
           </label>
-          <label className="small">
-            Leave <input type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} required />
+          <label className="field">
+            <span>Leave</span>
+            <input type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} required />
           </label>
-          <KindSelect value={kind} onChange={setKind} />
-          <button className="btn primary small" disabled={!start || !end}>
+          <div className="field">
+            <span>Who</span>
+            <KindToggle value={kind} onChange={setKind} />
+          </div>
+          <button className="btn primary" disabled={!start || !end}>
             Add stay
           </button>
         </form>

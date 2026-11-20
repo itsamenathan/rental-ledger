@@ -2218,15 +2218,27 @@ hr.sep {
 }
 .owner-stay-form {
   margin-top: 0.75rem;
-  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
 }
-.owner-stay-form label {
+.owner-stay-form .field {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 550;
+  color: var(--text-2);
+  margin: 0;
 }
-.owner-stay-form label input {
-  min-width: 0;
+.owner-stay-form .field input {
+  width: 11rem;
+}
+/* same 40px height as the date inputs and the button */
+.owner-stay-form .segmented button {
+  min-height: 34px;
+  padding: 0 0.85rem;
 }
 .todo-note {
   font-size: 0.85rem;
