@@ -37,7 +37,7 @@ export default function TodoRow({
     <>
       <span className="todo-what">
         <strong>{title}</strong>
-        {when && <span className="muted small"> · {when}</span>}
+        {when && <span className="muted small">{when}</span>}
         {property && <span className="badge">{property}</span>}
       </span>
       {note && <span className="todo-note">{note}</span>}

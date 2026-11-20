@@ -2203,8 +2203,15 @@ a.todo-main {
 .todo-main.as-text:hover .todo-what strong {
   text-decoration: none;
 }
+/* title, date and property tag; the tag wraps flush left on narrow screens */
+.todo-what {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.35rem;
+}
 .todo-what .badge {
-  margin-left: 0.4rem;
+  margin-left: 0;
 }
 .occ-note {
   margin: 0.5rem 0.75rem;
