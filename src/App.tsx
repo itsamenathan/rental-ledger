@@ -103,18 +103,19 @@ const SIDEBAR: { title?: string; items: string[] }[] = [
   { title: "Taxes", items: ["/reports"] },
 ];
 const MOBILE_NAV = ["/", "/transactions", "/add", "/todo"];
-/** Everything else on a phone lives behind the bottom bar's "More" button. */
-const MOBILE_MORE = [
-  "/calendar",
-  "/files",
-  "/reports",
-  "/statement",
-  "/categories",
-  "/recurring",
-  "/occupancy",
-  "/property",
-  "/settings",
-];
+/**
+ * Everything else on a phone lives behind the bottom bar's "More" button, in the sidebar's groups and order
+ * (minus what the bottom bar already shows), with Property and Settings last as in the sidebar.
+ */
+const MOBILE_MORE: { title?: string; items: string[] }[] = [
+  ...SIDEBAR.map((g) => ({ ...g, items: g.items.filter((to) => !MOBILE_NAV.includes(to)) })),
+  { title: "Setup", items: ["/property", "/settings"] },
+]
+  .filter((g) => g.items.length)
+  // A heading over a lone item of the same name ("Taxes" → Taxes) only repeats it.
+  .map((g) =>
+    g.items.length === 1 && NAV.find((n) => n.to === g.items[0])?.label === g.title ? { items: g.items } : g,
+  );
 const MORE_ICON = "M5 12h.01M12 12h.01M19 12h.01";
 
 export function Icon({ d, size = 20 }: { d: string; size?: number }) {
@@ -175,7 +176,7 @@ function Shell() {
   const [moreOpen, setMoreOpen] = useState(false);
   /** Where a nav item goes: pages under this property; "Property" is its settings page. */
   const href = (to: string) => (to === "/property" ? propertySettingsPath(scope.single) : scope.path(to));
-  const moreActive = MOBILE_MORE.some((to) => loc.pathname.startsWith(href(to)));
+  const moreActive = MOBILE_MORE.flatMap((g) => g.items).some((to) => loc.pathname.startsWith(href(to)));
   useEffect(() => {
     setMoreOpen(false);
     void todo.reload();
@@ -325,15 +326,20 @@ function Shell() {
       {moreOpen && (
         <Modal title="More" onClose={() => setMoreOpen(false)}>
           <nav className="more-menu">
-            {MOBILE_MORE.map((to) => {
-              const n = NAV.find((x) => x.to === to)!;
-              return (
-                <NavLink key={to} to={href(to)} onClick={() => setMoreOpen(false)}>
-                  <Icon d={n.icon} />
-                  <span>{n.label}</span>
-                </NavLink>
-              );
-            })}
+            {MOBILE_MORE.map((g) => (
+              <div key={g.items[0]} className="more-group">
+                {g.title && <div className="nav-title">{g.title}</div>}
+                {g.items.map((to) => {
+                  const n = NAV.find((x) => x.to === to)!;
+                  return (
+                    <NavLink key={to} to={href(to)} onClick={() => setMoreOpen(false)}>
+                      <Icon d={n.icon} />
+                      <span>{n.label}</span>
+                    </NavLink>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
           <div className="more-foot">
             <div className="who" title={user.email}>

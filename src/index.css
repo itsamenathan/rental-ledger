@@ -322,7 +322,16 @@ pre {
 .more-menu {
   display: flex;
   flex-direction: column;
+  gap: 0.6rem;
+}
+.more-group {
+  display: flex;
+  flex-direction: column;
   gap: 2px;
+}
+.more-group + .more-group {
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
 }
 .more-menu a {
   display: flex;
