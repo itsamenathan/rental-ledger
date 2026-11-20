@@ -2235,6 +2235,12 @@ hr.sep {
 .owner-stay-form .field input {
   width: 11rem;
 }
+/* the same toggle in a list row, as tall as the row's small buttons */
+.segmented.small button {
+  min-height: 26px;
+  padding: 0 0.7rem;
+  font-size: 0.85rem;
+}
 /* same 40px height as the date inputs and the button */
 .owner-stay-form .segmented button {
   min-height: 34px;

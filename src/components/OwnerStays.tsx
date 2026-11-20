@@ -15,9 +15,17 @@ import {
 } from "../owner-stays.ts";
 
 /** Who stayed: one tap instead of a dropdown. */
-function KindToggle({ value, onChange }: { value: StayKind; onChange: (v: StayKind) => void }) {
+function KindToggle({
+  value,
+  onChange,
+  small = false,
+}: {
+  value: StayKind;
+  onChange: (v: StayKind) => void;
+  small?: boolean;
+}) {
   return (
-    <div className="segmented" role="radiogroup" aria-label="Who stayed">
+    <div className={small ? "segmented small" : "segmented"} role="radiogroup" aria-label="Who stayed">
       {STAY_KINDS.map((k) => (
         <button
           key={k.value}
@@ -60,7 +68,7 @@ export function CandidateList({
   const { canWrite } = useSession();
   const toast = useToast();
   const run = useRun(onChange);
-  const [picking, setPicking] = useState<string | null>(null);
+  const [kinds, setKinds] = useState<Record<string, StayKind>>({});
   const keyOf = (c: { property_id: number; start_date: string; end_date: string }) =>
     `${c.property_id}/${c.start_date}/${c.end_date}`;
   return (
@@ -77,54 +85,43 @@ export function CandidateList({
             </span>
           </div>
           <span />
-          {canWrite &&
-            (picking === keyOf(c) ? (
-              // "We stayed" asks who, and picking one saves it
-              <span className="todo-actions" role="group" aria-label="Who stayed">
-                <span className="muted small">Who?</span>
-                {STAY_KINDS.map((k) => (
-                  <button
-                    key={k.value}
-                    className="btn small primary"
-                    onClick={() =>
-                      void run(async () => {
-                        await saveOwnerStay(toast, {
-                          property_id: c.property_id,
-                          start_date: c.start_date,
-                          end_date: c.end_date,
-                          kind: k.value,
-                        });
-                        setPicking(null);
-                      })
-                    }
-                  >
-                    {k.label}
-                  </button>
-                ))}
-                <button className="btn small" onClick={() => setPicking(null)}>
-                  Cancel
-                </button>
-              </span>
-            ) : (
-              <span className="todo-actions">
-                <button className="btn small primary" onClick={() => setPicking(keyOf(c))}>
-                  We stayed
-                </button>
-                <button
-                  className="btn small"
-                  onClick={() =>
-                    void run(() =>
-                      api("owner-stays/dismissals", {
-                        method: "POST",
-                        json: { property_id: c.property_id, start_date: c.start_date, end_date: c.end_date },
-                      }),
-                    )
-                  }
-                >
-                  Not a stay
-                </button>
-              </span>
-            ))}
+          {canWrite && (
+            <span className="todo-actions">
+              <KindToggle
+                small
+                value={kinds[keyOf(c)] ?? "owner"}
+                onChange={(v) => setKinds((k) => ({ ...k, [keyOf(c)]: v }))}
+              />
+              <button
+                className="btn small primary"
+                onClick={() =>
+                  void run(() =>
+                    saveOwnerStay(toast, {
+                      property_id: c.property_id,
+                      start_date: c.start_date,
+                      end_date: c.end_date,
+                      kind: kinds[keyOf(c)] ?? "owner",
+                    }),
+                  )
+                }
+              >
+                Add stay
+              </button>
+              <button
+                className="btn small"
+                onClick={() =>
+                  void run(() =>
+                    api("owner-stays/dismissals", {
+                      method: "POST",
+                      json: { property_id: c.property_id, start_date: c.start_date, end_date: c.end_date },
+                    }),
+                  )
+                }
+              >
+                Not a stay
+              </button>
+            </span>
+          )}
         </li>
       ))}
     </ul>
