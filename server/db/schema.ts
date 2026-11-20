@@ -304,6 +304,51 @@ export const occupancy = sqliteTable(
   ],
 );
 
+/**
+ * Personal-use stays (owner, family, below-market rent), by date. end_date is the checkout day (exclusive), like
+ * calendar_events: Mar 3 → Mar 6 is 3 nights. Stays of one property never overlap (enforced in
+ * services/owner-stays.ts). For any month a stay has a night in, owner_nights is derived from the stays and the
+ * stored occupancy.owner_nights is ignored (kept, so it comes back when the stays are removed).
+ */
+export const ownerStays = sqliteTable(
+  "owner_stays",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    startDate: text("start_date").notNull(),
+    endDate: text("end_date").notNull(),
+    /** owner | family | below_market; all count as personal days. null = not said */
+    kind: text("kind", { enum: ["owner", "family", "below_market"] }),
+    note: text("note").notNull().default(""),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+    updatedAt: text("updated_at").notNull().default(now),
+  },
+  (t) => [
+    index("owner_stays_property_dates").on(t.propertyId, t.startDate),
+    check("owner_stays_dates_check", sql`${t.endDate} > ${t.startDate}`),
+    check("owner_stays_kind_check", sql`${t.kind} IS NULL OR ${t.kind} IN ('owner','family','below_market')`),
+  ],
+);
+
+/** Blocked calendar ranges the user said were not an owner stay ("Not a stay"), so they aren't suggested again. */
+export const ownerStayDismissals = sqliteTable(
+  "owner_stay_dismissals",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    startDate: text("start_date").notNull(),
+    endDate: text("end_date").notNull(),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+  },
+  (t) => [uniqueIndex("owner_stay_dismissals_unique").on(t.propertyId, t.startDate, t.endDate)],
+);
+
 export const taxYears = sqliteTable(
   "tax_years",
   {

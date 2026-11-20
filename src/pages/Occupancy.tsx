@@ -1,11 +1,15 @@
 import { useState } from "react";
 import { api } from "../api.ts";
 import { monthLabel, percent, THIS_YEAR } from "../format.ts";
-import { useApi, usePersistentState, useSession, useToast, useProperty } from "../hooks.ts";
+import { useApi, usePersistentState, useScopedPath, useSession, useToast, useProperty } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
+import { Link } from "react-router";
+import { OwnerStaysPanel } from "../components/OwnerStays.tsx";
+import type { OwnerStay } from "../owner-stays.ts";
 
 interface Row {
-  id: number;
+  /** null: a month that only has owner stays */
+  id: number | null;
   property_id: number;
   property: string;
   month: string;
@@ -14,6 +18,8 @@ interface Row {
   owner_nights: number;
   check_ins: number;
   notes: string;
+  owner_nights_source: "stays" | "manual";
+  manual_owner_nights: number | null;
 }
 
 type Draft = { nights_available: string; nights_booked: string; owner_nights: string; check_ins: string };
@@ -23,12 +29,26 @@ export default function Occupancy() {
   const [year, setYear] = usePersistentState("occ-year", THIS_YEAR);
   const propertyId = useProperty().single;
   const { data, reload } = useApi<Row[]>(`occupancy?year=${year}&property_id=${propertyId}`);
+  const stays = useApi<OwnerStay[]>(`owner-stays?year=${year}&property_id=${propertyId}`);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  // confirmations from the booking calendar live on the To do page
+  const todo = useApi<{ occupancy: number }>(`todo?property_id=${propertyId}`);
+  const scoped = useScopedPath();
   const toast = useToast();
+  const reloadAll = () => {
+    void reload();
+    void stays.reload();
+    void todo.reload();
+    window.dispatchEvent(new Event("todo:changed"));
+  };
 
   const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
   const rowFor = (m: string) => data?.find((r) => r.month === m);
-  const valueOf = (m: string, k: keyof Draft) => drafts[m]?.[k] ?? String(rowFor(m)?.[k] ?? "");
+  const lockedOwner = (m: string) => rowFor(m)?.owner_nights_source === "stays";
+  const valueOf = (m: string, k: keyof Draft) =>
+    k === "owner_nights" && lockedOwner(m)
+      ? String(rowFor(m)!.owner_nights)
+      : (drafts[m]?.[k] ?? String(rowFor(m)?.[k] ?? ""));
   const edit = (m: string, k: keyof Draft, v: string) =>
     setDrafts((d) => ({
       ...d,
@@ -55,7 +75,7 @@ export default function Occupancy() {
       await api("occupancy", { method: "PUT", json: rows });
       setDrafts({});
       toast({ text: `Saved ${rows.length} month(s)`, kind: "ok" });
-      void reload();
+      reloadAll();
     } catch (e) {
       toast({ text: (e as Error).message, kind: "error" });
     }
@@ -81,9 +101,14 @@ export default function Occupancy() {
         </div>
       </header>
       <p className="muted">
-        Rental nights and personal-use nights set the rental-use percentage used to prorate indirect expenses at tax
-        time. Copy these from your Airbnb/VRBO occupancy report each month.
+        Guest and personal nights set the rental-use % that splits whole-property costs at tax time.
       </p>
+      {!!todo.data?.occupancy && (
+        <Link className="link-alert alert warn" to={scoped("/todo")}>
+          {todo.data.occupancy} {todo.data.occupancy === 1 ? "thing" : "things"} from your booking calendar to confirm
+          in To do →
+        </Link>
+      )}
       <div className="tiles">
         <div className="tile">
           <span className="tile-label">Rental nights</span>
@@ -98,11 +123,6 @@ export default function Occupancy() {
           <span className="tile-value">{percent(rentalPct)}</span>
           <span className="tile-sub">used for indirect expenses</span>
         </div>
-        <div className="tile">
-          <span className="tile-label">Average stay</span>
-          <span className="tile-value">{tot.checkins ? (tot.booked / tot.checkins).toFixed(1) : "—"}</span>
-          <span className="tile-sub">nights per check-in</span>
-        </div>
       </div>
       <div className="card table-card">
         <table className="data-table occ-table">
@@ -111,7 +131,7 @@ export default function Occupancy() {
               <th>Month</th>
               <th className="num">Available</th>
               <th className="num">Booked</th>
-              <th className="num">Owner / personal</th>
+              <th className="num">Personal</th>
               <th className="num">Check-ins</th>
               <th className="num">Occupancy</th>
             </tr>
@@ -128,7 +148,8 @@ export default function Occupancy() {
                       <input
                         className="cell-input"
                         inputMode="numeric"
-                        disabled={!canWrite}
+                        disabled={!canWrite || (k === "owner_nights" && lockedOwner(m))}
+                        title={k === "owner_nights" && lockedOwner(m) ? "From owner stays" : undefined}
                         value={valueOf(m, k)}
                         onChange={(e) => edit(m, k, e.target.value.replace(/\D/g, ""))}
                         aria-label={`${monthLabel(m, "long")} ${k.replace("_", " ")}`}
@@ -143,7 +164,18 @@ export default function Occupancy() {
             })}
           </tbody>
         </table>
+        {months.some(lockedOwner) && (
+          <p className="muted small occ-note">Greyed-out personal nights come from the owner stays below.</p>
+        )}
       </div>
+      <OwnerStaysPanel
+        propertyId={propertyId}
+        year={year}
+        stays={stays.data}
+        personalDays={tot.owner}
+        rentalDays={tot.booked}
+        onChange={reloadAll}
+      />
       {canWrite && Object.keys(drafts).length > 0 && (
         <div className="sticky-actions">
           <button className="btn" onClick={() => setDrafts({})}>

@@ -13,6 +13,8 @@ import { deleteOccupancy, upsertOccupancy } from "./rental.ts";
 import { dismiss, undismiss } from "./recurring.ts";
 import { addReceiptExclusion, listReceiptExclusions, removeReceiptExclusion } from "./receipts.ts";
 import { setSubcategoryReceiptRule } from "./categories.ts";
+import { addOwnerStay, deleteOwnerStay } from "./owner-stays.ts";
+import { dismissCandidate, undismissCandidate } from "./occupancy-calendar.ts";
 
 type Row = typeof auditLog.$inferSelect;
 type Changes = Record<string, unknown>;
@@ -260,6 +262,29 @@ function plan(r: Row): Plan | null {
             describe: "Mark it as fine again",
             run: (db, a) => dismiss(db, a, { series_key: c.series_key, month: c.month ?? null }),
           }
+        : null;
+
+    case "owner_stay:create":
+      return id ? { describe: "Delete that owner stay", run: (db, a) => deleteOwnerStay(db, a, id) } : null;
+    case "owner_stay:delete":
+      return typeof c.start_date === "string" && typeof c.end_date === "string"
+        ? {
+            describe: `Re-create the owner stay ${c.start_date} → ${c.end_date}`,
+            run: (db, a) =>
+              addOwnerStay(db, a, {
+                property_id: c.property_id,
+                start_date: c.start_date,
+                end_date: c.end_date,
+                kind: c.kind ?? null,
+                note: c.note ?? "",
+              }),
+          }
+        : null;
+    case "owner_stay_dismissal:create":
+      return id ? { describe: "Suggest it again", run: (db, a) => undismissCandidate(db, a, id) } : null;
+    case "owner_stay_dismissal:delete":
+      return typeof c.start_date === "string"
+        ? { describe: "Mark it as not a stay again", run: (db, a) => dismissCandidate(db, a, c) }
         : null;
   }
   return null;

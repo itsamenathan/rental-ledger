@@ -6,6 +6,7 @@ import { fmtDate, monthTitle, shiftMonth, thisMonth, today } from "../format.ts"
 import { propertySettingsPath } from "../scope.ts";
 import { useApi, usePersistentState, useSession, useToast, useProperty } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
+import { saveOwnerStay, STAY_KINDS, type StayKind } from "../owner-stays.ts";
 
 type Kind = "reserved" | "blocked";
 
@@ -60,6 +61,23 @@ export default function Calendar() {
   const [month, setMonth] = usePersistentState("cal-month", thisMonth());
   const { data, reload } = useApi<CalendarData>(`calendar?from=${month}&property_id=${propertyId}`);
   const [open, setOpen] = useState<CalEvent | null>(null);
+  const [stayKind, setStayKind] = useState<StayKind | "">("");
+
+  // A blocked range the owner (or family) actually stayed: it becomes an owner stay (personal days).
+  const markOwnerStay = async (e: CalEvent) => {
+    try {
+      await saveOwnerStay(toast, {
+        property_id: propertyId,
+        start_date: e.start_date,
+        end_date: e.end_date,
+        kind: stayKind || null,
+      });
+      setOpen(null);
+      setStayKind("");
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+    }
+  };
 
   // Pick up new reservations when the page opens: linked calendars not synced in the last 3 hours.
   // Viewers can't write, so they see what was last synced.
@@ -117,7 +135,8 @@ export default function Calendar() {
       <p className="muted">
         When the house is booked or free, from your Airbnb/VRBO calendars, plus past stays from an imported reservations
         export and your manager statements. Each day shows that night; the checkout day is free for the next guest.
-        Private bookings and owner stays only show if you blocked the dates on a platform.
+        Private bookings and owner stays only show if you blocked the dates on a platform; open a blocked range to mark
+        it as an owner stay.
       </p>
 
       <div className="cal-nav">
@@ -301,6 +320,25 @@ export default function Calendar() {
               The platform only says these nights aren&apos;t available: another platform&apos;s guest, an owner stay or
               a hold.
             </p>
+          )}
+          {open.kind === "blocked" && canWrite && (
+            <div className="form-actions">
+              <select
+                value={stayKind}
+                onChange={(e) => setStayKind(e.target.value as StayKind | "")}
+                aria-label="Kind of stay"
+              >
+                <option value="">Kind (optional)</option>
+                {STAY_KINDS.map((k) => (
+                  <option key={k.value} value={k.value}>
+                    {k.label}
+                  </option>
+                ))}
+              </select>
+              <button className="btn primary" onClick={() => void markOwnerStay(open)}>
+                Mark as owner stay
+              </button>
+            </div>
           )}
         </Modal>
       )}

@@ -36,12 +36,30 @@ describe("test harness data", () => {
     const data = generate(today);
     const oct = data.stays.filter((s) => s.start.startsWith("2026-10"));
     const nights = oct.reduce((n, s) => n + (Date.parse(s.end) - Date.parse(s.start)) / 86_400_000, 0);
-    expect(nights).toBe(data.occupancy.find((o) => o.month === "2026-10")!.nights_booked);
+    // last month's typed guest nights are 2 short of the calendar, for "Guest nights" on the Occupancy page
+    expect(nights).toBe(data.occupancy.find((o) => o.month === "2026-10")!.nights_booked + 2);
+    expect(data.occupancy.find((o) => o.month === "2026-09")!.nights_booked).toBe(
+      data.stays
+        .filter((s) => s.start.startsWith("2026-09"))
+        .reduce((n, s) => n + (Date.parse(s.end) - Date.parse(s.start)) / 86_400_000, 0),
+    );
     expect(data.stays.some((s) => s.start > "2027-01-01")).toBe(true);
     expect(data.ownerStays.some((s) => s.start > "2026-11-16")).toBe(true);
     const ics = sampleIcs(data, "airbnb");
     expect(ics).toContain("SUMMARY:Reserved");
     expect(ics).toContain("SUMMARY:Airbnb (Not available)");
+  });
+
+  it("leaves last month an owner block on both calendars and a hold on Airbnb only, to confirm", () => {
+    const data = generate(today);
+    const block = data.ownerStays.find((o) => o.start.startsWith("2026-10"))!;
+    expect(block).toBeDefined();
+    expect(data.occupancy.find((o) => o.month === "2026-10")!.owner_nights).toBe(0);
+    expect(data.holds).toHaveLength(1);
+    expect(data.holds[0]!.start > block.end).toBe(true);
+    expect(data.holds[0]!.end <= "2026-10-31").toBe(true);
+    expect(sampleIcs(data, "airbnb")).toContain(`airbnb-hold-${data.holds[0]!.start}`);
+    expect(sampleIcs(data, "vrbo")).not.toContain("hold");
   });
 
   it("keeps only recent Airbnb stays in the feed, with the full history in a reservations export", () => {

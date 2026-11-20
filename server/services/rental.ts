@@ -1,9 +1,10 @@
-import { and, desc, eq, like } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { DB } from "../db.ts";
 import { occupancy, properties, taxYears } from "../db/schema.ts";
 import { audit, cents, diff, dollars, requireWrite, type Actor } from "../context.ts";
 import { resolvePropertyId } from "./ledger.ts";
+import { monthHasStays, occupancyRows } from "./owner-stays.ts";
 
 // ======================= occupancy =======================
 
@@ -40,16 +41,12 @@ function selectOccupancy(db: DB) {
   return db.select(occupancyCols).from(occupancy).innerJoin(properties, eq(properties.id, occupancy.propertyId));
 }
 
+/**
+ * Occupancy months, newest first, with owner_nights derived from owner stays where a month has any (see
+ * services/owner-stays.ts). Rows with id null are months that only have owner stays.
+ */
 export function listOccupancy(db: DB, opts: { year?: number; property_id?: number }) {
-  return selectOccupancy(db)
-    .where(
-      and(
-        opts.year ? like(occupancy.month, `${opts.year}-%`) : undefined,
-        opts.property_id ? eq(occupancy.propertyId, opts.property_id) : undefined,
-      ),
-    )
-    .orderBy(desc(occupancy.month))
-    .all();
+  return occupancyRows(db, { year: opts.year, propertyId: opts.property_id });
 }
 
 function findOccupancy(db: DB, propertyId: number, month: string) {
@@ -63,10 +60,13 @@ export function upsertOccupancy(db: DB, actor: Actor | null, raw: unknown) {
   const o = occupancyInput.parse(raw);
   const propertyId = resolvePropertyId(db, o.property_id ?? o.property);
   const before = findOccupancy(db, propertyId, o.month);
+  // While the month has owner stays its personal nights come from them; a typed number can't contradict them, so
+  // keep the stored one (it comes back if the stays are removed).
+  const locked = monthHasStays(db, propertyId, o.month);
   const values = {
     nightsAvailable: o.nights_available ?? daysInMonth(o.month),
     nightsBooked: o.nights_booked,
-    ownerNights: o.owner_nights,
+    ownerNights: locked ? (before?.owner_nights ?? 0) : o.owner_nights,
     checkIns: o.check_ins,
     notes: o.notes,
   };
@@ -81,7 +81,7 @@ export function upsertOccupancy(db: DB, actor: Actor | null, raw: unknown) {
     // re-imports often save a month unchanged; don't clutter the audit log with empty edits
     if (Object.keys(changes).length) audit(db, actor, "update", "occupancy", after.id, changes);
   }
-  return after;
+  return occupancyRows(db, { month: o.month, propertyId }).find((r) => r.id === after.id)!;
 }
 
 export function deleteOccupancy(db: DB, actor: Actor, id: number) {
@@ -91,7 +91,7 @@ export function deleteOccupancy(db: DB, actor: Actor, id: number) {
   audit(db, actor, "delete", "occupancy", id, before);
 }
 
-function daysInMonth(month: string) {
+export function daysInMonth(month: string) {
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y!, m!, 0)).getUTCDate();
 }

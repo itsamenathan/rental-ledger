@@ -7,6 +7,8 @@ import { AppError, type Actor } from "../context.ts";
 import * as ledger from "../services/ledger.ts";
 import * as rental from "../services/rental.ts";
 import * as calendar from "../services/calendar.ts";
+import * as ownerStays from "../services/owner-stays.ts";
+import * as occCal from "../services/occupancy-calendar.ts";
 import * as reports from "../services/reports.ts";
 import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
@@ -31,10 +33,16 @@ Rental property bookkeeping. Data model:
   Indirect expenses benefit the whole property (mortgage, insurance, property tax, whole-home repairs) and are
   prorated by rental-use % at tax time. Each expense category has a default allocation; follow it unless the
   user says otherwise.
-- occupancy: per-month nights booked, owner (personal) nights, check-ins; drives the rental-use % for taxes.
+- occupancy: per-month nights booked, owner (personal) nights, check-ins; drives the rental-use % for taxes. It is
+  the record: nothing writes to it on its own.
+- owner stays: personal-use stays by date (owner, family, below-market; end_date = checkout day, not counted). For
+  a month with any stay night, owner_nights comes from the stays (owner_nights_source "stays") and a typed
+  owner_nights is ignored; other months keep the typed number.
 - booking calendar: availability imported from Airbnb/VRBO iCal feeds (reservations and blocked dates), plus past
-  stays from an imported reservations export and from saved manager statements (feeds forget old stays). Feeds
-  don't show private bookings or owner stays, so don't treat it as the occupancy record.
+  stays from an imported reservations export and from saved manager statements (feeds forget old stays). It misses
+  direct/off-platform bookings, and an owner stay shows only as a block, so don't treat it as the occupancy record.
+  list_owner_stay_candidates suggests blocks that may be owner stays and compare_occupancy_calendar compares guest
+  nights; ask the user before add_owner_stay / apply_calendar_to_occupancy.
 - properties: each rental is separate. Transactions, occupancy, booking calendars, tax-year inputs and manager
   paperwork all belong to one property; users, categories, receipt rules and import profiles are shared.
 Picking a property:
@@ -149,7 +157,12 @@ export function buildMcpServer(actor: Actor) {
         todo: properties
           .filter((p) => !p.archived)
           .map((p) => {
-            const { alerts: _a, manager_months: _m, ...counts } = todoSummary(db, { propertyId: p.id });
+            const {
+              alerts: _a,
+              manager_months: _m,
+              occupancy_items: _o,
+              ...counts
+            } = todoSummary(db, { propertyId: p.id });
             return { property_id: p.id, property: p.name, ...counts };
           }),
         today: new Date().toISOString().slice(0, 10),
@@ -457,6 +470,116 @@ export function buildMcpServer(actor: Actor) {
   );
 
   server.registerTool(
+    "list_owner_stays",
+    {
+      description:
+        "Personal-use stays by date (owner, family, below-market) with nights and nights_in_year. end_date is the " +
+        "checkout day (not counted).",
+      inputSchema: { year: z.number().int().optional(), property: scope },
+      annotations: ro,
+    },
+    wrap(({ year, property }) =>
+      ownerStays.listOwnerStays(db, { year, property_id: ledger.resolvePropertyScope(db, property) }),
+    ),
+  );
+
+  server.registerTool(
+    "add_owner_stay",
+    {
+      description:
+        "Record a personal-use stay by date. Its nights become that month's owner (personal) nights, split by each " +
+        "night's date across months and years. Rejects overlaps with another stay; returns warnings when it " +
+        "overlaps guest reservations on the calendar.",
+      inputSchema: {
+        property: one,
+        start_date: z.string().describe("First night, YYYY-MM-DD"),
+        end_date: z.string().describe("Checkout day, YYYY-MM-DD (not counted)"),
+        kind: z.enum(ownerStays.OWNER_STAY_KINDS).optional(),
+        note: z.string().optional(),
+      },
+    },
+    wrap((args) => ownerStays.addOwnerStay(db, actor, args)),
+  );
+
+  server.registerTool(
+    "update_owner_stay",
+    {
+      description: "Change an owner stay's dates, kind or note.",
+      inputSchema: {
+        id: z.number().int(),
+        start_date: z.string().optional(),
+        end_date: z.string().optional(),
+        kind: z.enum(ownerStays.OWNER_STAY_KINDS).nullable().optional(),
+        note: z.string().optional(),
+      },
+    },
+    wrap(({ id, ...patch }) => ownerStays.updateOwnerStay(db, actor, id, patch)),
+  );
+
+  server.registerTool(
+    "delete_owner_stay",
+    {
+      description: "Delete an owner stay. A month left with no stays goes back to its typed owner nights.",
+      inputSchema: { id: z.number().int() },
+      annotations: { destructiveHint: true },
+    },
+    wrap(({ id }) => ownerStays.deleteOwnerStay(db, actor, id)),
+  );
+
+  server.registerTool(
+    "list_owner_stay_candidates",
+    {
+      description:
+        "Blocked calendar ranges in a year with no guest reservation from any source, that may be owner stays. " +
+        "signal: strong (blocked on every calendar that reaches back that far), unclear (only one calendar can " +
+        "tell), weak (open on another calendar, a one-night turnover block, or a long closure). Nothing counts until " +
+        "the user confirms: add_owner_stay with the range, or dismiss_owner_stay_candidate.",
+      inputSchema: { year: z.number().int(), property: one },
+      annotations: ro,
+    },
+    wrap(({ year, property }) => occCal.ownerStayCandidates(db, { property_id: property, year })),
+  );
+
+  server.registerTool(
+    "dismiss_owner_stay_candidate",
+    {
+      description: 'Remember that a suggested blocked range is not an owner stay ("Not a stay").',
+      inputSchema: { property: one, start_date: z.string(), end_date: z.string() },
+    },
+    wrap((args) => occCal.dismissCandidate(db, actor, args)),
+  );
+
+  server.registerTool(
+    "compare_occupancy_calendar",
+    {
+      description:
+        "For each month of a year: the calendar's guest nights and check-ins vs the saved occupancy. Only months " +
+        'that have ended and have at least one calendar reservation are compared (otherwise status "not_ended" or ' +
+        '"no_data", which is not zero). calendar_lower means the calendar has fewer nights than saved, possibly a ' +
+        "direct booking it doesn't know about.",
+      inputSchema: { year: z.number().int(), property: one },
+      annotations: ro,
+    },
+    wrap(({ year, property }) => occCal.compareOccupancyCalendar(db, { property_id: property, year })),
+  );
+
+  server.registerTool(
+    "apply_calendar_to_occupancy",
+    {
+      description:
+        "Copy the calendar's guest nights and check-ins into the saved occupancy for the given months (owner nights, " +
+        "available nights and notes are kept). Months where the calendar is lower are skipped unless " +
+        "confirm_lower=true, which needs the user's explicit OK for those months.",
+      inputSchema: {
+        property: one,
+        months: z.array(z.string()).describe("YYYY-MM"),
+        confirm_lower: z.boolean().optional(),
+      },
+    },
+    wrap((args) => occCal.applyCalendarToOccupancy(db, actor, args)),
+  );
+
+  server.registerTool(
     "get_calendar",
     {
       description:
@@ -630,7 +753,7 @@ export function buildMcpServer(actor: Actor) {
     "get_todo",
     {
       description:
-        "The user's to-do list: counts of flagged entries, expenses with no direct/indirect set, recurring-bill alerts (missing, duplicate, changed), and expenses this year that should have a receipt and don't (per category receipt rules and never-ask names; list them with search_transactions needs_receipt=true), plus the recurring alerts themselves. Use search_transactions (needs_review=true, allocation=none) for the entries.",
+        "The user's to-do list: counts of flagged entries, expenses with no direct/indirect set, recurring-bill alerts (missing, duplicate, changed), and expenses this year that should have a receipt and don't (per category receipt rules and never-ask names; list them with search_transactions needs_receipt=true), plus the recurring alerts themselves, and occupancy_items: likely owner stays to confirm (add_owner_stay or dismiss_owner_stay_candidate, after asking the user) and ended months where the booking calendar's guest nights differ from the saved occupancy (apply_calendar_to_occupancy). Use search_transactions (needs_review=true, allocation=none) for the entries.",
       inputSchema: { property: scope },
       annotations: ro,
     },

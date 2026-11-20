@@ -41,7 +41,7 @@ export interface IcsEvent {
 const DAY_MS = 86_400_000;
 export const addDays = (iso: string, n: number) =>
   new Date(Date.parse(`${iso}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
-const nightsBetween = (from: string, to: string) =>
+export const nightsBetween = (from: string, to: string) =>
   Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);
 
 const unescape = (v: string) => v.replace(/\\([\\;,nN])/g, (_, c: string) => (c === "n" || c === "N" ? "\n" : c));
@@ -692,19 +692,13 @@ const isoToday = () => new Date().toISOString().slice(0, 10);
 const monthRe = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 /**
- * Calendar for whole months [from_month, to_month]: the events, which event holds each night (a reservation
- * beats a block), and per-month booked/blocked/free nights and check-ins.
+ * Whole months [fromMonth, toMonth] of one property: the events, which event holds each night (a reservation beats
+ * a block), and per-month booked/blocked/free nights and check-ins. No feed details, so it needs no actor.
  */
-export function getCalendar(
-  db: DB,
-  actor: Actor | null,
-  opts: { from_month: string; to_month?: string; property_id?: number },
-) {
-  const toMonth = opts.to_month ?? opts.from_month;
-  if (!monthRe.test(opts.from_month) || !monthRe.test(toMonth) || toMonth < opts.from_month)
+export function calendarMonths(db: DB, propertyId: number, fromMonth: string, toMonth = fromMonth) {
+  if (!monthRe.test(fromMonth) || !monthRe.test(toMonth) || toMonth < fromMonth)
     throw badRequest("Use months as YYYY-MM");
-  const propertyId = resolvePropertyId(db, opts.property_id);
-  const from = `${opts.from_month}-01`;
+  const from = `${fromMonth}-01`;
   const to = `${nextMonth(toMonth)}-01`;
   if (nightsBetween(from, to) > 800) throw badRequest("Ask for at most two years at a time");
 
@@ -723,7 +717,7 @@ export function getCalendar(
   for (const [d, ev] of best) if (d >= from) nights[d] = ev.id;
 
   const months: MonthSummary[] = [];
-  for (let m = opts.from_month; m <= toMonth; m = nextMonth(m)) {
+  for (let m = fromMonth; m <= toMonth; m = nextMonth(m)) {
     const s: MonthSummary = { month: m, nights: 0, booked_nights: 0, blocked_nights: 0, free_nights: 0, check_ins: 0 };
     const end = `${nextMonth(m)}-01`;
     for (let d = `${m}-01`; d < end; d = addDays(d, 1)) {
@@ -739,7 +733,17 @@ export function getCalendar(
     }
     months.push(s);
   }
+  return { from, to, loaded, events, best, nights, months };
+}
 
+/** Calendar for whole months [from_month, to_month] (see calendarMonths), with the property's feeds and history. */
+export function getCalendar(
+  db: DB,
+  actor: Actor | null,
+  opts: { from_month: string; to_month?: string; property_id?: number },
+) {
+  const propertyId = resolvePropertyId(db, opts.property_id);
+  const { from, to, events, nights, months } = calendarMonths(db, propertyId, opts.from_month, opts.to_month);
   return {
     property_id: propertyId,
     from,
@@ -752,7 +756,7 @@ export function getCalendar(
   };
 }
 
-function nextMonth(m: string) {
+export function nextMonth(m: string) {
   const [y, mo] = m.split("-").map(Number);
   return mo === 12 ? `${y! + 1}-01` : `${y}-${String(mo! + 1).padStart(2, "0")}`;
 }
