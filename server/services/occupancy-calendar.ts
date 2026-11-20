@@ -8,7 +8,7 @@
 import { and, asc, eq, min } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
-import { calendarEvents, calendarFeeds, occupancy, ownerStayDismissals } from "../db/schema.ts";
+import { calendarEvents, calendarFeeds, occupancy, ownerStayDismissals, properties } from "../db/schema.ts";
 import { audit, badRequest, notFound, requireWrite, type Actor } from "../context.ts";
 import { addDays, calendarMonths, nightsBetween, type CalendarEvent } from "./calendar.ts";
 import { resolvePropertyId } from "./ledger.ts";
@@ -359,4 +359,44 @@ export function undismissCandidate(db: DB, actor: Actor, id: number) {
     });
     return { ok: true };
   });
+}
+
+// ======================= To do =======================
+
+export interface OccupancyAttention {
+  property_id: number;
+  property: string;
+  /** likely owner stays (blocked on every calendar that reaches the dates), this year and last */
+  owner_stays: StayCandidate[];
+  /** ended months, this year and last, where a calendar that covers the whole month disagrees with the saved nights */
+  guest_nights: MonthCompare[];
+}
+
+/**
+ * What the Occupancy page wants confirmed, for the To do page: only the confident items. Less certain blocks and
+ * months a calendar doesn't fully cover stay on the Occupancy page. Last year is included for tax time.
+ */
+export function occupancyAttention(db: DB, opts: { propertyId?: number; today?: string } = {}): OccupancyAttention[] {
+  const today = opts.today ?? isoToday();
+  const year = Number(today.slice(0, 4));
+  const props = db
+    .select({ id: properties.id, name: properties.name })
+    .from(properties)
+    .where(opts.propertyId ? eq(properties.id, opts.propertyId) : eq(properties.archived, false))
+    .orderBy(asc(properties.name))
+    .all();
+  const out: OccupancyAttention[] = [];
+  for (const p of props) {
+    const stays = new Map<string, StayCandidate>();
+    const months: MonthCompare[] = [];
+    for (const y of [year - 1, year]) {
+      for (const c of ownerStayCandidates(db, { property_id: p.id, year: y, today }).candidates)
+        if (c.signal === "strong") stays.set(`${c.start_date}/${c.end_date}`, c);
+      for (const m of compareOccupancyCalendar(db, { property_id: p.id, year: y, today }).months)
+        if (m.status === "differs" && !m.incomplete.length) months.push(m);
+    }
+    if (stays.size || months.length)
+      out.push({ property_id: p.id, property: p.name, owner_stays: [...stays.values()], guest_nights: months });
+  }
+  return out;
 }

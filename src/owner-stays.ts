@@ -40,3 +40,25 @@ export async function saveOwnerStay(
   for (const w of r.warnings) toast({ text: w, kind: "error" });
   return r.stay;
 }
+
+/** A blocked calendar range that may be an owner stay (server/services/occupancy-calendar.ts). */
+export interface StayCandidate {
+  start_date: string;
+  end_date: string;
+  nights: number;
+  nights_in_year: number;
+  blocked_on: string[];
+  covering: string[];
+  signal: "strong" | "unclear" | "weak";
+  reason: string;
+}
+
+/** One month of calendar vs saved guest nights. */
+export interface MonthCompare {
+  month: string;
+  status: "not_ended" | "no_data" | "match" | "differs";
+  calendar: { nights_booked: number; check_ins: number } | null;
+  stored: { nights_booked: number; check_ins: number } | null;
+  calendar_lower: boolean;
+  incomplete: string[];
+}

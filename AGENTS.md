@@ -133,7 +133,9 @@ release. Add a tool name to select part of the graph. For example, run
   `confirm_lower`. `ownerStayCandidates` groups block-held nights (no reservation from any source) while they share a
   block event; only feeds whose data reaches the range vote (strong = blocked on every covering feed, unclear = one
   covering feed, weak = open on another feed, a 1-night block next to a guest, or > 31 nights). "Not a stay" is
-  `owner_stay_dismissals` (exact start/end).
+  `owner_stay_dismissals` (exact start/end). The confident items (strong blocks, and fully covered months that
+  differ, this year and last) are To do items via `occupancyAttention` and count in the badge; the Occupancy page
+  only links to them and keeps the less certain blocks behind "Pick from blocked calendar dates".
 - Fetch user-supplied URLs (calendar feeds) only through `safeDownload` in `server/services/safe-download.ts`: it
   refuses private/loopback addresses at connect time and on every redirect (`CALENDAR_ALLOW_PRIVATE_NETWORK` opts out).
 - Logging: use `log` from `server/telemetry.ts` (pino), not `console.*` (the CLI's human output is the exception).

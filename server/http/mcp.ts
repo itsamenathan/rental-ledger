@@ -157,7 +157,12 @@ export function buildMcpServer(actor: Actor) {
         todo: properties
           .filter((p) => !p.archived)
           .map((p) => {
-            const { alerts: _a, manager_months: _m, ...counts } = todoSummary(db, { propertyId: p.id });
+            const {
+              alerts: _a,
+              manager_months: _m,
+              occupancy_items: _o,
+              ...counts
+            } = todoSummary(db, { propertyId: p.id });
             return { property_id: p.id, property: p.name, ...counts };
           }),
         today: new Date().toISOString().slice(0, 10),
@@ -748,7 +753,7 @@ export function buildMcpServer(actor: Actor) {
     "get_todo",
     {
       description:
-        "The user's to-do list: counts of flagged entries, expenses with no direct/indirect set, recurring-bill alerts (missing, duplicate, changed), and expenses this year that should have a receipt and don't (per category receipt rules and never-ask names; list them with search_transactions needs_receipt=true), plus the recurring alerts themselves. Use search_transactions (needs_review=true, allocation=none) for the entries.",
+        "The user's to-do list: counts of flagged entries, expenses with no direct/indirect set, recurring-bill alerts (missing, duplicate, changed), and expenses this year that should have a receipt and don't (per category receipt rules and never-ask names; list them with search_transactions needs_receipt=true), plus the recurring alerts themselves, and occupancy_items: likely owner stays to confirm (add_owner_stay or dismiss_owner_stay_candidate, after asking the user) and ended months where the booking calendar's guest nights differ from the saved occupancy (apply_calendar_to_occupancy). Use search_transactions (needs_review=true, allocation=none) for the entries.",
       inputSchema: { property: scope },
       annotations: ro,
     },

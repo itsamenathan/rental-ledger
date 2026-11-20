@@ -3,6 +3,7 @@ import type { DB } from "../db.ts";
 import { listTransactions } from "./ledger.ts";
 import { recurring } from "./recurring.ts";
 import { managerAttention } from "./manager-statement.ts";
+import { occupancyAttention } from "./occupancy-calendar.ts";
 
 export function todoSummary(db: DB, opts: { propertyId?: number; today?: string } = {}) {
   const count = (q: Record<string, unknown>) =>
@@ -15,9 +16,12 @@ export function todoSummary(db: DB, opts: { propertyId?: number; today?: string 
   const year = (opts.today ?? new Date().toISOString()).slice(0, 4);
   // Saved manager statements with entries to add or unexplained differences.
   const manager = managerAttention(db, { propertyId: opts.propertyId });
+  // Likely owner stays to confirm and guest nights that disagree with the calendar (services/occupancy-calendar.ts).
+  const occupancy = occupancyAttention(db, opts);
+  const occupancyItems = occupancy.reduce((a, o) => a + o.owner_stays.length + o.guest_nights.length, 0);
   return {
     /** what the badge shows: things that are probably wrong or missing */
-    total: flagged + unallocated + recurringWarnings + manager.length,
+    total: flagged + unallocated + recurringWarnings + manager.length + occupancyItems,
     flagged,
     unallocated,
     recurring: recurringWarnings,
@@ -25,6 +29,9 @@ export function todoSummary(db: DB, opts: { propertyId?: number; today?: string 
     /** months of manager paperwork that need attention */
     manager: manager.length,
     manager_months: manager,
+    /** owner stays to confirm + guest-night months to check */
+    occupancy: occupancyItems,
+    occupancy_items: occupancy,
     /** optional: expenses this year that should have a receipt and don't (services/receipts.ts; not in total) */
     missing_receipts: count({ needs_receipt: true, year }),
     alerts: rec.alerts,

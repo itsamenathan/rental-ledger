@@ -15,6 +15,7 @@ const rental = await import("./services/rental.ts");
 const reports = await import("./services/reports.ts");
 const ledger = await import("./services/ledger.ts");
 const { eq } = await import("drizzle-orm");
+const { todoSummary } = await import("./services/todo.ts");
 
 const TODAY = "2026-11-20";
 
@@ -364,5 +365,39 @@ describe("owner stays to confirm", () => {
         .signal,
     ).toBe("weak");
     expect(occCal.rankBlock({ ...base, nights: 60, blocked_on: ["A", "B"], covering: ["A", "B"] }).signal).toBe("weak");
+  });
+});
+
+describe("To do", () => {
+  it("lists likely owner stays and fully covered months that disagree, and drops them once handled", () => {
+    const { db, actor, pid } = setup();
+    feed(db, actor, pid, "VRBO", [
+      event("v0", "2026-07-01", "2026-07-03", "Reserved - Guest"),
+      event("v1", "2026-09-05", "2026-09-08", "Blocked"), // both block: likely owner
+      event("v2", "2026-10-20", "2026-10-22", "Reserved - Guest"),
+    ]);
+    feed(db, actor, pid, "Airbnb", [
+      event("a0", "2026-08-01", "2026-08-03", "Reserved"),
+      event("a1", "2026-09-05", "2026-09-08", "Airbnb (Not available)"),
+      event("a2", "2026-10-03", "2026-10-06", "Reserved"),
+      event("a3", "2026-10-20", "2026-10-22", "Airbnb (Not available)"),
+      event("a4", "2026-10-25", "2026-10-27", "Airbnb (Not available)"), // Airbnb only: not on To do
+    ]);
+    rental.upsertOccupancy(db, actor, { property_id: pid, month: "2026-10", nights_booked: 3, check_ins: 1 });
+    const before = todoSummary(db, { propertyId: pid, today: TODAY });
+    const [item] = before.occupancy_items;
+    expect(item!.owner_stays.map((c) => c.start_date)).toEqual(["2026-09-05"]);
+    // July is VRBO's first month (incomplete), August has a stay but nothing saved, October is 3 nights vs 3+2
+    expect(item!.guest_nights.map((m) => [m.month, m.stored?.nights_booked ?? null])).toEqual([
+      ["2026-08", null],
+      ["2026-10", 3],
+    ]);
+    expect(before.occupancy).toBe(3);
+
+    stays.addOwnerStay(db, actor, { property_id: pid, start_date: "2026-09-05", end_date: "2026-09-08" });
+    occCal.applyCalendarToOccupancy(db, actor, { property_id: pid, months: ["2026-08", "2026-10"] }, TODAY);
+    const after = todoSummary(db, { propertyId: pid, today: TODAY });
+    expect(after.occupancy).toBe(0);
+    expect(after.total).toBe(before.total - 3);
   });
 });

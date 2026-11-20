@@ -2203,6 +2203,19 @@ hr.sep {
 .todo-what .badge {
   margin-left: 0.4rem;
 }
+.occ-note {
+  margin: 0.5rem 0.75rem;
+}
+.owner-stay-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--grid);
+}
+.owner-stay-blocks {
+  margin-top: 0.75rem;
+}
 .owner-stay-form {
   margin-top: 0.75rem;
   align-items: end;

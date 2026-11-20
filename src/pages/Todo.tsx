@@ -3,6 +3,8 @@ import { Link } from "react-router";
 import { api, type Recurring, type Transaction, type TxList } from "../api.ts";
 import AttentionList from "../components/AttentionList.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
+import { CandidateList, GuestNightList } from "../components/OwnerStays.tsx";
+import type { MonthCompare, StayCandidate } from "../owner-stays.ts";
 import { fmtDate, monthTitle } from "../format.ts";
 import { useApi, useSession, useToast, useProperty } from "../hooks.ts";
 import { Amount } from "../lib.tsx";
@@ -16,6 +18,13 @@ export interface TodoSummary {
   missing_receipts: number;
   manager: number;
   manager_months: { property_id: number; month: string; to_add: number; to_check: number }[];
+  occupancy: number;
+  occupancy_items: {
+    property_id: number;
+    property: string;
+    owner_stays: StayCandidate[];
+    guest_nights: MonthCompare[];
+  }[];
 }
 
 const year = new Date().getFullYear();
@@ -28,6 +37,15 @@ export default function Todo() {
   const rec = useApi<Recurring>(`recurring?${pq}`);
   const summary = useApi<TodoSummary>(`todo?${pq}`);
   const managerMonths = summary.data?.manager_months ?? [];
+  const occ = summary.data?.occupancy_items ?? [];
+  // the property name only matters when the list covers several
+  const name = (o: (typeof occ)[number]) => (occ.length > 1 ? o.property : undefined);
+  const ownerStays = occ.flatMap((o) =>
+    o.owner_stays.map((c) => ({ ...c, property_id: o.property_id, property: name(o) })),
+  );
+  const guestNights = occ.flatMap((o) =>
+    o.guest_nights.map((m) => ({ ...m, property_id: o.property_id, property: name(o) })),
+  );
   const [editing, setEditing] = useState<number | null>(null);
   const { canWrite } = useSession();
   const toast = useToast();
@@ -53,7 +71,12 @@ export default function Todo() {
   const warnings = rec.data?.alerts.filter((a) => a.level === "warning") ?? [];
   const notes = rec.data?.alerts.filter((a) => a.level === "info") ?? [];
   const nothing =
-    loaded && !flagged.data!.total && !unallocated.data!.total && !rec.data!.alerts.length && !managerMonths.length;
+    loaded &&
+    !flagged.data!.total &&
+    !unallocated.data!.total &&
+    !rec.data!.alerts.length &&
+    !managerMonths.length &&
+    !occ.length;
 
   return (
     <div className="page">
@@ -153,6 +176,31 @@ export default function Todo() {
               </li>
             ))}
           </ul>
+        </Section>
+      )}
+
+      {ownerStays.length > 0 && (
+        <Section
+          title="Did you stay here?"
+          count={ownerStays.length}
+          help={
+            <>
+              Blocked on every booking calendar with no guest. Your stays count as personal days at tax time.{" "}
+              <Link to={scoped("/occupancy")}>Occupancy →</Link>
+            </>
+          }
+        >
+          <CandidateList items={ownerStays} onChange={reloadAll} />
+        </Section>
+      )}
+
+      {guestNights.length > 0 && (
+        <Section
+          title="Guest nights don't match the calendar"
+          count={guestNights.length}
+          help="Keep yours if the calendar is missing direct bookings."
+        >
+          <GuestNightList items={guestNights} onChange={reloadAll} />
         </Section>
       )}
 
