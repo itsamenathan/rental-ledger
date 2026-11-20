@@ -2193,6 +2193,28 @@ hr.sep {
 .todo-main:hover .todo-what strong {
   text-decoration: underline;
 }
+/* a todo row that isn't a button (owner stays to confirm, guest nights) */
+.todo-main.as-text {
+  cursor: default;
+}
+.todo-main.as-text:hover .todo-what strong {
+  text-decoration: none;
+}
+.todo-what .badge {
+  margin-left: 0.4rem;
+}
+.owner-stay-form {
+  margin-top: 0.75rem;
+  align-items: end;
+}
+.owner-stay-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.owner-stay-form label input {
+  min-width: 0;
+}
 .todo-note {
   font-size: 0.85rem;
   color: var(--text-2);

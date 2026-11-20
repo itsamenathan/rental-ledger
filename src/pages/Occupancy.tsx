@@ -3,9 +3,12 @@ import { api } from "../api.ts";
 import { monthLabel, percent, THIS_YEAR } from "../format.ts";
 import { useApi, usePersistentState, useSession, useToast, useProperty } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
+import { GuestNightsPanel, OwnerStaysPanel, StaysToConfirm } from "../components/OwnerStays.tsx";
+import type { OwnerStay } from "../owner-stays.ts";
 
 interface Row {
-  id: number;
+  /** null: a month that only has owner stays */
+  id: number | null;
   property_id: number;
   property: string;
   month: string;
@@ -14,6 +17,8 @@ interface Row {
   owner_nights: number;
   check_ins: number;
   notes: string;
+  owner_nights_source: "stays" | "manual";
+  manual_owner_nights: number | null;
 }
 
 type Draft = { nights_available: string; nights_booked: string; owner_nights: string; check_ins: string };
@@ -23,12 +28,23 @@ export default function Occupancy() {
   const [year, setYear] = usePersistentState("occ-year", THIS_YEAR);
   const propertyId = useProperty().single;
   const { data, reload } = useApi<Row[]>(`occupancy?year=${year}&property_id=${propertyId}`);
+  const stays = useApi<OwnerStay[]>(`owner-stays?year=${year}&property_id=${propertyId}`);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [version, setVersion] = useState(0);
   const toast = useToast();
+  const reloadAll = () => {
+    void reload();
+    void stays.reload();
+    setVersion((v) => v + 1);
+  };
 
   const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
   const rowFor = (m: string) => data?.find((r) => r.month === m);
-  const valueOf = (m: string, k: keyof Draft) => drafts[m]?.[k] ?? String(rowFor(m)?.[k] ?? "");
+  const lockedOwner = (m: string) => rowFor(m)?.owner_nights_source === "stays";
+  const valueOf = (m: string, k: keyof Draft) =>
+    k === "owner_nights" && lockedOwner(m)
+      ? String(rowFor(m)!.owner_nights)
+      : (drafts[m]?.[k] ?? String(rowFor(m)?.[k] ?? ""));
   const edit = (m: string, k: keyof Draft, v: string) =>
     setDrafts((d) => ({
       ...d,
@@ -55,7 +71,7 @@ export default function Occupancy() {
       await api("occupancy", { method: "PUT", json: rows });
       setDrafts({});
       toast({ text: `Saved ${rows.length} month(s)`, kind: "ok" });
-      void reload();
+      reloadAll();
     } catch (e) {
       toast({ text: (e as Error).message, kind: "error" });
     }
@@ -82,7 +98,8 @@ export default function Occupancy() {
       </header>
       <p className="muted">
         Rental nights and personal-use nights set the rental-use percentage used to prorate indirect expenses at tax
-        time. Copy these from your Airbnb/VRBO occupancy report each month.
+        time. Copy these from your Airbnb/VRBO occupancy report each month, or check them against your booking calendars
+        below. Personal nights come from your owner stays for any month that has one.
       </p>
       <div className="tiles">
         <div className="tile">
@@ -104,6 +121,8 @@ export default function Occupancy() {
           <span className="tile-sub">nights per check-in</span>
         </div>
       </div>
+      <StaysToConfirm propertyId={propertyId} year={year} version={version} onChange={reloadAll} />
+      <GuestNightsPanel propertyId={propertyId} year={year} version={version} onChange={reloadAll} />
       <div className="card table-card">
         <table className="data-table occ-table">
           <thead>
@@ -128,7 +147,12 @@ export default function Occupancy() {
                       <input
                         className="cell-input"
                         inputMode="numeric"
-                        disabled={!canWrite}
+                        disabled={!canWrite || (k === "owner_nights" && lockedOwner(m))}
+                        title={
+                          k === "owner_nights" && lockedOwner(m)
+                            ? `From owner stays${rowFor(m)?.manual_owner_nights ? ` (you had typed ${rowFor(m)!.manual_owner_nights})` : ""}`
+                            : undefined
+                        }
                         value={valueOf(m, k)}
                         onChange={(e) => edit(m, k, e.target.value.replace(/\D/g, ""))}
                         aria-label={`${monthLabel(m, "long")} ${k.replace("_", " ")}`}
@@ -144,6 +168,14 @@ export default function Occupancy() {
           </tbody>
         </table>
       </div>
+      <OwnerStaysPanel
+        propertyId={propertyId}
+        year={year}
+        stays={stays.data}
+        personalDays={tot.owner}
+        rentalDays={tot.booked}
+        onChange={reloadAll}
+      />
       {canWrite && Object.keys(drafts).length > 0 && (
         <div className="sticky-actions">
           <button className="btn" onClick={() => setDrafts({})}>

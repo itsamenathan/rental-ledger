@@ -116,6 +116,24 @@ release. Add a tool name to select part of the graph. For example, run
   them) and from saved manager statements (derived on every read, negative ids, nothing stored). `listEvents` drops a
   reservation that overlaps one from a higher source (feed > history > statement). The production server refreshes
   linked feeds every `CALENDAR_REFRESH_MINUTES` (`server/scheduler.ts`, started in `main.ts`, never in `vp dev`).
+- Owner stays (`server/services/owner-stays.ts`, `owner_stays`): personal-use stays by date, end_date = checkout day
+  (not a night), each night counted in its own month/year. Occupancy stays the record of rental/personal days, but
+  owner_nights is derived on read: for a (property, month) with any stay night it is the stays' nights, else the
+  stored number. Every read goes through `occupancyRows` (listOccupancy, `occupancyTotals`, summary, month detail,
+  tax report); never sum `occupancy.owner_nights` directly. `upsertOccupancy` keeps the stored owner_nights for months
+  with stays (the UI locks the cell), so deleting the last stay brings the typed number back. Months with stays but no
+  saved row add personal nights only (no available nights; `missing_occupancy` still fires). Overlapping stays in one
+  property are refused; overlapping guest nights only warn.
+- Calendar → occupancy (`server/services/occupancy-calendar.ts`) never writes on its own. `compareOccupancyCalendar`
+  reads `calendarMonths` (shared with `getCalendar`) and offers only ended months with a calendar reservation;
+  `incomplete` lists feeds whose earliest event starts after the month began (Airbnb's ~60-day export) unless
+  reservation history covers it, and the tax report's "before you file" item skips those months.
+  `applyCalendarToOccupancy` writes only nights_booked/check_ins through `upsertOccupancy` (passing the stored
+  owner_nights/notes/available through, since zod fills defaults) and skips lower calendar numbers without
+  `confirm_lower`. `ownerStayCandidates` groups block-held nights (no reservation from any source) while they share a
+  block event; only feeds whose data reaches the range vote (strong = blocked on every covering feed, unclear = one
+  covering feed, weak = open on another feed, a 1-night block next to a guest, or > 31 nights). "Not a stay" is
+  `owner_stay_dismissals` (exact start/end).
 - Fetch user-supplied URLs (calendar feeds) only through `safeDownload` in `server/services/safe-download.ts`: it
   refuses private/loopback addresses at connect time and on every redirect (`CALENDAR_ALLOW_PRIVATE_NETWORK` opts out).
 - Logging: use `log` from `server/telemetry.ts` (pino), not `console.*` (the CLI's human output is the exception).

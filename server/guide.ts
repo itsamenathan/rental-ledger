@@ -29,6 +29,8 @@ Streamable HTTP MCP endpoint: \`POST /mcp\` with the same Bearer key. Example cl
 Tools: get_overview, list_categories, search_transactions, get_transaction, add_expense, add_transaction,
 bulk_add_transactions, update_transaction, bulk_update_transactions, delete_transaction, flag_for_review,
 attach_receipt, list_files, link_attachment, unlink_attachment, update_attachment, get_summary, get_tax_report, list_occupancy, set_occupancy, set_tax_year_inputs,
+list_owner_stays, add_owner_stay, update_owner_stay, delete_owner_stay, list_owner_stay_candidates,
+dismiss_owner_stay_candidate, compare_occupancy_calendar, apply_calendar_to_occupancy,
 get_calendar, list_calendar_feeds, add_calendar_feed, refresh_calendar_feeds,
 add_category, update_category, delete_category, add_subcategory, rename_subcategory,
 remove_subcategory, set_subcategory_receipt_rule, list_receipt_exclusions, add_receipt_exclusion, remove_receipt_exclusion,
@@ -92,6 +94,12 @@ manager paperwork belong to one property. Users, API keys, categories, receipt r
     GET    /api/receipt-exclusions             vendors that never need a receipt; POST {name, note?}; DELETE /:id
     GET    /api/properties | POST | PATCH /:id
     GET    /api/occupancy?year=                PUT /api/occupancy {month, nights_booked, owner_nights, check_ins}
+                                               owner_nights is ignored for months with owner stays (derived from them)
+    GET    /api/occupancy/calendar?year=       calendar vs saved guest nights per month (ended months with calendar data)
+    POST   /api/occupancy/calendar/apply       {months: [YYYY-MM], confirm_lower?} copy calendar nights/check-ins
+    GET    /api/owner-stays?year= | POST {start_date, end_date (checkout), kind?, note?} | PATCH /:id | DELETE /:id
+    GET    /api/owner-stays/candidates?year=   blocked calendar ranges that may be owner stays
+    POST   /api/owner-stays/dismissals         {start_date, end_date} "not a stay"; DELETE /:id suggests it again
     GET    /api/calendar?from=YYYY-MM&to=      imported reservations/blocks, which holds each night, booked/blocked/free per month
     GET    /api/calendar/feeds | POST {name, url?} | PATCH /:id | DELETE /:id (removes its events)
     POST   /api/calendar/feeds/:id/refresh     download the iCal link now; /import takes .ics text as the body

@@ -6,6 +6,8 @@ import * as auth from "../services/auth.ts";
 import * as ledger from "../services/ledger.ts";
 import * as rental from "../services/rental.ts";
 import * as calendar from "../services/calendar.ts";
+import * as ownerStays from "../services/owner-stays.ts";
+import * as occCal from "../services/occupancy-calendar.ts";
 import * as reports from "../services/reports.ts";
 import * as recurring from "../services/recurring.ts";
 import * as cats from "../services/categories.ts";
@@ -328,6 +330,41 @@ api.delete("/occupancy/:id", (c) => {
   rental.deleteOccupancy(getDb(), actorOf(c), id(c));
   return c.json({ ok: true });
 });
+
+/** Calendar vs saved guest nights for each month of ?year= (one property). */
+api.get("/occupancy/calendar", (c) =>
+  c.json(occCal.compareOccupancyCalendar(getDb(), { property_id: queryProperty(c), year: queryYear(c) })),
+);
+/** Copy the calendar's guest nights/check-ins into saved occupancy: {months: [YYYY-MM], confirm_lower?, property_id}. */
+api.post("/occupancy/calendar/apply", async (c) =>
+  c.json(occCal.applyCalendarToOccupancy(getDb(), actorOf(c), await body(c))),
+);
+
+// ---------------- owner stays ----------------
+
+api.get("/owner-stays", (c) =>
+  c.json(
+    ownerStays.listOwnerStays(getDb(), {
+      year: c.req.query("year") ? queryYear(c) : undefined,
+      property_id: queryScope(c),
+    }),
+  ),
+);
+api.post("/owner-stays", async (c) => c.json(ownerStays.addOwnerStay(getDb(), actorOf(c), await body(c)), 201));
+/** Blocked calendar ranges that may be owner stays, for ?year= (one property). */
+api.get("/owner-stays/candidates", (c) =>
+  c.json(occCal.ownerStayCandidates(getDb(), { property_id: queryProperty(c), year: queryYear(c) })),
+);
+/** "Not a stay": {start_date, end_date, property_id}. */
+api.post("/owner-stays/dismissals", async (c) =>
+  c.json(occCal.dismissCandidate(getDb(), actorOf(c), await body(c)), 201),
+);
+api.delete("/owner-stays/dismissals/:id", (c) => c.json(occCal.undismissCandidate(getDb(), actorOf(c), id(c))));
+api.get("/owner-stays/:id", (c) => c.json(ownerStays.getOwnerStay(getDb(), id(c))));
+api.patch("/owner-stays/:id", async (c) =>
+  c.json(ownerStays.updateOwnerStay(getDb(), actorOf(c), id(c), await body(c))),
+);
+api.delete("/owner-stays/:id", (c) => c.json(ownerStays.deleteOwnerStay(getDb(), actorOf(c), id(c))));
 
 // ---------------- booking calendar ----------------
 

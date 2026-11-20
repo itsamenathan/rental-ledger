@@ -92,6 +92,8 @@ export function generate(today: Date) {
   /** booking calendar: platform stays, and owner stays the owner blocks on both platforms; end is the checkout day */
   const stayList: { platform: "airbnb" | "vrbo"; start: string; end: string }[] = [];
   const ownerStays: { start: string; end: string }[] = [];
+  /** blocks on the Airbnb calendar only (a hold, not an owner stay) */
+  const holds: { start: string; end: string }[] = [];
 
   const months: [number, number][] = [];
   for (let y = ty - 2; y <= ty; y++) for (let m = 1; m <= 12; m++) if (y < ty || m <= tm) months.push([y, m]);
@@ -115,13 +117,15 @@ export function generate(today: Date) {
     let booked = 0;
     let income = 0;
     let day = 2;
-    for (let i = 0; i < stays && day < last; i++) {
+    // last month keeps room at the end for an owner block and a hold (below)
+    const lastStayDay = isPrev ? last - 11 : last;
+    for (let i = 0; i < stays && day < lastStayDay; i++) {
       const nights = 2 + Math.floor(rand() * 4);
-      booked += Math.min(nights, last - day);
+      booked += Math.min(nights, lastStayDay - day);
       stayList.push({
         platform: i === 1 ? "vrbo" : "airbnb",
         start: at(day),
-        end: at(day + Math.min(nights, last - day)),
+        end: at(day + Math.min(nights, lastStayDay - day)),
       });
       const payout = Math.round(nights * between(summer ? 210 : 150, summer ? 290 : 210) * 100) / 100;
       income += payout;
@@ -146,9 +150,20 @@ export function generate(today: Date) {
     const ownerNights = m === 7 || m === 12 ? 3 + Math.floor(rand() * 3) : 0;
     // on the calendar where the month has room after the last stay (Airbnb shows it as "Not available")
     if (ownerNights && day + ownerNights <= last) ownerStays.push({ start: at(day), end: at(day + ownerNights) });
+    // Last month, for the Occupancy page: the owner blocked 3 nights on both calendars without typing them in, a
+    // 2-night hold sits on Airbnb only (VRBO shows it open), and the typed guest nights are 2 short of the calendar.
+    if (isPrev && !ownerNights) {
+      ownerStays.push({ start: at(day), end: at(day + 3) });
+      holds.push({ start: at(day + 4), end: at(day + 6) });
+    }
     const monthDone = y < ty || m < tm;
     if (monthDone)
-      occupancy.push({ month: ymOf(y, m), nights_booked: booked, owner_nights: ownerNights, check_ins: stays });
+      occupancy.push({
+        month: ymOf(y, m),
+        nights_booked: isPrev ? booked - 2 : booked,
+        owner_nights: ownerNights,
+        check_ins: stays,
+      });
 
     add(last, {
       amount: -Math.round(income * 0.2 * 100) / 100,
@@ -298,6 +313,7 @@ export function generate(today: Date) {
     occupancy,
     stays: stayList,
     ownerStays,
+    holds,
     years: [ty - 2, ty - 1, ty],
     /** vendors that never need a receipt (services/receipts.ts); Stripe is left off to try adding it */
     receiptExclusions: [] as string[],
@@ -467,7 +483,7 @@ export function sampleReservationsCsv(
  * stays as blocks (calendars synced between platforms look like that).
  */
 export function sampleIcs(
-  data: Pick<ReturnType<typeof generate>, "stays" | "ownerStays">,
+  data: Pick<ReturnType<typeof generate>, "stays" | "ownerStays"> & { holds?: { start: string; end: string }[] },
   platform: "airbnb" | "vrbo",
   extra: string[] = [],
   /** Leave out events that ended before this day (Airbnb only exports recent past stays). */
@@ -509,6 +525,9 @@ export function sampleIcs(
         platform === "airbnb" ? "Airbnb (Not available)" : "Blocked",
       ),
     );
+  if (platform === "airbnb")
+    for (const h of (data.holds ?? []).filter((x) => x.end >= since))
+      events.push(ev(`airbnb-hold-${h.start}@harness.example`, h.start, h.end, "Airbnb (Not available)"));
   return [
     "BEGIN:VCALENDAR",
     "PRODID:-//Harness//Sample Calendar//EN",
@@ -548,6 +567,7 @@ async function reset() {
   const { addReceiptExclusion } = await import("./services/receipts.ts");
   const { setSubcategoryReceiptRule } = await import("./services/categories.ts");
   const calendar = await import("./services/calendar.ts");
+  const ownerStaysService = await import("./services/owner-stays.ts");
   const db = getDb();
 
   const property = ledger.createProperty(db, null, {
@@ -593,6 +613,10 @@ async function reset() {
       // sample-airbnb-reservations.csv for trying "Import reservations CSV".
       calendar.syncFeedText(db, admin, feed.id, sampleIcs(data, platform, [], since(platform)), todayIso);
     }
+    // Earlier years' owner stays were entered by date; this year's wait on the Occupancy page to be confirmed.
+    const { addOwnerStay } = ownerStaysService;
+    for (const o of data.ownerStays.filter((x) => x.end < `${today.getUTCFullYear()}-01-01`))
+      addOwnerStay(db, admin, { property_id: property.id, start_date: o.start, end_date: o.end, kind: "owner" });
     for (const year of data.years.slice(0, 2)) {
       rental.setTaxYear(db, admin, { property_id: property.id, year, mortgage_interest: 11240.55 - (year % 10) * 180 });
     }

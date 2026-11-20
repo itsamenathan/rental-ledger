@@ -11,6 +11,7 @@ import { attachments, categories, transactions } from "../db/schema.ts";
 import { audit, type Actor } from "../context.ts";
 import { transactionsCsv } from "./csv.ts";
 import { listTransactions } from "./ledger.ts";
+import { personalUseRanges } from "./owner-stays.ts";
 import { taxReport, taxReportCsv } from "./reports.ts";
 import { gatedZipStream, type ZipSource } from "./zip.ts";
 
@@ -56,6 +57,16 @@ function summaryText(r: ReturnType<typeof taxReport>, receipts: number) {
   L.push("RENTAL VS PERSONAL USE");
   L.push(row("Days rented", String(r.use.rental_days)));
   L.push(row("Days of personal use", String(r.use.personal_days)));
+  if (r.use.owner_stays.length) {
+    const ranges = personalUseRanges(r.use.owner_stays);
+    L.push(`  Personal use: ${ranges.text} (${ranges.nights} days; first night to checkout day)`);
+    if (ranges.nights !== r.use.personal_days)
+      L.push(
+        r.use.source === "override"
+          ? `  (the ${r.use.personal_days} days above were entered for the year by hand and replace these dates)`
+          : `  (the other ${r.use.personal_days - ranges.nights} days were entered by hand for months without dated stays)`,
+      );
+  }
   L.push(row("Rental use %", `${(r.use.rental_pct * 100).toFixed(2)}%`));
   if (r.use.avg_stay != null) L.push(row("Average guest stay (nights)", String(r.use.avg_stay)));
   L.push("");

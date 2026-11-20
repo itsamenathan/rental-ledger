@@ -1,12 +1,16 @@
-import { and, asc, between, count, desc, eq, isNull, like, sql, type AnyColumn, type SQL } from "drizzle-orm";
+import { and, asc, between, count, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
 import type { DB } from "../db.ts";
-import { categories, occupancy as occupancyTable, properties, transactions } from "../db/schema.ts";
+import { categories, occupancy as occupancyTable, ownerStays, properties, transactions } from "../db/schema.ts";
+import { listOwnerStays, occupancyRows, type OccupancyRow } from "./owner-stays.ts";
+import { compareOccupancyCalendar } from "./occupancy-calendar.ts";
 import { needsReceipt } from "./receipts.ts";
 import { getProperty, resolvePropertyId, SCHEDULE_E_LINES } from "./ledger.ts";
 import { getTaxYear } from "./rental.ts";
 import { monthChecklist } from "./recurring.ts";
 import { toCsv } from "./csv.ts";
 
+const monthShort = (m: string) =>
+  new Date(`${m}-01T00:00:00Z`).toLocaleString("en-US", { month: "short", timeZone: "UTC" });
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const pct = (n: number) => Math.round(n * 10000) / 10000;
 
@@ -26,9 +30,6 @@ const sumWhen = (cond: SQL | undefined, negate = false) =>
 const liveBetween = (from: string, to: string, propertyId?: number) =>
   and(isNull(t.deletedAt), between(t.date, from, to), propertyId ? eq(t.propertyId, propertyId) : undefined);
 
-const occupancyIn = (year: number, propertyId?: number) =>
-  and(like(o.month, `${year}-%`), propertyId ? eq(o.propertyId, propertyId) : undefined);
-
 export function availableYears(db: DB): number[] {
   const txYears = db
     .selectDistinct({ y: sql<number>`CAST(substr(${t.date}, 1, 4) AS INTEGER)`.mapWith(Number) })
@@ -39,7 +40,11 @@ export function availableYears(db: DB): number[] {
     .selectDistinct({ y: sql<number>`CAST(substr(${o.month}, 1, 4) AS INTEGER)`.mapWith(Number) })
     .from(o)
     .all();
-  return [...new Set([...txYears, ...occYears].map((r) => r.y))].sort((a, b) => b - a);
+  const stayYears = db
+    .selectDistinct({ y: sql<number>`CAST(substr(${ownerStays.startDate}, 1, 4) AS INTEGER)`.mapWith(Number) })
+    .from(ownerStays)
+    .all();
+  return [...new Set([...txYears, ...occYears, ...stayYears].map((r) => r.y))].sort((a, b) => b - a);
 }
 
 function totalsBetween(db: DB, from: string, to: string, propertyId?: number) {
@@ -67,20 +72,23 @@ function totalsBetween(db: DB, from: string, to: string, propertyId?: number) {
   };
 }
 
-function occupancyTotals(db: DB, year: number, propertyId?: number) {
-  const total = (col: AnyColumn) => sql<number>`coalesce(sum(${col}), 0)`.mapWith(Number);
-  const r = db
-    .select({
-      months: count(),
-      available: total(o.nightsAvailable),
-      booked: total(o.nightsBooked),
-      owner: total(o.ownerNights),
-      check_ins: total(o.checkIns),
-    })
-    .from(o)
-    .where(occupancyIn(year, propertyId))
-    .get()!;
-  const rentable = r.available - r.owner;
+/**
+ * A year's occupancy totals. owner_nights come from owner stays where a month has any (occupancyRows), decided per
+ * property and month. Months that only have stays add personal nights but not available nights, so they don't
+ * change the occupancy rate's denominator.
+ */
+export function occupancyTotals(db: DB, year: number, propertyId?: number) {
+  const rows = occupancyRows(db, { year, propertyId });
+  const sum = (f: (r: OccupancyRow) => number) => rows.reduce((a, r) => a + f(r), 0);
+  const recorded = rows.filter((r) => r.recorded);
+  const r = {
+    months: recorded.length,
+    available: sum((r) => r.nights_available ?? 0),
+    booked: sum((r) => r.nights_booked),
+    owner: sum((r) => r.owner_nights),
+    check_ins: sum((r) => r.check_ins),
+  };
+  const rentable = recorded.reduce((a, x) => a + (x.nights_available ?? 0) - x.owner_nights, 0);
   return {
     months_recorded: r.months,
     nights_available: r.available,
@@ -89,6 +97,18 @@ function occupancyTotals(db: DB, year: number, propertyId?: number) {
     check_ins: r.check_ins,
     occupancy_rate: rentable > 0 ? pct(r.booked / rentable) : null,
     avg_stay: r.check_ins > 0 ? r2(r.booked / r.check_ins) : null,
+  };
+}
+
+/** Per-month occupancy added up over the given rows; nights_booked/available stay null without a saved row. */
+function monthOccupancy(rows: OccupancyRow[]) {
+  if (!rows.length) return null;
+  const recorded = rows.filter((r) => r.recorded);
+  return {
+    booked: recorded.length ? recorded.reduce((a, r) => a + r.nights_booked, 0) : null,
+    owner: rows.reduce((a, r) => a + r.owner_nights, 0),
+    available: recorded.length ? recorded.reduce((a, r) => a + (r.nights_available ?? 0), 0) : null,
+    check_ins: recorded.reduce((a, r) => a + r.check_ins, 0),
   };
 }
 
@@ -107,21 +127,11 @@ export function summary(db: DB, year: number, propertyId?: number) {
     .where(live)
     .groupBy(monthExpr)
     .all();
-  const occ = db
-    .select({
-      month: o.month,
-      booked: sql<number>`sum(${o.nightsBooked})`.mapWith(Number),
-      owner: sql<number>`sum(${o.ownerNights})`.mapWith(Number),
-      available: sql<number>`sum(${o.nightsAvailable})`.mapWith(Number),
-    })
-    .from(o)
-    .where(occupancyIn(year, propertyId))
-    .groupBy(o.month)
-    .all();
+  const occRows = occupancyRows(db, { year, propertyId });
   const monthly = Array.from({ length: 12 }, (_, i) => {
     const month = `${year}-${String(i + 1).padStart(2, "0")}`;
     const m = monthlyRows.find((r) => r.month === month);
-    const o = occ.find((r) => r.month === month);
+    const o = monthOccupancy(occRows.filter((r) => r.month === month));
     return {
       month,
       income: (m?.income ?? 0) / 100,
@@ -277,11 +287,7 @@ export function monthDetail(db: DB, ym: string, propertyId?: number) {
     .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount) || a.sort - b.sort)
     .map(({ sort: _s, ...r }) => r);
 
-  const occ = db
-    .select({ booked: o.nightsBooked, owner: o.ownerNights, available: o.nightsAvailable, check_ins: o.checkIns })
-    .from(o)
-    .where(and(eq(o.month, ym), propertyId ? eq(o.propertyId, propertyId) : undefined))
-    .all();
+  const occ = monthOccupancy(occupancyRows(db, { month: ym, propertyId }));
 
   return {
     month: ym,
@@ -296,13 +302,7 @@ export function monthDetail(db: DB, ym: string, propertyId?: number) {
         net: avg(trailing.net),
       },
     },
-    occupancy: occ.length
-      ? {
-          nights_booked: occ.reduce((a, r) => a + r.booked, 0),
-          owner_nights: occ.reduce((a, r) => a + r.owner, 0),
-          check_ins: occ.reduce((a, r) => a + r.check_ins, 0),
-        }
-      : null,
+    occupancy: occ ? { nights_booked: occ.booked ?? 0, owner_nights: occ.owner, check_ins: occ.check_ins } : null,
     by_category,
     recurring: monthChecklist(db, ym, { propertyId }),
   };
@@ -446,6 +446,7 @@ export function taxReport(db: DB, year: number, propertyRef?: number | string) {
 
   // ---- rental vs personal use (IRS Pub 527) ----
   const occ = occupancyTotals(db, year, propertyId);
+  const ownerStaysInYear = listOwnerStays(db, { year, property_id: propertyId });
   const rentalDays = inputs.rental_days_override ?? occ.nights_booked;
   const personalDays = inputs.personal_days_override ?? occ.owner_nights;
   const usedDays = rentalDays + personalDays;
@@ -590,6 +591,20 @@ export function taxReport(db: DB, year: number, propertyRef?: number | string) {
       code: "under_15_days",
       message: "Rented fewer than 15 days: rental income may be excludable and expenses not deductible (IRC §280A(g)).",
     });
+  // Before you file: the calendar's guest nights disagree with the saved ones (informational, not on the To do
+  // list). Months where a connected calendar doesn't reach back are left out: their stays may just be missing.
+  const vsCalendar = compareOccupancyCalendar(db, { property_id: propertyId, year });
+  const differ = vsCalendar.months.filter((m) => m.status === "differs" && !m.incomplete.length);
+  if (differ.length && inputs.rental_days_override == null) {
+    const detail = differ.map(
+      (m) => `${monthShort(m.month)} ${m.calendar!.nights_booked} vs ${m.stored?.nights_booked ?? "none"}`,
+    );
+    checks.push({
+      level: "info",
+      code: "calendar_nights_differ",
+      message: `Before you file: the booking calendar's guest nights differ from the saved occupancy in ${differ.length} month(s) (calendar vs saved: ${detail.join(", ")}). Review them on the Occupancy page; direct bookings that aren't on the calendar are a good reason to keep yours.`,
+    });
+  }
   if (occ.avg_stay != null && occ.avg_stay <= 7)
     checks.push({
       level: "info",
@@ -630,6 +645,13 @@ export function taxReport(db: DB, year: number, propertyRef?: number | string) {
       source: inputs.rental_days_override != null || inputs.personal_days_override != null ? "override" : "occupancy",
       nights_available: occ.nights_available,
       check_ins: occ.check_ins,
+      /** dated personal-use stays with nights in this year (first night → checkout day) */
+      owner_stays: ownerStaysInYear.map((s) => ({
+        start_date: s.start_date,
+        end_date: s.end_date,
+        nights_in_year: s.nights_in_year,
+        kind: s.kind,
+      })),
       avg_stay: occ.avg_stay,
     },
     allocation: {
