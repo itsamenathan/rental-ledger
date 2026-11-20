@@ -34,9 +34,21 @@ export const rangeLabel = (r: { start_date: string; end_date: string; nights: nu
 export async function saveOwnerStay(
   toast: ReturnType<typeof useToast>,
   body: { property_id: number; start_date: string; end_date: string; kind?: StayKind | null; note?: string },
+  /** offer Undo in the toast; called after the stay is deleted again */
+  undone?: () => void,
 ) {
   const r = await api<{ stay: OwnerStay; warnings: string[] }>("owner-stays", { method: "POST", json: body });
-  toast({ text: `Owner stay saved: ${rangeLabel(r.stay)}`, kind: "ok" });
+  toast({
+    text: `Owner stay saved: ${rangeLabel(r.stay)}`,
+    kind: "ok",
+    action: undone && {
+      label: "Undo",
+      run: () =>
+        void api(`owner-stays/${r.stay.id}`, { method: "DELETE" }).then(undone, (e: Error) =>
+          toast({ text: e.message, kind: "error" }),
+        ),
+    },
+  });
   for (const w of r.warnings) toast({ text: w, kind: "error" });
   return r.stay;
 }

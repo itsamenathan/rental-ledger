@@ -3,6 +3,7 @@ import { api } from "../api.ts";
 import { monthTitle } from "../format.ts";
 import { useApi, useSession, useToast } from "../hooks.ts";
 import TodoRow from "./TodoRow.tsx";
+import { scopePath } from "../scope.ts";
 import {
   kindLabel,
   plural,
@@ -56,7 +57,7 @@ function useRun(onChange: () => void) {
   };
 }
 
-/** Blocked calendar ranges with "Yes, we stayed" / "Not a stay" (To do page and the Occupancy page's list). */
+/** Blocked calendar ranges with "Add stay" / "Not a stay" as TodoRows (To do page and the Occupancy page's list); wrap in a ul.todo-list. */
 export function CandidateList({
   items,
   onChange,
@@ -73,12 +74,13 @@ export function CandidateList({
   const keyOf = (c: { property_id: number; start_date: string; end_date: string }) =>
     `${c.property_id}/${c.start_date}/${c.end_date}`;
   return (
-    <ul className="todo-list">
+    <>
       {items.map((c) => (
         <TodoRow
           key={keyOf(c)}
           title={rangeLabel(c)}
           property={c.property}
+          to={scopePath(String(c.property_id), `/calendar?month=${c.start_date.slice(0, 7)}`)}
           note={
             showReason ? c.reason : `Blocked on ${c.blocked_on.join(" and ")} with no guest. Was this a personal stay?`
           }
@@ -94,12 +96,16 @@ export function CandidateList({
                 className="btn small primary"
                 onClick={() =>
                   void run(() =>
-                    saveOwnerStay(toast, {
-                      property_id: c.property_id,
-                      start_date: c.start_date,
-                      end_date: c.end_date,
-                      kind: kinds[keyOf(c)] ?? "owner",
-                    }),
+                    saveOwnerStay(
+                      toast,
+                      {
+                        property_id: c.property_id,
+                        start_date: c.start_date,
+                        end_date: c.end_date,
+                        kind: kinds[keyOf(c)] ?? "owner",
+                      },
+                      onChange,
+                    ),
                   )
                 }
               >
@@ -108,12 +114,22 @@ export function CandidateList({
               <button
                 className="btn small ghost"
                 onClick={() =>
-                  void run(() =>
-                    api("owner-stays/dismissals", {
+                  void run(async () => {
+                    const r = await api<{ id: number | null }>("owner-stays/dismissals", {
                       method: "POST",
                       json: { property_id: c.property_id, start_date: c.start_date, end_date: c.end_date },
-                    }),
-                  )
+                    });
+                    toast({
+                      text: `${rangeLabel(c)}: not a stay`,
+                      kind: "ok",
+                      action: r.id
+                        ? {
+                            label: "Undo",
+                            run: () => void run(() => api(`owner-stays/dismissals/${r.id}`, { method: "DELETE" })),
+                          }
+                        : undefined,
+                    });
+                  })
                 }
               >
                 Not a stay
@@ -122,11 +138,11 @@ export function CandidateList({
           )}
         </TodoRow>
       ))}
-    </ul>
+    </>
   );
 }
 
-/** Months where the calendar's guest nights differ from the saved ones, with "Use calendar" (To do page). */
+/** Months where the calendar's guest nights differ from the saved ones, with "Use calendar" (To do page); wrap in a ul.todo-list. */
 export function GuestNightList({
   items,
   onChange,
@@ -155,12 +171,13 @@ export function GuestNightList({
     });
   };
   return (
-    <ul className="todo-list">
+    <>
       {items.map((m) => (
         <TodoRow
           key={`${m.property_id}/${m.month}`}
           title={`${monthTitle(m.month)} guest nights`}
           property={m.property}
+          to={scopePath(String(m.property_id), `/occupancy?year=${m.month.slice(0, 4)}`)}
           note={`Calendar has ${plural(m.calendar!.nights_booked, "night")}, ${plural(m.calendar!.check_ins, "check-in")}; you entered ${
             m.stored
               ? `${plural(m.stored.nights_booked, "night")}, ${plural(m.stored.check_ins, "check-in")}`
@@ -174,7 +191,7 @@ export function GuestNightList({
           )}
         </TodoRow>
       ))}
-    </ul>
+    </>
   );
 }
 
@@ -290,11 +307,13 @@ export function OwnerStaysPanel({
           {blocks.data.candidates.length === 0 ? (
             <p className="muted small">No blocked dates without a guest in {year}.</p>
           ) : (
-            <CandidateList
-              items={blocks.data.candidates.map((c) => ({ ...c, property_id: propertyId }))}
-              onChange={changed}
-              showReason
-            />
+            <ul className="todo-list">
+              <CandidateList
+                items={blocks.data.candidates.map((c) => ({ ...c, property_id: propertyId }))}
+                onChange={changed}
+                showReason
+              />
+            </ul>
           )}
         </>
       )}

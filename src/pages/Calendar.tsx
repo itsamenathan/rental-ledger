@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { api } from "../api.ts";
 import { ago, syncText, type Feed, type HistorySummary, type SyncResult } from "../calendar.ts";
 import { fmtDate, monthTitle, shiftMonth, thisMonth, today } from "../format.ts";
@@ -58,7 +58,12 @@ export default function Calendar() {
   const { canWrite } = useSession();
   const toast = useToast();
   const propertyId = useProperty().single;
-  const [month, setMonth] = usePersistentState("cal-month", thisMonth());
+  const linked = useSearchParams()[0].get("month");
+  const [month, setMonth] = usePersistentState(
+    "cal-month",
+    thisMonth(),
+    linked && /^\d{4}-\d{2}$/.test(linked) ? linked : undefined,
+  );
   const { data, reload } = useApi<CalendarData>(`calendar?from=${month}&property_id=${propertyId}`);
   const [open, setOpen] = useState<CalEvent | null>(null);
   const [stayKind, setStayKind] = useState<StayKind | "">("");

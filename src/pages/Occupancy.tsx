@@ -3,7 +3,7 @@ import { api } from "../api.ts";
 import { monthLabel, percent, THIS_YEAR } from "../format.ts";
 import { useApi, usePersistentState, useScopedPath, useSession, useToast, useProperty } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { OwnerStaysPanel } from "../components/OwnerStays.tsx";
 import type { OwnerStay } from "../owner-stays.ts";
 
@@ -26,7 +26,8 @@ type Draft = { nights_available: string; nights_booked: string; owner_nights: st
 
 export default function Occupancy() {
   const { canWrite } = useSession();
-  const [year, setYear] = usePersistentState("occ-year", THIS_YEAR);
+  const linked = Number(useSearchParams()[0].get("year"));
+  const [year, setYear] = usePersistentState("occ-year", THIS_YEAR, linked > 1900 ? linked : undefined);
   const propertyId = useProperty().single;
   const { data, reload } = useApi<Row[]>(`occupancy?year=${year}&property_id=${propertyId}`);
   const stays = useApi<OwnerStay[]>(`owner-stays?year=${year}&property_id=${propertyId}`);

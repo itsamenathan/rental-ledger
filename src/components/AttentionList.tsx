@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { Link, useLocation } from "react-router";
-import { addLinkFor, dismissRecurring, qs, type RecurringAlert, type RecurringSeries } from "../api.ts";
+import { addLinkFor, qs, type RecurringAlert, type RecurringSeries } from "../api.ts";
 import { dateInMonth, monthShort } from "../format.ts";
-import { useSession, useToast, useScopedPath } from "../hooks.ts";
+import { useSession, useScopedPath } from "../hooks.ts";
+import { useDismissAlert } from "../recurring-dismiss.ts";
 import { scopePath } from "../scope.ts";
 
 const ICON: Record<RecurringAlert["type"], string> = {
@@ -69,16 +70,7 @@ export function RecurringActions({
   const at = (to: string) => (s ? scopePath(String(s.property_id), to) : scoped(to));
   const { canWrite } = useSession();
   const here = useLocation().pathname;
-  const toast = useToast();
-  const dismiss = async (whole: boolean) => {
-    try {
-      await dismissRecurring(a.series_key, whole ? null : a.month);
-      toast({ text: whole ? `Stopped tracking ${a.label}` : "Got it, won't flag that again", kind: "ok" });
-      onChanged();
-    } catch (e) {
-      toast({ text: (e as Error).message, kind: "error" });
-    }
-  };
+  const dismiss = useDismissAlert(onChanged);
   return (
     <>
       <Link to={at(`/months/${a.month}`)} className="link small">
@@ -101,11 +93,11 @@ export function RecurringActions({
               Review
             </Link>
           )}
-          <button className="btn small ghost" onClick={() => void dismiss(false)}>
+          <button className="btn small ghost" onClick={() => void dismiss(a, false)}>
             {a.type === "missing" ? "Nothing was due" : a.type === "duplicate" ? "Not a duplicate" : "Looks right"}
           </button>
           {a.type === "missing" && (
-            <button className="link small" onClick={() => void dismiss(true)}>
+            <button className="link small" onClick={() => void dismiss(a, true)}>
               Stop tracking
             </button>
           )}

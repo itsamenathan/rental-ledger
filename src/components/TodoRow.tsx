@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import { Amount } from "../lib.tsx";
 
 /**
@@ -12,6 +13,8 @@ export default function TodoRow({
   note,
   amount,
   onOpen,
+  to,
+  below,
   children,
 }: {
   title: ReactNode;
@@ -23,6 +26,10 @@ export default function TodoRow({
   amount?: number;
   /** makes the text a button (opens the entry) */
   onOpen?: () => void;
+  /** or makes it a link to where the item can be seen in full */
+  to?: string;
+  /** full-width content under the row (e.g. the two entries of a possible duplicate) */
+  below?: ReactNode;
   /** actions */
   children?: ReactNode;
 }) {
@@ -42,11 +49,16 @@ export default function TodoRow({
         <button className="todo-main" onClick={onOpen}>
           {body}
         </button>
+      ) : to ? (
+        <Link className="todo-main" to={to}>
+          {body}
+        </Link>
       ) : (
         <div className="todo-main as-text">{body}</div>
       )}
       {amount != null ? <Amount value={amount} /> : <span />}
       <span className="todo-actions">{children}</span>
+      {below && <div className="todo-below">{below}</div>}
     </li>
   );
 }

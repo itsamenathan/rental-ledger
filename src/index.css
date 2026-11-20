@@ -2190,6 +2190,9 @@ hr.sep {
   cursor: pointer;
   min-width: 0;
 }
+a.todo-main {
+  text-decoration: none;
+}
 .todo-main:hover .todo-what strong {
   text-decoration: underline;
 }
@@ -2249,6 +2252,28 @@ hr.sep {
 .todo-note {
   font-size: 0.85rem;
   color: var(--text-2);
+}
+/* under a To do row: the entries of a possible duplicate, each with its own Delete */
+.todo-below {
+  grid-column: 1 / -1;
+}
+.todo-sub {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.9rem;
+  border-left: 2px solid var(--grid);
+}
+.todo-list .todo-sub li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.25rem 1rem;
+  align-items: center;
+  padding: 0.3rem 0;
+  border: 0;
+  font-size: 0.85rem;
+}
+.todo-more {
+  margin-top: 0.5rem;
 }
 .todo-actions {
   display: flex;
