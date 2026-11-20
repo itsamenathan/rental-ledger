@@ -556,7 +556,8 @@ export function buildMcpServer(actor: Actor) {
         "For each month of a year: the calendar's guest nights and check-ins vs the saved occupancy. Only months " +
         'that have ended and have at least one calendar reservation are compared (otherwise status "not_ended" or ' +
         '"no_data", which is not zero). calendar_lower means the calendar has fewer nights than saved, possibly a ' +
-        "direct booking it doesn't know about.",
+        "direct booking it doesn't know about. Months that differ list the reservations counted (stays) and kept " +
+        "(non-null when the user said to keep the saved numbers; those aren't asked about again).",
       inputSchema: { year: z.number().int(), property: one },
       annotations: ro,
     },
@@ -577,6 +578,22 @@ export function buildMcpServer(actor: Actor) {
       },
     },
     wrap((args) => occCal.applyCalendarToOccupancy(db, actor, args)),
+  );
+
+  server.registerTool(
+    "keep_occupancy_numbers",
+    {
+      description:
+        "Keep the saved guest nights of a month whose calendar numbers differ (for example a direct booking the " +
+        "calendar doesn't know), so it stops showing on the To do list. Asked again if either side's numbers change. " +
+        "Only with the user's OK.",
+      inputSchema: {
+        property: one,
+        month: z.string().describe("YYYY-MM"),
+        note: z.string().optional().describe("Why the saved numbers are right"),
+      },
+    },
+    wrap((args) => occCal.keepOccupancyNumbers(db, actor, args)),
   );
 
   server.registerTool(
@@ -753,7 +770,7 @@ export function buildMcpServer(actor: Actor) {
     "get_todo",
     {
       description:
-        "The user's to-do list: counts of flagged entries, expenses with no direct/indirect set, recurring-bill alerts (missing, duplicate, changed), expenses in receipts_year (last year until the end of April) that should have a receipt and don't (per category receipt rules and never-ask names; list them with search_transactions needs_receipt=true), plus the recurring alerts themselves, and occupancy_items: likely owner stays to confirm (add_owner_stay or dismiss_owner_stay_candidate, after asking the user) and ended months where the booking calendar's guest nights differ from the saved occupancy (apply_calendar_to_occupancy). Use search_transactions (needs_review=true, allocation=none) for the entries.",
+        "The user's to-do list: counts of flagged entries, expenses with no direct/indirect set, recurring-bill alerts (missing, duplicate, changed), expenses in receipts_year (last year until the end of April) that should have a receipt and don't (per category receipt rules and never-ask names; list them with search_transactions needs_receipt=true), plus the recurring alerts themselves, and occupancy_items: likely owner stays to confirm (add_owner_stay or dismiss_owner_stay_candidate, after asking the user) and ended months where the booking calendar's guest nights differ from the saved occupancy (apply_calendar_to_occupancy, or keep_occupancy_numbers when the user says the saved numbers are right). Use search_transactions (needs_review=true, allocation=none) for the entries.",
       inputSchema: { property: scope },
       annotations: ro,
     },

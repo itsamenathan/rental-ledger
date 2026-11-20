@@ -16,6 +16,7 @@ const reports = await import("./services/reports.ts");
 const ledger = await import("./services/ledger.ts");
 const { eq } = await import("drizzle-orm");
 const { todoSummary } = await import("./services/todo.ts");
+const { undoAudit } = await import("./services/undo.ts");
 
 const TODAY = "2026-11-20";
 
@@ -243,6 +244,63 @@ describe("calendar vs guest nights", () => {
       ownerNights: 0,
     });
     expect(occCal.compareOccupancyCalendar(db, { property_id: pid, year: 2026, today: TODAY }).differing).toEqual([]);
+  });
+
+  it("lists the stays a differing month counted, and keeps the saved numbers until either side changes", () => {
+    const { db, actor, pid } = setup();
+    feed(db, actor, pid, "VRBO", [
+      event("v0", "2026-07-01", "2026-07-03", "Reserved - Guest"),
+      event("v1", "2026-08-30", "2026-09-02", "Reserved - Guest"), // 1 Sep night, checked in in August
+      event("v2", "2026-09-10", "2026-09-14", "Reserved - Guest"),
+      event("v3", "2026-09-28", "2026-10-03", "Reserved - Guest"), // 3 Sep nights
+    ]);
+    // Sep 4–7 is a direct booking the calendar doesn't know
+    rental.upsertOccupancy(db, actor, { property_id: pid, month: "2026-09", nights_booked: 12, check_ins: 3 });
+    const sep = () =>
+      occCal
+        .compareOccupancyCalendar(db, { property_id: pid, year: 2026, today: TODAY })
+        .months.find((m) => m.month === "2026-09")!;
+    const todoMonths = () =>
+      todoSummary(db, { propertyId: pid, today: TODAY }).occupancy_items.flatMap((o) =>
+        o.guest_nights.map((m) => m.month).filter((m) => m === "2026-09"),
+      );
+
+    expect(sep()).toMatchObject({ status: "differs", calendar: { nights_booked: 8, check_ins: 2 }, kept: null });
+    expect(sep().stays.map((s) => [s.start_date, s.nights_in_month, s.check_in, s.feed])).toEqual([
+      ["2026-08-30", 1, false, "VRBO"],
+      ["2026-09-10", 4, true, "VRBO"],
+      ["2026-09-28", 3, true, "VRBO"],
+    ]);
+    expect(todoMonths()).toEqual(["2026-09"]);
+
+    const k = occCal.keepOccupancyNumbers(db, actor, { property_id: pid, month: "2026-09", note: "direct" }, TODAY);
+    expect(sep()).toMatchObject({ status: "differs", kept: { id: k.id, note: "direct" } });
+    expect(todoMonths()).toEqual([]);
+    // keeping again replaces the earlier one
+    const k2 = occCal.keepOccupancyNumbers(db, actor, { property_id: pid, month: "2026-09" }, TODAY);
+    expect(sep().kept).toMatchObject({ id: k2.id, note: "" });
+
+    // the saved numbers change: asked again
+    rental.upsertOccupancy(db, actor, { property_id: pid, month: "2026-09", nights_booked: 13, check_ins: 3 });
+    expect(sep().kept).toBeNull();
+    expect(todoMonths()).toEqual(["2026-09"]);
+    rental.upsertOccupancy(db, actor, { property_id: pid, month: "2026-09", nights_booked: 12, check_ins: 3 });
+    expect(todoMonths()).toEqual([]);
+
+    // undo asks again; undoing the undo keeps it again
+    const lastAudit = () =>
+      db.get<{ id: number }>(
+        "SELECT id FROM audit_log WHERE entity = 'occupancy_calendar_keep' ORDER BY id DESC LIMIT 1" as never,
+      )!.id;
+    undoAudit(db, actor, lastAudit());
+    expect(todoMonths()).toEqual(["2026-09"]);
+    undoAudit(db, actor, lastAudit());
+    expect(todoMonths()).toEqual([]);
+
+    // a month that matches, or hasn't ended, can't be kept
+    expect(() => occCal.keepOccupancyNumbers(db, actor, { property_id: pid, month: "2026-11" }, TODAY)).toThrow(
+      /don't differ/,
+    );
   });
 
   it("marks months a connected calendar doesn't reach back to, unless reservation history covers them", () => {

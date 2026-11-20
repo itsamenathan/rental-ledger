@@ -349,6 +349,30 @@ export const ownerStayDismissals = sqliteTable(
   (t) => [uniqueIndex("owner_stay_dismissals_unique").on(t.propertyId, t.startDate, t.endDate)],
 );
 
+/**
+ * "Keep mine" on a month whose calendar guest nights differ from the saved occupancy. Remembers both sides' numbers:
+ * the month is asked about again as soon as the calendar or the saved row changes.
+ */
+export const occupancyCalendarKeeps = sqliteTable(
+  "occupancy_calendar_keeps",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    month: text("month").notNull(),
+    calendarNights: integer("calendar_nights").notNull(),
+    calendarCheckIns: integer("calendar_check_ins").notNull(),
+    /** null when nothing was saved for the month */
+    storedNights: integer("stored_nights"),
+    storedCheckIns: integer("stored_check_ins"),
+    note: text("note").notNull().default(""),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+  },
+  (t) => [uniqueIndex("occupancy_calendar_keeps_unique").on(t.propertyId, t.month)],
+);
+
 export const taxYears = sqliteTable(
   "tax_years",
   {

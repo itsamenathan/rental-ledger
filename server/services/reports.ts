@@ -592,9 +592,10 @@ export function taxReport(db: DB, year: number, propertyRef?: number | string) {
       message: "Rented fewer than 15 days: rental income may be excludable and expenses not deductible (IRC §280A(g)).",
     });
   // Before you file: the calendar's guest nights disagree with the saved ones (informational, not on the To do
-  // list). Months where a connected calendar doesn't reach back are left out: their stays may just be missing.
+  // list). Months where a connected calendar doesn't reach back are left out: their stays may just be missing; so
+  // are months the user kept ("Keep mine").
   const vsCalendar = compareOccupancyCalendar(db, { property_id: propertyId, year });
-  const differ = vsCalendar.months.filter((m) => m.status === "differs" && !m.incomplete.length);
+  const differ = vsCalendar.months.filter((m) => m.status === "differs" && !m.incomplete.length && !m.kept);
   if (differ.length && inputs.rental_days_override == null) {
     const detail = differ.map(
       (m) => `${monthShort(m.month)} ${m.calendar!.nights_booked} vs ${m.stored?.nights_booked ?? "none"}`,

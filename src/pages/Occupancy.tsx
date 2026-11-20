@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { api } from "../api.ts";
-import { monthLabel, percent, THIS_YEAR } from "../format.ts";
+import { fmtDate, monthLabel, percent, THIS_YEAR } from "../format.ts";
 import { useApi, usePersistentState, useScopedPath, useSession, useToast, useProperty } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
 import { Link, useSearchParams } from "react-router";
 import { OwnerStaysPanel } from "../components/OwnerStays.tsx";
-import type { OwnerStay } from "../owner-stays.ts";
+import { plural, type MonthCompare, type OwnerStay } from "../owner-stays.ts";
 
 interface Row {
   /** null: a month that only has owner stays */
@@ -34,17 +34,32 @@ export default function Occupancy() {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   // confirmations from the booking calendar live on the To do page
   const todo = useApi<{ occupancy: number }>(`todo?property_id=${propertyId}`);
+  // months whose saved numbers were kept over the calendar's ("Keep mine" on To do)
+  const vsCalendar = useApi<{ months: MonthCompare[] }>(`occupancy/calendar?year=${year}&property_id=${propertyId}`);
+  const [openKept, setOpenKept] = useState<string | null>(null);
   const scoped = useScopedPath();
   const toast = useToast();
   const reloadAll = () => {
     void reload();
     void stays.reload();
     void todo.reload();
+    void vsCalendar.reload();
     window.dispatchEvent(new Event("todo:changed"));
   };
 
   const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
   const rowFor = (m: string) => data?.find((r) => r.month === m);
+  const keptFor = (m: string) => vsCalendar.data?.months.find((c) => c.month === m && c.kept);
+  const askAgain = async (c: MonthCompare) => {
+    try {
+      await api(`occupancy/calendar/keep/${c.kept!.id}`, { method: "DELETE" });
+      setOpenKept(null);
+      toast({ text: `${monthLabel(c.month, "long")} is back on To do`, kind: "ok" });
+      reloadAll();
+    } catch (e) {
+      toast({ text: (e as Error).message, kind: "error" });
+    }
+  };
   const lockedOwner = (m: string) => rowFor(m)?.owner_nights_source === "stays";
   const valueOf = (m: string, k: keyof Draft) =>
     k === "owner_nights" && lockedOwner(m)
@@ -141,26 +156,66 @@ export default function Occupancy() {
             {months.map((m) => {
               const booked = Number(valueOf(m, "nights_booked") || 0);
               const avail = Number(valueOf(m, "nights_available") || 0) - Number(valueOf(m, "owner_nights") || 0);
+              const kept = keptFor(m);
               return (
-                <tr key={m} className={drafts[m] ? "dirty" : ""}>
-                  <td>{monthLabel(m, "long")}</td>
-                  {(["nights_available", "nights_booked", "owner_nights", "check_ins"] as const).map((k) => (
-                    <td key={k} className="num">
-                      <input
-                        className="cell-input"
-                        inputMode="numeric"
-                        disabled={!canWrite || (k === "owner_nights" && lockedOwner(m))}
-                        title={k === "owner_nights" && lockedOwner(m) ? "From owner stays" : undefined}
-                        value={valueOf(m, k)}
-                        onChange={(e) => edit(m, k, e.target.value.replace(/\D/g, ""))}
-                        aria-label={`${monthLabel(m, "long")} ${k.replace("_", " ")}`}
-                      />
+                <Fragment key={m}>
+                  <tr className={drafts[m] ? "dirty" : ""}>
+                    <td>
+                      {monthLabel(m, "long")}
+                      {kept && (
+                        <button
+                          type="button"
+                          className="badge muted kept-badge"
+                          aria-expanded={openKept === m}
+                          title={kept.kept!.note || "You kept your numbers over the calendar's"}
+                          onClick={() => setOpenKept((o) => (o === m ? null : m))}
+                        >
+                          Kept
+                        </button>
+                      )}
                     </td>
-                  ))}
-                  <td className="num">
-                    {avail > 0 && valueOf(m, "nights_booked") !== "" ? percent(booked / avail, 0) : "—"}
-                  </td>
-                </tr>
+                    {(["nights_available", "nights_booked", "owner_nights", "check_ins"] as const).map((k) => (
+                      <td key={k} className="num">
+                        <input
+                          className="cell-input"
+                          inputMode="numeric"
+                          disabled={!canWrite || (k === "owner_nights" && lockedOwner(m))}
+                          title={k === "owner_nights" && lockedOwner(m) ? "From owner stays" : undefined}
+                          value={valueOf(m, k)}
+                          onChange={(e) => edit(m, k, e.target.value.replace(/\D/g, ""))}
+                          aria-label={`${monthLabel(m, "long")} ${k.replace("_", " ")}`}
+                        />
+                      </td>
+                    ))}
+                    <td className="num">
+                      {avail > 0 && valueOf(m, "nights_booked") !== "" ? percent(booked / avail, 0) : "—"}
+                    </td>
+                  </tr>
+                  {kept && openKept === m && (
+                    <tr className="kept-detail">
+                      <td colSpan={6}>
+                        <p>
+                          {kept.kept!.note ? (
+                            <strong>{kept.kept!.note}</strong>
+                          ) : (
+                            <span className="muted">No reason given.</span>
+                          )}
+                        </p>
+                        <p className="muted small">
+                          Kept on {fmtDate(kept.kept!.created_at.slice(0, 10))} over the calendar's{" "}
+                          {plural(kept.calendar!.nights_booked, "night")},{" "}
+                          {plural(kept.calendar!.check_ins, "check-in")}. If either number changes, it's asked about
+                          again on To do.
+                        </p>
+                        {canWrite && (
+                          <button className="btn small" onClick={() => void askAgain(kept)}>
+                            Ask again
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
           </tbody>
