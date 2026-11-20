@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { api, ApiError, type Allocation, type Attachment, type Transaction } from "../api.ts";
-import { money, today } from "../format.ts";
+import { fmtDate, money, today } from "../format.ts";
 import { useApi, useSession, useProperty } from "../hooks.ts";
 import {
   asText,
@@ -18,6 +18,14 @@ import {
 } from "../outbox.ts";
 import { useReceiptUploads } from "../receipt-uploads.ts";
 import ReceiptPicker from "./ReceiptPicker.tsx";
+import type { ScanResult } from "../scanner/Scanner.tsx";
+import { readReceipt } from "../scanner/receipt-total.ts";
+
+/** What reading a scanned receipt found, shown under the amount. */
+type ScanRead =
+  | { status: "reading"; downloading: boolean }
+  | { status: "failed" }
+  | { status: "done"; total: number | null; date: string | null; filled: boolean; dateSet: boolean };
 
 interface Suggestions {
   vendors: { vendor: string; category: string; subcategory: string; allocation: Allocation; uses: number }[];
@@ -151,6 +159,39 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
   // refused receipt returns the entry already saved) and renewed once it has been saved or queued.
   const clientIdRef = useRef(newClientId());
   const amountRef = useRef<HTMLInputElement>(null);
+  const [scanRead, setScanRead] = useState<ScanRead | null>(null);
+  // Bumped when the form is cleared for another entry, so a slow OCR result can't land in the next one.
+  const scanSeq = useRef(0);
+  const dateTouched = useRef(!!prefill.date); // a date given by the caller (e.g. a bill) is kept
+
+  /**
+   * A new entry's scanned receipt: read its text on this device and fill the amount (and date) if they're still
+   * untouched. Never overwrites what was typed, and saving never waits for it.
+   */
+  const readScan = (scan: ScanResult) => {
+    if (seed) return;
+    const seq = ++scanSeq.current;
+    setScanRead({ status: "reading", downloading: false });
+    import("../scanner/ocr.ts")
+      .then(async (m) => {
+        if (!(await m.textReaderCached()) && seq === scanSeq.current)
+          setScanRead({ status: "reading", downloading: true });
+        return m.readText(scan.ocrPages);
+      })
+      .then((text) => {
+        const input = amountRef.current;
+        if (seq !== scanSeq.current || !input) return; // cleared, or the form closed
+        const guess = readReceipt(text, today());
+        const fill = guess.total !== null && !input.value.trim();
+        if (fill) setAmount(guess.total!.toFixed(2));
+        const dateSet = !!guess.date && !dateTouched.current;
+        if (dateSet) setDate(guess.date!);
+        setScanRead({ status: "done", total: guess.total, date: guess.date, filled: fill, dateSet });
+      })
+      .catch(() => {
+        if (seq === scanSeq.current) setScanRead({ status: "failed" });
+      });
+  };
 
   const categories = overview.categories.filter((c) => c.kind === kind && (!c.archived || c.id === categoryId));
   // Most-used categories first, as quick-pick chips.
@@ -211,6 +252,8 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
     const label = `${category?.name ?? "Entry"}${vendor ? ` (${vendor})` : ""} · ${money(sign * value)}`;
     const resetForAnother = () => {
       clientIdRef.current = newClientId();
+      scanSeq.current++;
+      setScanRead(null);
       setAmount("");
       setDescription("");
       setRefund(false);
@@ -344,10 +387,25 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
               required
               placeholder="0.00"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onChange={(e) => {
+                setAmount(e.target.value);
+                if (scanRead?.status === "done" && scanRead.filled) setScanRead(null);
+              }}
               aria-describedby="amount-hint"
             />
           </div>
+          {scanRead && (
+            <small className="hint scan-hint" role="status">
+              <ScanHint
+                read={scanRead}
+                amount={amount}
+                onUse={(total) => {
+                  setAmount(total.toFixed(2));
+                  if (scanRead.status === "done") setScanRead({ ...scanRead, filled: true });
+                }}
+              />
+            </small>
+          )}
           {refund && (
             <small id="amount-hint" className="hint">
               Recorded as {money((kind === "expense" ? 1 : -1) * (Number(amount) || 0))} (
@@ -357,7 +415,15 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
         </label>
         <label>
           Date
-          <input type="date" required value={date} onChange={(e) => setDate(e.target.value)} />
+          <input
+            type="date"
+            required
+            value={date}
+            onChange={(e) => {
+              dateTouched.current = true;
+              setDate(e.target.value);
+            }}
+          />
         </label>
       </div>
 
@@ -439,6 +505,7 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
         onRemoveAttachment={(id) => void removeAttachment(id)}
         queuedFiles={queuedFiles}
         onRemoveQueued={(i) => setQueuedFiles((q) => q.filter((_, j) => j !== i))}
+        onScanned={readScan}
       />
 
       {kind === "expense" && category && (
@@ -557,6 +624,31 @@ const TAX_TEXT = {
 };
 
 /** Direct/indirect, shown as a sentence set from the category, with a one-click switch. */
+/** The line under the amount after a scan: what was read, and any date it set (the date picks the month). */
+function ScanHint({ read, amount, onUse }: { read: ScanRead; amount: string; onUse: (total: number) => void }) {
+  if (read.status === "reading")
+    return read.downloading ? (
+      <>Getting the text reader (about 4.5 MB, first time only), then reading the scan…</>
+    ) : (
+      <>Reading the scan…</>
+    );
+  if (read.status === "failed") return <>Couldn't read the scan's text.</>;
+  const dated = read.dateSet && read.date ? `date set to ${fmtDate(read.date)}` : "";
+  if (read.total === null) return <>No total found on the scan{dated ? `; ${dated}` : ""}.</>;
+  if (read.filled) return <>From the scan{dated ? `, ${dated}` : ""}. Check it.</>;
+  const typed = Math.round(Number(amount.replace(/[$,\s]/g, "")) * 100);
+  if (typed === Math.round(read.total * 100)) return <>Matches the scan{dated ? `; ${dated}` : ""}.</>;
+  return (
+    <>
+      Scan shows {money(read.total)}
+      {dated ? ` (${dated})` : ""} ·{" "}
+      <button type="button" className="link" onClick={() => onUse(read.total!)}>
+        use it
+      </button>
+    </>
+  );
+}
+
 function TaxLine({
   value,
   isDefault,

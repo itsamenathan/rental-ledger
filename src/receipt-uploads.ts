@@ -11,6 +11,8 @@ export interface PickedReceipt {
   key: string;
   file: File;
   preview: string | null;
+  /** A picture sent with the file for showing it later (a scanned PDF's first page). */
+  picture?: Blob;
   status: "uploading" | "done" | "local" | "error";
   uploadId?: number;
   error?: string;
@@ -55,6 +57,7 @@ export function useReceiptUploads({ stage }: { stage: boolean }) {
     (item: PickedReceipt) => {
       const form = new FormData();
       form.append("file", item.file);
+      if (item.picture) form.append("preview", item.picture, "preview.jpg");
       const run = api<{ id: number }>("uploads", { method: "POST", body: form, signal: timeout(UPLOAD_TIMEOUT_MS) })
         .then((r) => {
           // Removed while uploading: drop it on the server too.
@@ -71,12 +74,18 @@ export function useReceiptUploads({ stage }: { stage: boolean }) {
     [patch],
   );
 
+  /** `previews[i]` is a picture to show for `files[i]` when the file isn't one (a scanned PDF's first page). */
   const add = useCallback(
-    (files: File[]) => {
-      const added = files.map((file): PickedReceipt => ({
+    (files: File[], previews: (Blob | undefined)[] = []) => {
+      const added = files.map((file, i): PickedReceipt => ({
         key: `r${++seq}`,
         file,
-        preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+        preview: file.type.startsWith("image/")
+          ? URL.createObjectURL(file)
+          : previews[i]
+            ? URL.createObjectURL(previews[i])
+            : null,
+        picture: file.type.startsWith("image/") ? undefined : previews[i],
         status: stage ? "uploading" : "local",
       }));
       update((l) => [...l, ...added]);

@@ -4,11 +4,16 @@
  * - A few read-only API calls fall back to their last good response when the network is unreachable: what the Add
  *   form needs (who am I, categories/properties, suggestions) and transaction lists/entries, so entries seen while
  *   online can be opened and edited offline. Nothing else under /api is touched.
+ * - The document scanner's text reader (tesseract and its model; SCANNER_ASSETS) is too big to fetch on every
+ *   install: they're cached on first use in their own cache, which survives new builds (only files no longer in the
+ *   build are dropped).
  * - Writes are never handled here: unsent entries live in the page's IndexedDB outbox (src/outbox.ts).
  */
 const BUILD = "__BUILD_ID__";
 const ASSETS = __ASSETS__;
+const SCANNER_ASSETS = __SCANNER_ASSETS__;
 const SHELL = `shell-${BUILD}`;
+const SCANNER = "scanner-v1";
 const API = "api-v1";
 const STATIC = [
   "/",
@@ -41,6 +46,7 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(keys.filter((k) => k.startsWith("shell-") && k !== SHELL).map((k) => caches.delete(k))),
       )
+      .then(pruneScanner)
       .then(() => self.clients.claim()),
   );
 });
@@ -60,6 +66,10 @@ self.addEventListener("fetch", (event) => {
   if (path === "/mcp" || path.startsWith("/mcp/") || path === "/llms.txt" || path === "/healthz") return;
   if (req.mode === "navigate") {
     event.respondWith(networkThenCache(req, SHELL, "/"));
+    return;
+  }
+  if (SCANNER_ASSETS.includes(path)) {
+    event.respondWith(cacheThenNetwork(req, SCANNER));
     return;
   }
   if (path.startsWith("/assets/")) {
@@ -109,13 +119,19 @@ async function trimApiCache(cache) {
 }
 
 /** Hashed build files never change: serve the cached copy, else fetch and remember it. */
-async function cacheThenNetwork(req) {
+async function cacheThenNetwork(req, cacheName = SHELL) {
   const hit = await caches.match(req);
   if (hit) return hit;
   const res = await fetch(req);
   if (res.ok) {
-    const cache = await caches.open(SHELL);
+    const cache = await caches.open(cacheName);
     await cache.put(req, res.clone());
   }
   return res;
+}
+
+/** Drop scanner files a previous build used that this one doesn't. */
+async function pruneScanner() {
+  const cache = await caches.open(SCANNER);
+  for (const r of await cache.keys()) if (!SCANNER_ASSETS.includes(new URL(r.url).pathname)) await cache.delete(r);
 }

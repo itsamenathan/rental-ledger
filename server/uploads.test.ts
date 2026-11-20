@@ -8,10 +8,11 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "rental-test-"));
 
 const { openDb } = await import("./db.ts");
 const { seedDefaults } = await import("./seed.ts");
-const { pendingUploads, users } = await import("./db/schema.ts");
+const { filePreviews, pendingUploads, users } = await import("./db/schema.ts");
 const ledger = await import("./services/ledger.ts");
 const files = await import("./services/attachments.ts");
 const uploads = await import("./services/uploads.ts");
+const library = await import("./services/files.ts");
 const { pathFor } = await import("./services/storage.ts");
 
 function setup() {
@@ -139,5 +140,47 @@ describe("receipt uploads before saving", () => {
     expect(att).toBeDefined();
     expect(existsSync(pathFor(key))).toBe(true);
     expect(new TextDecoder().decode((await files.readAttachment(db, att!.id)).data)).toBe("same photo");
+  });
+
+  it("keeps a scanned PDF's picture with the file and drops it with the file's last use", async () => {
+    const { db, actor, entry } = setup();
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+    const pdf = { filename: "scan.pdf", contentType: "application/pdf", data: new TextEncoder().encode("%PDF scan") };
+    const up = await uploads.stageUpload(db, actor, { ...pdf, preview: jpeg });
+    const t = ledger.createTransaction(db, actor, { ...entry, upload_ids: [up.id] });
+    const [att] = files.listAttachments(db, t.id);
+    expect(att!.has_preview).toBe(true);
+    expect([...files.readAttachmentPreview(db, att!.id)]).toEqual([...jpeg]);
+    const listed = library.listFiles(db, { month: "2026-10" }).files.find((f) => f.filename === "scan.pdf");
+    expect(listed?.preview_url).toBe(`/api/attachments/${att!.id}/preview`);
+
+    // Shared by a second entry: removing one keeps the picture; removing the last drops it.
+    const other = files.linkAttachment(db, actor, att!.id, {
+      transaction_id: ledger.createTransaction(db, actor, entry).id,
+    });
+    await files.deleteAttachment(db, actor, att!.id);
+    expect(db.select().from(filePreviews).all()).toHaveLength(1);
+    await files.deleteAttachment(db, actor, other.id);
+    expect(db.select().from(filePreviews).all()).toHaveLength(0);
+  });
+
+  it("refuses a preview that isn't a small JPEG of a PDF", async () => {
+    const { db, actor } = setup();
+    const pdf = { filename: "scan.pdf", contentType: "application/pdf", data: new TextEncoder().encode("%PDF") };
+    await expect(uploads.stageUpload(db, actor, { ...pdf, preview: new Uint8Array([1, 2, 3, 4]) })).rejects.toThrow(
+      /JPEG/,
+    );
+    await expect(
+      uploads.stageUpload(db, actor, { ...pdf, preview: new Uint8Array(400 * 1024).fill(0xff) }),
+    ).rejects.toThrow(/too large/);
+    await expect(
+      uploads.stageUpload(db, actor, {
+        filename: "a.jpg",
+        contentType: "image/jpeg",
+        data: new Uint8Array([0xff, 0xd8, 0xff, 9]),
+        preview: new Uint8Array([0xff, 0xd8, 0xff, 9]),
+      }),
+    ).rejects.toThrow(/only go with a PDF/);
+    expect(db.select().from(pendingUploads).all()).toHaveLength(0);
   });
 });

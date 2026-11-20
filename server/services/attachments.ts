@@ -1,10 +1,10 @@
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
-import { attachments } from "../db/schema.ts";
+import { attachments, filePreviews } from "../db/schema.ts";
 import { audit, notFound, requireWrite, type Actor } from "../context.ts";
 import { getTransaction } from "./ledger.ts";
-import { checkUpload, cleanFilename, readStored, releaseFile, sha256, storeBytes } from "./storage.ts";
+import { checkUpload, cleanFilename, readPreview, readStored, releaseFile, sha256, storeBytes } from "./storage.ts";
 
 export { ALLOWED, cleanFilename } from "./storage.ts";
 
@@ -15,6 +15,8 @@ export interface Attachment {
   content_type: string;
   size: number;
   created_at: string;
+  /** Set by listings: a picture of the file is at `/api/attachments/:id/preview` (scanned PDFs). */
+  has_preview?: boolean;
 }
 
 const attachmentCols = {
@@ -28,16 +30,20 @@ const attachmentCols = {
 
 export function listAttachments(db: DB, transactionId: number): Attachment[] {
   return db
-    .select(attachmentCols)
+    .select({
+      ...attachmentCols,
+      has_preview: sql<number>`exists (select 1 from ${filePreviews} where ${filePreviews.sha256} = ${attachments.sha256})`,
+    })
     .from(attachments)
     .where(eq(attachments.transactionId, transactionId))
     .orderBy(attachments.id)
-    .all();
+    .all()
+    .map((r) => ({ ...r, has_preview: !!r.has_preview }));
 }
 
 function getStored(db: DB, id: number) {
   const row = db
-    .select({ ...attachmentCols, storage_key: attachments.storageKey })
+    .select({ ...attachmentCols, storage_key: attachments.storageKey, sha256: attachments.sha256 })
     .from(attachments)
     .where(eq(attachments.id, id))
     .get();
@@ -111,6 +117,13 @@ export function attachStored(
 export async function readAttachment(db: DB, id: number) {
   const row = getStored(db, id);
   return { meta: row, data: await readStored(row.storage_key) };
+}
+
+/** The JPEG picture saved with an attachment's file (a scanned PDF's first page). */
+export function readAttachmentPreview(db: DB, id: number): Buffer {
+  const data = readPreview(db, getStored(db, id).sha256);
+  if (!data) throw notFound("Preview");
+  return data;
 }
 
 export async function deleteAttachment(db: DB, actor: Actor, id: number) {

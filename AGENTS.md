@@ -75,6 +75,32 @@ release. Add a tool name to select part of the graph. For example, run
 - Receipts picked in the entry form upload right away to `pending_uploads` (`server/services/uploads.ts`,
   `POST /api/uploads`) and are attached by `upload_ids` on create/update inside the save's transaction; the form
   discards them when closed unsaved (`src/receipt-uploads.ts`), and stale ones are pruned after 24 hours. REST only.
+- Document scanner (`src/scanner/`, entry form's "Scan" button): runs entirely on the device. Where the browser
+  allows a live camera (https or localhost, `live-camera.ts`), Scan opens the scanner's own viewfinder (`Camera.tsx`,
+  getUserMedia; the photo is the frame on screen, from a 2560×1920-ideal stream, because `ImageCapture.takePhoto`
+  took 2–4 s per shot on Android; `camera-pick.ts` moves off a back lens that can't focus, often the ultra-wide, and
+  remembers the camera in localStorage; tap to focus; the Scan/Photo tap starts the camera, `warmCamera`, while the
+  screen appears, and `ReceiptPicker` fetches both screens while the form is open, not React.lazy, which holds a screen
+  back ~300 ms; Back closes them via a history entry, `useBackCloses`) so several pages never leave the page. The "Photo" button uses the same viewfinder for plain photos
+  (`PhotoCamera.tsx`, `burst`: several in a row, Done attaches them; "Camera app" hands over to the phone's camera from
+  the tap, keeping what was taken); elsewhere, or when the camera
+  is refused, it uses the phone's camera app through a capture input. The camera runs only on the camera step (all
+  tracks stopped on leaving it or when the page is hidden). A multi-page scan is one PDF; the scanner sends a JPEG of
+  its first page as `preview` with the upload, stored in `file_previews` by the file's sha256 (in the database, so
+  backups carry it; orphans dropped by `releaseFile`) and served at `/api/attachments/:id/preview` (`has_preview`,
+  `preview_url` on the Files page). Receipts queued offline go without a preview. Page finding,
+  flattening and filters are plain TypeScript (`detect.ts`, `image.ts`; no DOM, tested in Node). OpenCV.js was
+  tried and dropped: loading it alone took ~700 MB and phones killed the page. `detect.ts` scores candidate outlines
+  (Hough lines + bright regions) on edge support, paper-likeness, size and angles, then refits each side; check
+  changes with `scripts/scanner-eval/` (labelled photo sets) and `detect.test.ts`, not one picture. Memory: one working copy of the photo (≤2400 px; pages ≤3 MP), each
+  finished page kept only as JPEG; free temporary canvases (`free()` in `canvas.ts`). pdf-lib joins pages (one page
+  = JPEG) and tesseract.js reads the text; `receipt-total.ts` picks the total and date, which only fill a new
+  entry's empty amount / untouched date. The tesseract worker/core and `eng.traineddata` are self-hosted hashed build
+  files (never a CDN) kept out of the service worker's install list: `isScannerAsset` in `vite.config.ts` →
+  `SCANNER_ASSETS`, cached on first use in `scanner-v1`. The build writes `.gz` copies of scripts/styles that
+  `server/main.ts` serves (`precompressed`). tesseract.js 7 can't take the model as data (its init uses `data` as
+  the language name), so `ocr.ts` passes the hashed model URL as `langPath` with a `#` on the end. These packages
+  are devDependencies: they only feed the build, not the server.
 - The Files page (`server/services/files.ts`) lists one item per stored file (sha256) with every entry it's attached
   to: receipts by their entry's date, manager paperwork by the month it covers. Trashed entries are left out.
 - "Needs a receipt" is decided only by `needsReceipt()` in `server/services/receipts.ts`: the subcategory's rule

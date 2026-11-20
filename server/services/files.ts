@@ -8,11 +8,11 @@
  */
 import { existsSync } from "node:fs";
 import { extname, resolve, sep } from "node:path";
-import { and, asc, count, eq, inArray, isNull, like, type SQL } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, like, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { config } from "../config.ts";
 import type { DB } from "../db.ts";
-import { attachments, categories, managerDocuments, properties, transactions } from "../db/schema.ts";
+import { attachments, categories, filePreviews, managerDocuments, properties, transactions } from "../db/schema.ts";
 import { audit, badRequest, type Actor } from "../context.ts";
 import { RECEIPT_MIN_DOLLARS } from "./receipts.ts";
 import { gatedZipStream, type ZipSource } from "./zip.ts";
@@ -59,6 +59,8 @@ export interface LibraryFile {
   date: string;
   /** Open/download this URL (add ?download to force a download). */
   url: string;
+  /** A picture of a file that isn't an image (a scanned PDF's first page), when one was saved with it. */
+  preview_url: string | null;
   /** Set when the file is a saved manager statement or invoice. */
   manager: { id: number; kind: "statement" | "invoice"; month: string; reference: string; property: string } | null;
   /** Entries in this period the file is attached to. */
@@ -111,6 +113,7 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
         size: attachments.size,
         sha: attachments.sha256,
         created_at: attachments.createdAt,
+        has_preview: sql<number>`${filePreviews.sha256} is not null`,
         transaction_id: t.id,
         date: t.date,
         amount: t.amountCents,
@@ -122,6 +125,7 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
         property: properties.name,
       })
       .from(attachments)
+      .leftJoin(filePreviews, eq(filePreviews.sha256, attachments.sha256))
       .innerJoin(t, eq(t.id, attachments.transactionId))
       .innerJoin(categories, eq(categories.id, t.categoryId))
       .innerJoin(properties, eq(properties.id, t.propertyId))
@@ -140,6 +144,7 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
           month: r.date.slice(0, 7),
           date: r.date,
           url: `/api/attachments/${r.id}`,
+          preview_url: r.has_preview ? `/api/attachments/${r.id}/preview` : null,
           manager: null,
           links: [],
           other_uses: 0,
@@ -202,6 +207,7 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
       month: d.month,
       date: `${d.month}-01`,
       url,
+      preview_url: null,
       manager,
       links: [],
       other_uses: 0,
