@@ -19,6 +19,7 @@ import { useApi, useSession, useToast, useProperty } from "../hooks.ts";
 import { useDismissAlert } from "../recurring-dismiss.ts";
 import { Amount } from "../lib.tsx";
 import { scopePath } from "../scope.ts";
+import { dueText } from "../state-tax.ts";
 
 export interface TodoSummary {
   total: number;
@@ -37,6 +38,20 @@ export interface TodoSummary {
     property: string;
     owner_stays: StayCandidate[];
     guest_nights: MonthCompare[];
+  }[];
+  state_tax: number;
+  state_tax_items: {
+    property_id: number;
+    property: string;
+    year: number;
+    quarter: number;
+    label: string;
+    due_date: string;
+    days_left: number;
+    status: "open" | "overdue";
+    gross: number;
+    complete: boolean;
+    location_id: string;
   }[];
 }
 
@@ -96,6 +111,7 @@ export default function Todo() {
     o.guest_nights.map((m) => ({ ...m, property_id: o.property_id, property: propName(o.property_id) })),
   );
   const managerMonths = summary.data?.manager_months ?? [];
+  const stateTax = summary.data?.state_tax_items ?? [];
   const alerts = rec.data?.alerts ?? [];
   const bills = [...alerts.filter((a) => a.level === "warning"), ...alerts.filter((a) => a.level === "info")];
   const seriesOf = (a: RecurringAlert) => rec.data?.series.find((x) => x.key === a.series_key);
@@ -268,6 +284,29 @@ export default function Todo() {
             >
               <Link className="btn small primary" to={at(m.property_id, `/statement/${m.month}`)}>
                 Open statement
+              </Link>
+            </TodoRow>
+          ))}
+        </Group>
+      )}
+
+      {stateTax.length > 0 && (
+        <Group title="State tax" count={stateTax.length}>
+          {stateTax.map((s) => (
+            <TodoRow
+              key={`${s.property_id}-${s.year}-${s.quarter}`}
+              title={`${s.label} sales tax return`}
+              property={propName(s.property_id)}
+              to={at(s.property_id, `/state-tax?year=${s.year}`)}
+              note={
+                <>
+                  {dueText(s)}. Gross to file {money(s.gross)}.
+                  {!s.complete && <span className="muted"> Some months have no manager statement saved.</span>}
+                </>
+              }
+            >
+              <Link className="btn small primary" to={at(s.property_id, `/state-tax?year=${s.year}`)}>
+                File and pay
               </Link>
             </TodoRow>
           ))}

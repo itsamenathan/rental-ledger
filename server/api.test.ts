@@ -291,6 +291,78 @@ function textPdf(lines: string[]) {
   return new TextEncoder().encode(pdf);
 }
 
+describe("state tax", () => {
+  const tool = async (name: string, args: unknown) => {
+    const res = await app.request("/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        ...bearer(writeKey),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+    });
+    const out: any = await res.json();
+    return {
+      error: !!out.result.isError,
+      data: out.result.isError ? out.result.content[0].text : JSON.parse(out.result.content[0].text),
+    };
+  };
+
+  it("lists, marks paid, links and clears over REST and MCP", async () => {
+    expect((await call("PUT", "/api/state-tax/location", { location_id: "LOC-1" })).json.location_id).toBe("LOC-1");
+    const year = await call("GET", "/api/state-tax?year=2025");
+    expect(year.status).toBe(200);
+    expect(year.json.quarters.map((q: any) => q.due_date)).toEqual([
+      "2025-04-20",
+      "2025-07-20",
+      "2025-10-20",
+      "2026-01-20",
+    ]);
+
+    const paid = await call("POST", "/api/state-tax/2025/1/paid", { paid_date: "2025-04-15", amount_paid: 12.34 });
+    expect(paid.status).toBe(200);
+    expect(paid.json.filing).toMatchObject({ amount_paid: 12.34, paid_date: "2025-04-15" });
+    const tx = await call("GET", `/api/transactions/${paid.json.filing.transaction_id}`);
+    expect(tx.json).toMatchObject({ category: "Taxes", subcategory: "", allocation: "direct", amount: -12.34 });
+    const again = await call("POST", "/api/state-tax/2025/1/paid", { paid_date: "2025-04-15", amount_paid: 99 });
+    expect(again.status).toBe(409);
+    expect(again.json.details.current.amount_paid).toBe(12.34);
+
+    const cleared = await call("DELETE", "/api/state-tax/2025/1/paid");
+    expect(cleared.json).toMatchObject({ cleared: true, expense_trashed: false });
+    expect((await call("POST", "/api/state-tax/2025/1/link", {})).status).toBe(400);
+
+    // MCP: the kept expense is a candidate, and linking it marks the quarter paid again
+    const q = await tool("get_state_tax", { year: 2025, quarter: 1 });
+    expect(q.data.candidates.map((c: any) => c.id)).toEqual([paid.json.filing.transaction_id]);
+    const linked = await tool("link_state_tax_expense", {
+      year: 2025,
+      quarter: 1,
+      transaction_id: q.data.candidates[0].id,
+    });
+    expect(linked.data).toMatchObject({ status: "paid", filing: { amount_paid: 12.34 } });
+    const viaMcp = await tool("mark_state_tax_paid", {
+      year: 2025,
+      quarter: 2,
+      paid_date: "2025-07-10",
+      amount_paid: 5,
+    });
+    expect(viaMcp.data.status).toBe("paid");
+    expect(
+      (await tool("clear_state_tax_paid", { year: 2025, quarter: 2, trash_expense: true })).data.expense_trashed,
+    ).toBe(true);
+
+    const ro = await call(
+      "POST",
+      "/api/state-tax/2025/3/paid",
+      { paid_date: "2025-10-10", amount_paid: 1 },
+      bearer(readKey),
+    );
+    expect(ro.status).toBe(403);
+  });
+});
+
 describe("manager statement", () => {
   const csv = [
     'Listing,Guest,Channel,"Check-in date","Check-out date",AcmeOwnerPayout,AcmeCleaningFee,AcmeManagementFee,Nights,"Reservation ID"',

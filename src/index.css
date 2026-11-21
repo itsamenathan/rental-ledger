@@ -4166,3 +4166,92 @@ table.conflict thead th {
     opacity: 0;
   }
 }
+
+/* ---------- State sales tax ---------- */
+.st-location-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.st-location-id {
+  font-size: 1.25rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.st-location-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.st-location-note {
+  margin: 0.6rem 0 0;
+}
+.st-quarter h2 .badge {
+  vertical-align: middle;
+}
+.st-sub {
+  margin: 0.15rem 0 0.9rem;
+}
+.st-figures {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+.st-gross {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.st-secondary {
+  font-size: 1.15rem;
+}
+.st-alert {
+  margin: 0.5rem 0;
+}
+.st-alert p:last-child {
+  margin-bottom: 0;
+}
+.st-paid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--grid);
+}
+.st-paid .alert {
+  flex-basis: 100%;
+}
+.st-details summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-2);
+  padding: 0.4rem 0;
+}
+.st-table {
+  margin-top: 0.4rem;
+  box-shadow: none;
+}
+.st-mode,
+.st-candidates {
+  border: 0;
+  padding: 0;
+  margin: 0 0 0.75rem;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+@media (max-width: 640px) {
+  .st-figures {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .st-figures > :first-child {
+    grid-column: 1 / -1;
+  }
+}

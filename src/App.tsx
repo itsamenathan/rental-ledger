@@ -14,6 +14,7 @@ import Todo, { type TodoSummary } from "./pages/Todo.tsx";
 import Occupancy from "./pages/Occupancy.tsx";
 import CalendarPage from "./pages/Calendar.tsx";
 import Reports from "./pages/Reports.tsx";
+import StateTax from "./pages/StateTax.tsx";
 import ImportCsv from "./pages/ImportCsv.tsx";
 import ManagerStatement from "./pages/ManagerStatement.tsx";
 import Files from "./pages/Files.tsx";
@@ -83,6 +84,7 @@ const NAV = [
     icon: "M17 2l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 22l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3",
   },
   { to: "/reports", label: "Taxes", icon: "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6" },
+  { to: "/state-tax", label: "State tax", icon: "M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6M12 3v2" },
   { to: "/calendar", label: "Calendar", icon: "M4 5h16v15H4zM4 10h16M9 3v4M15 3v4M8 14h3v3H8z" },
   { to: "/occupancy", label: "Occupancy", icon: "M4 5h16v15H4zM4 10h16M9 3v4M15 3v4" },
   {
@@ -100,7 +102,7 @@ const NAV = [
 const SIDEBAR: { title?: string; items: string[] }[] = [
   { title: "Money", items: ["/", "/todo", "/transactions", "/files", "/statement", "/categories", "/recurring"] },
   { title: "Stays", items: ["/calendar", "/occupancy"] },
-  { title: "Taxes", items: ["/reports"] },
+  { title: "Taxes", items: ["/reports", "/state-tax"] },
 ];
 const MOBILE_NAV = ["/", "/transactions", "/add", "/todo"];
 /**
@@ -282,6 +284,7 @@ function Shell() {
                   <Route path="calendar" element={<CalendarPage />} />
                   <Route path="occupancy" element={<Occupancy />} />
                   <Route path="reports" element={<Reports />} />
+                  <Route path="state-tax" element={<StateTax />} />
                   <Route path="import" element={<ImportCsv />} />
                   <Route path="files" element={<Files />} />
                   <Route path="statement" element={<ManagerStatement />} />

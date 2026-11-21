@@ -90,7 +90,9 @@ export function generate(today: Date) {
   const rows: Row[] = [];
   const occupancy: { month: string; nights_booked: number; owner_nights: number; check_ins: number }[] = [];
   /** booking calendar: platform stays, and owner stays the owner blocks on both platforms; end is the checkout day */
-  const stayList: { platform: "airbnb" | "vrbo"; start: string; end: string }[] = [];
+  const stayList: { platform: "airbnb" | "vrbo"; start: string; end: string; payout?: number }[] = [];
+  /** booked through the manager's own site: only on the manager's statement (and in the ledger), not on a feed */
+  const directStays: { start: string; end: string; payout: number }[] = [];
   const ownerStays: { start: string; end: string }[] = [];
   /** blocks on the Airbnb calendar only (a hold, not an owner stay) */
   const holds: { start: string; end: string }[] = [];
@@ -99,6 +101,13 @@ export function generate(today: Date) {
   for (let y = ty - 2; y <= ty; y++) for (let m = 1; m <= 12; m++) if (y < ty || m <= tm) months.push([y, m]);
   const prev = months.at(-2)!; // last complete month
   const prev2 = months.at(-3)!;
+  // State sales tax: the last quarter that has ended is unpaid (overdue once past the 20th), the one before is paid.
+  // A direct booking crosses from the paid quarter into the unpaid one (it counts where it checks in).
+  const lastQ = Math.floor((tm - 1) / 3) === 0 ? { y: ty - 1, q: 4 } : { y: ty, q: Math.floor((tm - 1) / 3) };
+  const paidQ = lastQ.q === 1 ? { y: lastQ.y - 1, q: 4 } : { y: lastQ.y, q: lastQ.q - 1 };
+  const boundary = [paidQ.y, paidQ.q * 3] as const;
+  /** guest nights of a stay that started last month, counted in this month's occupancy */
+  let carryNights = 0;
 
   for (const [y, m] of months) {
     const last = daysIn(y, m);
@@ -109,25 +118,28 @@ export function generate(today: Date) {
     };
     const isPrev = y === prev[0] && m === prev[1];
     const isPrev2 = y === prev2[0] && m === prev2[1];
+    const isBoundary = y === boundary[0] && m === boundary[1];
     const summer = m >= 5 && m <= 9;
     const winter = m <= 2 || m === 12;
 
     // Stays: Airbnb and VRBO payouts, a cleaning per stay, and the manager's cut.
     const stays = Math.max(2, Math.round((summer ? 6 : winter ? 2 : 4) + (rand() - 0.5) * 2));
-    let booked = 0;
+    let booked = carryNights;
+    carryNights = 0;
     let income = 0;
     let day = 2;
-    // last month keeps room at the end for an owner block and a hold (below)
-    const lastStayDay = isPrev ? last - 11 : last;
+    // last month keeps room at the end for an owner block and a hold (below); the boundary month for the direct booking
+    const lastStayDay = isPrev ? last - 11 : isBoundary ? last - 3 : last;
     for (let i = 0; i < stays && day < lastStayDay; i++) {
       const nights = 2 + Math.floor(rand() * 4);
       booked += Math.min(nights, lastStayDay - day);
+      const payout = Math.round(nights * between(summer ? 210 : 150, summer ? 290 : 210) * 100) / 100;
       stayList.push({
         platform: i === 1 ? "vrbo" : "airbnb",
         start: at(day),
         end: at(day + Math.min(nights, lastStayDay - day)),
+        payout,
       });
-      const payout = Math.round(nights * between(summer ? 210 : 150, summer ? 290 : 210) * 100) / 100;
       income += payout;
       // The second stay each month is VRBO, so both platforms are steady monthly series.
       const vrbo = i === 1;
@@ -149,12 +161,30 @@ export function generate(today: Date) {
     }
     const ownerNights = m === 7 || m === 12 ? 3 + Math.floor(rand() * 3) : 0;
     // on the calendar where the month has room after the last stay (Airbnb shows it as "Not available")
-    if (ownerNights && day + ownerNights <= last) ownerStays.push({ start: at(day), end: at(day + ownerNights) });
+    if (ownerNights && day + ownerNights <= (isBoundary ? last - 2 : last))
+      ownerStays.push({ start: at(day), end: at(day + ownerNights) });
     // Last month, for the Occupancy page: the owner blocked 3 nights on both calendars without typing them in, a
     // 2-night hold sits on Airbnb only (VRBO shows it open), and the typed guest nights are 2 short of the calendar.
     if (isPrev && !ownerNights) {
       ownerStays.push({ start: at(day), end: at(day + 3) });
       holds.push({ start: at(day + 4), end: at(day + 6) });
+    }
+    // The direct booking: checks in two days before the quarter ends, out on the 2nd of the next month.
+    let checkIns = stays;
+    if (isBoundary) {
+      const [ny, nm] = m === 12 ? [y + 1, 1] : [y, m + 1];
+      const payout = 3 * 245;
+      directStays.push({ start: at(last - 1), end: `${ny}-${pad(nm)}-02`, payout });
+      add(last, {
+        amount: payout,
+        category: "Rental Income",
+        subcategory: "Direct booking",
+        description: "3-night stay (booked direct)",
+      });
+      income += payout;
+      booked += 2;
+      carryNights = 1;
+      checkIns += 1;
     }
     const monthDone = y < ty || m < tm;
     if (monthDone)
@@ -162,7 +192,7 @@ export function generate(today: Date) {
         month: ymOf(y, m),
         nights_booked: isPrev ? booked - 2 : booked,
         owner_nights: ownerNights,
-        check_ins: stays,
+        check_ins: checkIns,
       });
 
     add(last, {
@@ -308,10 +338,34 @@ export function generate(today: Date) {
     if (k === 1 && day + 3 <= last) ownerStays.push({ start: at(day), end: at(day + 3) });
   }
 
+  // The manager's monthly owner statements for the two tax quarters (and the month after, if it's over), each stay on
+  // the statement of the month it checks out, like the real ones. Taxes is the lodging tax VRBO/direct guests paid.
+  const qMonths = (q: { y: number; q: number }) => [1, 2, 3].map((i) => ymOf(q.y, (q.q - 1) * 3 + i));
+  const afterLast = lastQ.q === 4 ? ymOf(lastQ.y + 1, 1) : ymOf(lastQ.y, lastQ.q * 3 + 1);
+  const statementMonths = [...qMonths(paidQ), ...qMonths(lastQ), afterLast].filter((mo) => mo < ymOf(ty, tm));
+  const statements = statementMonths.map((month) => ({
+    month,
+    csv: statementCsv(
+      [
+        ...stayList
+          .filter((st) => st.end.startsWith(month) && st.payout != null)
+          .map((st) => ({ ...st, channel: st.platform === "vrbo" ? "VRBO" : "Airbnb", payout: st.payout! })),
+        ...directStays.filter((st) => st.end.startsWith(month)).map((st) => ({ ...st, channel: "Booking Engine" })),
+      ].sort((a, b) => a.start.localeCompare(b.start)),
+    ),
+  }));
+
   return {
     rows: rows.sort((a, b) => a.date.localeCompare(b.date)),
     occupancy,
     stays: stayList,
+    directStays,
+    statements,
+    stateTax: {
+      location_id: "12345678-0001",
+      paid: { year: paidQ.y, quarter: paidQ.q },
+      unpaid: { year: lastQ.y, quarter: lastQ.q },
+    },
     ownerStays,
     holds,
     years: [ty - 2, ty - 1, ty],
@@ -330,6 +384,33 @@ export function generate(today: Date) {
     /** a second, smaller property, so the property switcher and "All properties" have something to show */
     second: generateSecond(today),
   };
+}
+
+/** An owner-statement CSV in the shape the app reads (columns matched by suffix; the manager's name is a prefix). */
+function statementCsv(stays: { channel: string; start: string; end: string; payout: number }[]) {
+  const nights = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
+  const money = (n: number) =>
+    `"$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}"`;
+  const lines = [
+    'Guest,Channel,"Check-in date","Check-out date",SeabreezeOwnerPayout,SeabreezeTaxes,Nights,"Reservation ID"',
+  ];
+  for (const st of stays) {
+    const taxes = /airbnb/i.test(st.channel) ? 0 : Math.round(st.payout * 0.1 * 100) / 100;
+    const id = `${st.channel.slice(0, 2).toUpperCase()}${st.start.replace(/-/g, "")}`;
+    lines.push(
+      [
+        `"Guest ${id.slice(-4)}"`,
+        st.channel,
+        st.start,
+        st.end,
+        money(st.payout),
+        money(taxes),
+        nights(st.start, st.end),
+        id,
+      ].join(","),
+    );
+  }
+  return lines.join("\n") + "\n";
 }
 
 /**
@@ -633,6 +714,38 @@ async function reset() {
     calendar.syncFeedText(db, admin, cabinFeed.id, sampleIcs(data.second, "airbnb"), todayIso);
     rental.setTaxYear(db, admin, { property_id: cabin.id, year: data.second.years[0]!, notes: "No mortgage" });
   });
+  // Saved manager statements, the property's state tax Location ID, and the earlier quarter's return paid.
+  const { saveDocuments } = await import("./services/manager-documents.ts");
+  const stateTax = await import("./services/state-tax.ts");
+  for (const s of data.statements)
+    await saveDocuments(
+      db,
+      admin,
+      [{ filename: `Owner statement ${s.month}.csv`, contentType: "text/csv", data: new TextEncoder().encode(s.csv) }],
+      { property: property.id, month: s.month },
+    );
+  // The sample has no manager invoices: mark "No invoice saved" as explained so these months stay off the To do list.
+  const managerStatement = await import("./services/manager-statement.ts");
+  for (const s of data.statements)
+    for (const c of managerStatement.previewManagerMonth(db, { property_id: property.id, month: s.month }).checks)
+      if (c.key && /^No invoice saved/.test(c.text))
+        managerStatement.acknowledgeCheck(db, admin, {
+          property_id: property.id,
+          month: s.month,
+          key: c.key,
+          note: "Invoices aren't part of the sample data",
+        });
+  stateTax.setLocationId(db, admin, { property: property.id, location_id: data.stateTax.location_id });
+  const paidQ = stateTax.stateTaxQuarter(db, { property: property.id, ...data.stateTax.paid, today: todayIso });
+  stateTax.markStateTaxPaid(db, admin, {
+    property: property.id,
+    ...data.stateTax.paid,
+    paid_date: `${paidQ.due_date.slice(0, 8)}16`,
+    // fictional: the state works out the real tax from the gross
+    amount_paid: Math.round(paidQ.gross * 2.9) / 100,
+    confirmation: "0000123456",
+  });
+
   for (const { id, row } of receipts) {
     const text = `RECEIPT\n${row.vendor}\n${row.date}\n${row.description ?? row.category}\nTotal: $${(-row.amount).toFixed(2)}\n`;
     await addAttachment(db, admin, id, {

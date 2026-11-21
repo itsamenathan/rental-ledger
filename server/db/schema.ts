@@ -74,6 +74,8 @@ export const properties = sqliteTable(
     recoveryYears: real("recovery_years").notNull().default(27.5),
     notes: text("notes").notNull().default(""),
     archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+    /** The state sales-tax account's Location ID for this property's quarterly return (services/state-tax.ts). */
+    stateTaxLocationId: text("state_tax_location_id").notNull().default(""),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("properties_name_unique").on(sql`lower(${t.name})`)],
@@ -512,5 +514,40 @@ export const calendarEvents = sqliteTable(
     check("calendar_events_source_check", sql`${t.source} IN ('feed','history')`),
     check("calendar_events_source_feed_check", sql`(${t.source} = 'feed') = (${t.feedId} IS NOT NULL)`),
     check("calendar_events_dates_check", sql`${t.endDate} > ${t.startDate}`),
+  ],
+);
+
+/**
+ * Quarterly state sales-tax returns that were paid, one row per property and quarter (services/state-tax.ts). There
+ * is no stored status: a row means paid; no row means open (overdue once the due date, derived from year + quarter,
+ * has passed). The gross is computed from saved manager statements; gross_filed_cents is what was actually filed.
+ * transaction_id links the ledger expense (Taxes, no subcategory, direct) that records the payment.
+ */
+export const stateTaxFilings = sqliteTable(
+  "state_tax_filings",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    year: integer("year").notNull(),
+    quarter: integer("quarter").notNull(),
+    grossFiledCents: integer("gross_filed_cents"),
+    amountPaidCents: integer("amount_paid_cents").notNull(),
+    /** YYYY-MM-DD */
+    paidDate: text("paid_date").notNull(),
+    confirmation: text("confirmation").notNull().default(""),
+    transactionId: integer("transaction_id").references(() => transactions.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+    updatedAt: text("updated_at").notNull().default(now),
+    updatedBy: integer("updated_by").references(() => users.id),
+  },
+  (t) => [
+    uniqueIndex("state_tax_filings_quarter").on(t.propertyId, t.year, t.quarter),
+    uniqueIndex("state_tax_filings_tx")
+      .on(t.transactionId)
+      .where(sql`${t.transactionId} IS NOT NULL`),
+    check("state_tax_filings_quarter_check", sql`${t.quarter} BETWEEN 1 AND 4`),
   ],
 );

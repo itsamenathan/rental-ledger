@@ -325,6 +325,8 @@ export function PropertySettings() {
           <dd>{p.building_basis?.toLocaleString("en-US", { style: "currency", currency: "USD" }) ?? "—"}</dd>
           <dt>Recovery period</dt>
           <dd>{p.recovery_years} years</dd>
+          <dt>State tax Location ID</dt>
+          <dd>{p.state_tax_location_id || "—"}</dd>
           {p.notes && (
             <>
               <dt>Notes</dt>
@@ -368,6 +370,7 @@ function PropertyModal({
       recovery_years: Number(p.recovery_years ?? 27.5),
       notes: p.notes ?? "",
       archived: !!p.archived,
+      state_tax_location_id: p.state_tax_location_id ?? "",
     };
     try {
       if (p.id) await api(`properties/${p.id}`, { method: "PATCH", json });
@@ -424,6 +427,18 @@ function PropertyModal({
         <p className="muted small">
           Basis and in-service date are used to estimate depreciation on the tax report. Your preparer's depreciation
           schedule is authoritative.
+        </p>
+        <label>
+          State sales tax Location ID
+          <input
+            value={editing.state_tax_location_id ?? ""}
+            maxLength={50}
+            onChange={(e) => setEditing({ ...editing, state_tax_location_id: e.target.value })}
+          />
+        </label>
+        <p className="muted small">
+          The Location ID of this property's sales tax account, shown on the State tax page for filing each quarter's
+          return. With it set, the To do list reminds you before each return is due.
         </p>
         <label>
           Notes

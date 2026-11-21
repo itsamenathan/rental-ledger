@@ -22,7 +22,7 @@ import { config } from "../config.ts";
 import { log, withSpan } from "../telemetry.ts";
 import { parseCsv } from "./csv.ts";
 import { resolvePropertyId } from "./ledger.ts";
-import { savedStatements, toIsoDate } from "./manager-statement.ts";
+import { savedReservations, toIsoDate } from "./manager-statement.ts";
 import { BlockedAddressError, safeDownload } from "./safe-download.ts";
 
 export type EventKind = "reserved" | "blocked";
@@ -621,23 +621,19 @@ const monthName = (m: string) =>
 
 /** Every stay on the property's saved manager statements, once per reservation id (the latest statement wins). */
 function statementStays(db: DB, propertyId: number): Omit<CalendarEvent, "id">[] {
-  const byId = new Map<string, Omit<CalendarEvent, "id">>();
-  for (const { month, statement } of savedStatements(db, propertyId))
-    for (const r of statement.reservations) {
-      if (r.cancelled || r.check_out <= r.check_in) continue;
-      byId.set(r.reservation_id, {
-        property_id: propertyId,
-        feed_id: null,
-        source: "statement",
-        feed: `Manager statement (${monthName(month)})`,
-        kind: "reserved",
-        start_date: r.check_in,
-        end_date: r.check_out,
-        nights: nightsBetween(r.check_in, r.check_out),
-        summary: `${r.channel || "Stay"} · #${r.reservation_id}`,
-      });
-    }
-  return [...byId.values()];
+  return savedReservations(db, propertyId)
+    .filter((r) => !r.cancelled && r.check_out > r.check_in)
+    .map((r) => ({
+      property_id: propertyId,
+      feed_id: null,
+      source: "statement" as const,
+      feed: `Manager statement (${monthName(r.month)})`,
+      kind: "reserved" as const,
+      start_date: r.check_in,
+      end_date: r.check_out,
+      nights: nightsBetween(r.check_in, r.check_out),
+      summary: `${r.channel || "Stay"} · #${r.reservation_id}`,
+    }));
 }
 
 const RANK: Record<EventSource, number> = { feed: 0, history: 1, statement: 2 };
