@@ -20,6 +20,7 @@ import * as files from "../services/attachments.ts";
 import * as library from "../services/files.ts";
 import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
+import * as stateTax from "../services/state-tax.ts";
 import * as csvImport from "../services/csv-import.ts";
 import { listAudit } from "../services/audit.ts";
 import type { Env } from "./middleware.ts";
@@ -43,6 +44,10 @@ Rental property bookkeeping. Data model:
   direct/off-platform bookings, and an owner stay shows only as a block, so don't treat it as the occupancy record.
   list_owner_stay_candidates suggests blocks that may be owner stays and compare_occupancy_calendar compares guest
   nights; ask the user before add_owner_stay / apply_calendar_to_occupancy.
+- state sales tax: a quarterly return per property (due the 20th after the quarter ends), filed with only the gross =
+  owner payouts of non-Airbnb, non-cancelled stays by check-in date, from saved manager statements. The app never
+  computes tax. get_state_tax shows each quarter; mark_state_tax_paid records the payment (creates the Taxes expense)
+  and link_state_tax_expense uses an expense already in the ledger instead. Ask the user for the amount paid.
 - properties: each rental is separate. Transactions, occupancy, booking calendars, tax-year inputs and manager
   paperwork all belong to one property; users, categories, receipt rules and import profiles are shared.
 Picking a property:
@@ -438,6 +443,91 @@ export function buildMcpServer(actor: Actor) {
       annotations: ro,
     },
     wrap(({ year, property }) => reports.taxReport(db, year, property)),
+  );
+
+  server.registerTool(
+    "get_state_tax",
+    {
+      description:
+        "Quarterly state sales tax for one property. With year only: the four quarters. With quarter too: that " +
+        "quarter. Each has the gross to file (owner payouts of non-Airbnb, non-cancelled reservations by check-in " +
+        "date, from saved manager statements; listed in reservations), taxes_collected (cross-check only), the due " +
+        "date, status (paid | open | overdue | in_progress), warnings (e.g. a month without a saved statement, so " +
+        "the gross is incomplete), the payment if recorded, the Location ID, and candidates (Taxes expenses that " +
+        "could be linked as the payment).",
+      inputSchema: { year: z.number().int(), quarter: z.number().int().min(1).max(4).optional(), property: one },
+      annotations: ro,
+    },
+    wrap(({ year, quarter, property }) =>
+      quarter
+        ? stateTax.stateTaxQuarter(db, { property, year, quarter })
+        : stateTax.stateTaxYear(db, { property, year }),
+    ),
+  );
+
+  server.registerTool(
+    "mark_state_tax_paid",
+    {
+      description:
+        "Record a quarter's state tax return as paid. Creates the ledger expense (category Taxes, no subcategory, " +
+        "direct, negative amount) and links it. If the payment is already in the ledger, use link_state_tax_expense " +
+        "instead. Sending the same payment twice is safe; a different payment for a paid quarter is refused until " +
+        "clear_state_tax_paid.",
+      inputSchema: {
+        property: one,
+        year: z.number().int(),
+        quarter: z.number().int().min(1).max(4),
+        paid_date: z.string().describe("YYYY-MM-DD"),
+        amount_paid: z.number().positive().describe("Dollars paid (positive)"),
+        gross_filed: z.number().min(0).optional().describe("Gross entered on the return; default: the computed gross"),
+        confirmation: z.string().optional().describe("Confirmation number"),
+      },
+    },
+    wrap((args) => stateTax.markStateTaxPaid(db, actor, args)),
+  );
+
+  server.registerTool(
+    "link_state_tax_expense",
+    {
+      description:
+        "Mark a quarter paid by linking an expense already in the ledger (see candidates from get_state_tax), " +
+        "instead of creating a new one. The paid date and amount default to the expense's.",
+      inputSchema: {
+        property: one,
+        year: z.number().int(),
+        quarter: z.number().int().min(1).max(4),
+        transaction_id: z.number().int(),
+        gross_filed: z.number().min(0).optional(),
+        confirmation: z.string().optional(),
+      },
+    },
+    wrap((args) => stateTax.markStateTaxPaid(db, actor, args)),
+  );
+
+  server.registerTool(
+    "clear_state_tax_paid",
+    {
+      description:
+        "Undo marking a quarter paid. The linked expense stays in the ledger unless trash_expense=true (moves it to " +
+        "the trash, restorable). Only with the user's OK.",
+      inputSchema: {
+        property: one,
+        year: z.number().int(),
+        quarter: z.number().int().min(1).max(4),
+        trash_expense: z.boolean().optional(),
+      },
+    },
+    wrap((args) => stateTax.clearStateTaxPaid(db, actor, args)),
+  );
+
+  server.registerTool(
+    "set_state_tax_location_id",
+    {
+      description:
+        "Set the property's state sales-tax Location ID (shown on the quarter report; turns on To do reminders).",
+      inputSchema: { property: one, location_id: z.string() },
+    },
+    wrap((args) => stateTax.setLocationId(db, actor, args)),
   );
 
   server.registerTool(

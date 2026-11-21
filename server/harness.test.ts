@@ -89,6 +89,36 @@ describe("test harness data", () => {
     expect(sampleIcs(second, "airbnb")).toContain("SUMMARY:Reserved");
   });
 
+  it("has manager statements for a paid and an unpaid state tax quarter, with a direct booking across them", () => {
+    const data = generate(today);
+    expect(data.stateTax.paid).toEqual({ year: 2026, quarter: 2 });
+    expect(data.stateTax.unpaid).toEqual({ year: 2026, quarter: 3 }); // due Oct 20: overdue on Nov 16
+    expect(data.statements.map((s) => s.month)).toEqual([
+      "2026-04",
+      "2026-05",
+      "2026-06",
+      "2026-07",
+      "2026-08",
+      "2026-09",
+      "2026-10",
+    ]);
+    // checks in Jun 29 (Q2), out Jul 2: on July's statement
+    expect(data.directStays).toEqual([{ start: "2026-06-29", end: "2026-07-02", payout: 735 }]);
+    const july = data.statements.find((s) => s.month === "2026-07")!.csv;
+    expect(july).toContain("Booking Engine,2026-06-29,2026-07-02");
+    for (const ch of ["Airbnb", "VRBO", "Booking Engine"])
+      expect(data.statements.some((s) => s.csv.includes(`,${ch},`))).toBe(true);
+    // no stay overlaps the direct booking, and occupancy counts its nights in June (2) and July (1)
+    expect(data.stays.some((s) => s.start < "2026-07-02" && s.end > "2026-06-29")).toBe(false);
+    const nights = (month: string) =>
+      data.stays
+        .filter((s) => s.start.startsWith(month))
+        .reduce((n, s) => n + (Date.parse(s.end) - Date.parse(s.start)) / 86_400_000, 0);
+    expect(data.occupancy.find((o) => o.month === "2026-06")!.nights_booked).toBe(nights("2026-06") + 2);
+    expect(data.occupancy.find((o) => o.month === "2026-07")!.nights_booked).toBe(nights("2026-07") + 1);
+    expect(data.rows.some((r) => r.subcategory === "Direct booking" && r.amount === 735)).toBe(true);
+  });
+
   it("gives each worktree a stable port", () => {
     const p = harnessPort();
     expect(p).toBe(harnessPort());

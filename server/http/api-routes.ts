@@ -21,6 +21,7 @@ import * as uploads from "../services/uploads.ts";
 import * as library from "../services/files.ts";
 import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
+import * as stateTax from "../services/state-tax.ts";
 import { transactionsCsv } from "../services/csv.ts";
 import * as csvImport from "../services/csv-import.ts";
 import { listAudit } from "../services/audit.ts";
@@ -418,6 +419,38 @@ api.get("/tax-years/:year", (c) => {
 api.put("/tax-years/:year", async (c) =>
   c.json(rental.setTaxYear(getDb(), actorOf(c), { ...(await body(c)), year: Number(c.req.param("year")) })),
 );
+
+// ---------------- quarterly state sales tax ----------------
+
+const quarterParams = (c: Context) => ({ year: Number(c.req.param("year")), quarter: Number(c.req.param("quarter")) });
+/** The year's four quarters for one property: gross from saved manager statements, due date, status, payment. */
+api.get("/state-tax", (c) =>
+  c.json(stateTax.stateTaxYear(getDb(), { property: queryProperty(c), year: queryYear(c) })),
+);
+api.get("/state-tax/:year/:quarter", (c) =>
+  c.json(stateTax.stateTaxQuarter(getDb(), { property: queryProperty(c), ...quarterParams(c) })),
+);
+/** Mark paid: {paid_date, amount_paid, gross_filed?, confirmation?, upload_ids?, transaction_id?, property_id}. */
+api.post("/state-tax/:year/:quarter/paid", async (c) =>
+  c.json(stateTax.markStateTaxPaid(getDb(), actorOf(c), { ...(await body(c)), ...quarterParams(c) })),
+);
+/** Link an existing Taxes expense as the payment: {transaction_id, confirmation?, gross_filed?, property_id}. */
+api.post("/state-tax/:year/:quarter/link", async (c) => {
+  const b = await body(c);
+  if (b?.transaction_id == null) throw badRequest("transaction_id is required");
+  return c.json(stateTax.markStateTaxPaid(getDb(), actorOf(c), { ...b, ...quarterParams(c) }));
+});
+/** Clear "paid". The linked expense stays in the ledger unless ?trash_expense=true. */
+api.delete("/state-tax/:year/:quarter/paid", (c) =>
+  c.json(
+    stateTax.clearStateTaxPaid(getDb(), actorOf(c), {
+      property: queryProperty(c),
+      ...quarterParams(c),
+      trash_expense: c.req.query("trash_expense") === "true",
+    }),
+  ),
+);
+api.put("/state-tax/location", async (c) => c.json(stateTax.setLocationId(getDb(), actorOf(c), await body(c))));
 
 // ---------------- reports & exports ----------------
 

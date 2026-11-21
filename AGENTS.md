@@ -138,6 +138,20 @@ release. Add a tool name to select part of the graph. For example, run
   `owner_stay_dismissals` (exact start/end). The confident items (strong blocks, and fully covered months that
   differ, this year and last) are To do items via `occupancyAttention` and count in the badge; the Occupancy page
   only links to them and keeps the less certain blocks behind "Pick from blocked calendar dates".
+- Quarterly state sales tax (`server/services/state-tax.ts`, State tax page `/p/<id>/state-tax`): the app never
+  computes tax; the return takes only the gross = owner `payout` of every reservation whose channel doesn't match
+  /airbnb/i (`isAirbnb`) and isn't cancelled, by CHECK-IN date (Mar 31 → Apr 2 is Q1), read from ALL saved statements
+  through `savedReservations` (deduped by reservation id, latest statement wins; also used by `managerContext` and the
+  calendar), so a stay on the next month's statement still counts. Sums in cents. Ended months of the quarter without
+  a readable statement are warnings; a missing next month is a note; counted rows with no channel warn. Due date =
+  the 20th after the quarter (Q4 → Jan 20 next year), always derived, never stored. Status: a `state_tax_filings`
+  row = paid, else open / overdue (derived) / in_progress. Mark paid creates the expense in the same `tx()` (category
+  Taxes, subcategory "", allocation direct, negative) or links an existing one (`transaction_id`, unique per filing);
+  the confirmation file goes through `upload_ids` onto that expense. An identical replay returns the filing, a
+  different payment for a paid quarter is a 409. Clearing keeps the expense unless `trash_expense` (soft delete);
+  a trashed or changed linked expense shows as `expense_warning`. To do reminders (due within 14 days or overdue)
+  only for properties with a Location ID (`properties.state_tax_location_id`) or a filing, back to the first saved
+  statement/filing and at most 4 quarters. Summary.txt gets a line per quarter.
 - Fetch user-supplied URLs (calendar feeds) only through `safeDownload` in `server/services/safe-download.ts`: it
   refuses private/loopback addresses at connect time and on every redirect (`CALENDAR_ALLOW_PRIVATE_NETWORK` opts out).
 - Logging: use `log` from `server/telemetry.ts` (pino), not `console.*` (the CLI's human output is the exception).
@@ -167,7 +181,9 @@ entry) and a smaller Pine Ridge Cabin (2 years, its own calendar and one flagged
 - `scripts/harness info` prints the URL, a write and a read API key (`Authorization: Bearer …`), an admin session
   cookie for curl, `data/sample-bank-export.csv` for trying CSV import, `data/sample-airbnb.ics` (one new
   reservation) for trying "Import .ics file" on the Calendar page, and `data/sample-airbnb-reservations.csv` for
-  "Import reservations CSV" (Settings → property). Like the real export, Harbor View's Airbnb feed only has the last
+  "Import reservations CSV" (Settings → property). Harbor View also has saved owner statements for the last two ended
+  quarters (plus the month after), a direct booking across their boundary, the earlier quarter paid and the later one
+  unpaid (a To do "State tax" item once overdue); "No invoice saved" is marked explained. Like the real export, Harbor View's Airbnb feed only has the last
   60 days of past stays, so older Airbnb stays show only as VRBO blocks until that CSV is imported.
 - Reset only deletes a data folder the harness created (it has `harness.json`), never a real ledger.
 - Run Node commands through `vp env exec --node 24 …` if `node -p process.features.typescript` prints `false`.
