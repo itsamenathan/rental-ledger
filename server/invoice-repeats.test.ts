@@ -315,6 +315,24 @@ describe("explained, 'this recurs' and the To do count", () => {
     expect(rep.listRepeatDismissals(db)).toEqual([]);
   });
 
+  it("lists a month whose only open item is a repeat on To do, until it's marked recurring", async () => {
+    const { db, actor, save, review } = setup();
+    for (const [m, n, issued] of [
+      ["2026-08", "1980", "September 5, 2026"],
+      ["2026-09", "2061", "October 6, 2026"],
+    ] as const) {
+      await save(m, invoice(n, issued, ["Repairs 1 $80.00 $80.00\nFixed porch gate"]));
+      ledger.createTransaction(db, null, { date: `${m}-30`, amount: -80, category: "Maintenance" });
+      for (const c of review(m).checks.filter((x) => x.key && /No owner statement/.test(x.text)))
+        ms.acknowledgeCheck(db, actor, { month: m, key: c.key! });
+    }
+    const before = todoSummary(db);
+    expect(before.manager_months).toEqual([{ property_id: 1, month: "2026-09", to_add: 0, to_check: 1 }]);
+    rep.dismissRepeat(db, actor, { phrase: "Fixed porch gate" });
+    expect(todoSummary(db).manager_months).toEqual([]);
+    expect(todoSummary(db).total).toBe(before.total - 1);
+  });
+
   it("keeps a 'this recurs' phrase to its own property", async () => {
     const { db, actor, save, repeats } = setup();
     const harbor = ledger.createProperty(db, null, { name: "Harbor" });

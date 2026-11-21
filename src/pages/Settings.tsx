@@ -715,6 +715,7 @@ const VERB: Record<string, string> = {
 const NOUN: Record<string, string> = {
   transaction: "transaction",
   recurring_dismissal: "recurring-bill mark",
+  invoice_repeat_dismissal: "“this recurs” invoice phrase",
   preparer_package: "preparer package",
   api_key: "API key",
   tax_year: "tax-year inputs",
