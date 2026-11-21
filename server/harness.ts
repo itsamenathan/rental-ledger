@@ -99,6 +99,8 @@ export function generate(today: Date) {
   for (let y = ty - 2; y <= ty; y++) for (let m = 1; m <= 12; m++) if (y < ty || m <= tm) months.push([y, m]);
   const prev = months.at(-2)!; // last complete month
   const prev2 = months.at(-3)!;
+  /** the management fee booked each month, which the manager's invoice bills */
+  const managementFee = new Map<string, number>();
 
   for (const [y, m] of months) {
     const last = daysIn(y, m);
@@ -165,6 +167,7 @@ export function generate(today: Date) {
         check_ins: stays,
       });
 
+    managementFee.set(ymOf(y, m), Math.round(income * 0.2 * 100) / 100);
     add(last, {
       amount: -Math.round(income * 0.2 * 100) / 100,
       category: "Management Fee",
@@ -290,6 +293,84 @@ export function generate(today: Date) {
     },
   );
 
+  // The manager's invoices for the last three complete months (saved as paperwork by reset()). Minut and the hot tub
+  // are on all three, so they count as recurring; last month's invoice bills a door latch, light bulbs and a $32 sheet
+  // again from the month before (three repeat warnings), and its Deep Clean "was scheduled" in a month that didn't
+  // bill one (no warning). The two older invoices' lines are already in the ledger; last month's wait to be added.
+  const managerInvoices: { month: string; number: string; text: string }[] = [];
+  const monthName = (n: number) =>
+    new Date(Date.UTC(2000, n - 1, 1)).toLocaleString("en-US", { month: "long", timeZone: "UTC" });
+  const money = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  type InvoiceRow = [item: string, amount: number, detail: string[], category: string];
+  const extraLines: InvoiceRow[][] = [
+    [["Repairs and Maintenance", 185, ["Replaced smoke detector batteries", "Tightened deck railing"], "Maintenance"]],
+    [
+      ["Repairs and Maintenance", 240, ["Installed washing machine door latch", "Light bulbs"], "Maintenance"],
+      ["Linens", 62, ["Queen flat sheet $32", "Bath towels $30"], "Cleaning"],
+    ],
+    [
+      ["Deep Clean", 540, [`Was scheduled in ${monthName(prev2[1])}`], "Cleaning"],
+      [
+        "Repairs and Maintenance",
+        310,
+        ["Installed washing machine door latch", "Light bulbs", "Re-lit upstairs fireplace"],
+        "Maintenance",
+      ],
+      ["Linens", 56, ["Queen flat sheet $32", "(2) Pillow protectors $24"], "Cleaning"],
+    ],
+  ];
+  months.slice(-4, -1).forEach(([y, m], k) => {
+    const month = ymOf(y, m);
+    const [iy, im] = m === 12 ? [y + 1, 1] : [y, m + 1];
+    const lines: InvoiceRow[] = [
+      ["Management", managementFee.get(month)!, [], "Management Fee"],
+      [
+        "Minut",
+        15,
+        ["Monitor for noise, parties, excessive occupancy, hot or freezing temps, and humidity."],
+        "Services",
+      ],
+      [
+        "Hot tub service (monthly)",
+        400,
+        ["includes chemicals, drains/refills as needed, balancing at each checkout"],
+        "Cleaning",
+      ],
+      ...extraLines[k]!,
+    ];
+    const number = String(3101 + k);
+    const total = lines.reduce((sum, l) => sum + Math.round(l[1] * 100), 0) / 100;
+    managerInvoices.push({
+      month,
+      number,
+      text: [
+        "From",
+        "Seabreeze Stays",
+        "To",
+        "Harbor View Cottage owner",
+        `Invoice #${number}`,
+        `Issued ${monthName(im)} 6, ${iy}`,
+        "ITEM QUANTITY PRICE TOTAL",
+        ...lines.flatMap(([item, amount, detail]) => [`${item} 1 ${money(amount)} ${money(amount)}`, ...detail]),
+        "Subtotal:",
+        `Total: ${money(total)}`,
+      ].join("\n"),
+    });
+    // The two older invoices are already recorded (the management fee is booked above); the invoice is the receipt.
+    if (k < 2)
+      for (const [item, amount, detail, category] of lines.slice(1))
+        rows.push({
+          account: "Checking",
+          date: `${month}-${pad(daysIn(y, m))}`,
+          amount: -amount,
+          category,
+          subcategory: "Seabreeze Stays",
+          vendor: "Seabreeze Stays",
+          description: detail.join("; ") || item,
+          receipt: true,
+        });
+  });
+
   // Upcoming reservations for the next three months (own seed, so the history above doesn't change), with one
   // owner block next month.
   const ahead = rng(1116);
@@ -314,6 +395,7 @@ export function generate(today: Date) {
     stays: stayList,
     ownerStays,
     holds,
+    managerInvoices,
     years: [ty - 2, ty - 1, ty],
     /** vendors that never need a receipt (services/receipts.ts); Stripe is left off to try adding it */
     receiptExclusions: [] as string[],
@@ -640,6 +722,32 @@ async function reset() {
       contentType: "text/plain",
       data: new TextEncoder().encode(text),
     });
+  }
+
+  // The manager's invoices, saved as paperwork. The sample data has no owner statements, so that warning is marked
+  // as explained. So are the older months' other warnings (the second month repeats Minut and the hot tub, which only
+  // count as recurring from the third), leaving last month with its lines to add and the repeat warnings.
+  const managerDocs = await import("./services/manager-documents.ts");
+  const managerStatement = await import("./services/manager-statement.ts");
+  for (const [k, inv] of data.managerInvoices.entries()) {
+    await managerDocs.saveDocuments(
+      db,
+      admin,
+      [{ filename: `Invoice ${inv.number}.txt`, contentType: "text/plain", data: new TextEncoder().encode(inv.text) }],
+      { property: property.id, month: inv.month },
+    );
+    const last = k === data.managerInvoices.length - 1;
+    const review = managerStatement.previewManagerMonth(db, { property_id: property.id, month: inv.month });
+    for (const c of review.checks.filter((x) => x.level === "warn" && x.key)) {
+      const noStatement = /^No owner statement saved/.test(c.text);
+      if (last && !noStatement) continue;
+      managerStatement.acknowledgeCheck(db, admin, {
+        property_id: property.id,
+        month: inv.month,
+        key: c.key!,
+        note: noStatement ? "The sample manager sends invoices only" : "Monthly service",
+      });
+    }
   }
 
   // A small bank export for trying CSV import: two new rows and one that's already in the ledger.
