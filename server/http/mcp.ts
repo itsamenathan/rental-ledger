@@ -20,6 +20,7 @@ import * as files from "../services/attachments.ts";
 import * as library from "../services/files.ts";
 import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
+import * as repeats from "../services/invoice-repeats.ts";
 import * as csvImport from "../services/csv-import.ts";
 import { listAudit } from "../services/audit.ts";
 import type { Env } from "./middleware.ts";
@@ -60,6 +61,9 @@ Guidance for agents:
   review_note explaining the doubt. Never guess silently.
 - Recurring bills are learned from history (get_recurring). When the user says a flagged gap is fine or a
   series has ended, record that with dismiss_recurring so it stops being reported.
+- A manager-month review warns when an invoice item was already billed on an earlier invoice (checks with a
+  \`phrase\`). If the user says it legitimately recurs (light bulbs), record it with dismiss_invoice_repeat; if the
+  manager explained a one-off, use explain_manager_check instead.
 - Prefer updating an existing transaction over deleting and re-creating it. All writes are audit-logged.
 `.trim();
 
@@ -991,6 +995,36 @@ export function buildMcpServer(actor: Actor) {
     wrap(({ undo, ...args }) =>
       undo ? manager.unacknowledgeCheck(db, actor, args) : manager.acknowledgeCheck(db, actor, args),
     ),
+  );
+
+  server.registerTool(
+    "list_invoice_repeat_dismissals",
+    {
+      description:
+        'Invoice phrases the user said legitimately recur ("this recurs"), so they are never flagged as billed again on this property\'s manager invoices.',
+      inputSchema: { property: one },
+      annotations: ro,
+    },
+    wrap(({ property }) => repeats.listRepeatDismissals(db, { property })),
+  );
+
+  server.registerTool(
+    "dismiss_invoice_repeat",
+    {
+      description:
+        '"This recurs": stop flagging an invoice phrase (the `phrase` of a repeat warning from preview_manager_month) as billed again, for this property only. Ask the user first.',
+      inputSchema: { phrase: z.string(), note: z.string().optional(), property: one },
+    },
+    wrap((args) => repeats.dismissRepeat(db, actor, args)),
+  );
+
+  server.registerTool(
+    "remove_invoice_repeat_dismissal",
+    {
+      description: "Flag a remembered invoice phrase as a repeat again (id from list_invoice_repeat_dismissals).",
+      inputSchema: { id: z.number().int() },
+    },
+    wrap(({ id }) => repeats.undismissRepeat(db, actor, id)),
   );
 
   server.registerTool(

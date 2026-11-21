@@ -21,6 +21,7 @@ import * as uploads from "../services/uploads.ts";
 import * as library from "../services/files.ts";
 import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
+import * as repeats from "../services/invoice-repeats.ts";
 import { transactionsCsv } from "../services/csv.ts";
 import * as csvImport from "../services/csv-import.ts";
 import { listAudit } from "../services/audit.ts";
@@ -277,6 +278,14 @@ api.delete("/manager/months/:month/explained", async (c) =>
     }),
   ),
 );
+/** "This recurs": invoice phrases that are never flagged as billed again ({phrase, note}). */
+api.get("/manager/repeat-dismissals", (c) =>
+  c.json(repeats.listRepeatDismissals(getDb(), { property: queryProperty(c) })),
+);
+api.post("/manager/repeat-dismissals", async (c) =>
+  c.json(repeats.dismissRepeat(getDb(), actorOf(c), { ...(await body(c)), property_id: queryProperty(c) }), 201),
+);
+api.delete("/manager/repeat-dismissals/:id", (c) => c.json(repeats.undismissRepeat(getDb(), actorOf(c), id(c))));
 /** Upload statements / invoices (multipart, any number of "file" fields). Kind and month are detected. */
 api.post("/manager/documents", async (c) => {
   const form = await c.req.formData();

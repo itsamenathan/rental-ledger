@@ -13,6 +13,7 @@ import { tx, type DB } from "../db.ts";
 import { categories, managerAcknowledgements, managerDocuments, transactions } from "../db/schema.ts";
 import { audit, badRequest, cents, requireWrite, type Actor } from "../context.ts";
 import { parseCsv } from "./csv.ts";
+import { dismissedPhrases, findInvoiceRepeats } from "./invoice-repeats.ts";
 import { createTransaction, listCategories, resolvePropertyId, updateTransaction, type Category } from "./ledger.ts";
 
 // ======================= small helpers =======================
@@ -317,7 +318,9 @@ export function parseInvoiceText(text: string): Invoice {
     } else if (current) current.details.push(line);
   }
   if (!items.length)
-    throw badRequest("Couldn't find any invoice line items (expected rows like 'Cleaning 1 $165.00 $165.00')");
+    throw badRequest(
+      "Couldn't find any invoice line items (expected rows like 'Cleaning 1 $165.00 $165.00'). If this is the PDF from the manager portal's Download PDF button, open the invoice in your browser instead, print it to PDF (Save as PDF) and upload that",
+    );
 
   const parsedLines: InvoiceLine[] = items.map((i) => {
     if (Math.abs(i.quantity * i.unit - i.total) > 0.005)
@@ -410,16 +413,28 @@ function docTexts(db: DB, propertyId: number) {
 
 /** Parse every saved statement once (bad ones are skipped: they show their error when their month is opened). */
 export function savedStatements(db: DB, propertyId: number) {
-  const out: { docId: number; month: string; statement: ParsedStatement }[] = [];
+  return parseSaved(db, propertyId).statements;
+}
+
+export interface SavedInvoice {
+  docId: number;
+  month: string;
+  invoice: Invoice;
+}
+
+function parseSaved(db: DB, propertyId: number) {
+  const statements: { docId: number; month: string; statement: ParsedStatement }[] = [];
+  const invoices: SavedInvoice[] = [];
   for (const d of docTexts(db, propertyId)) {
-    if (d.kind !== "statement") continue;
     try {
-      out.push({ docId: d.id, month: d.month, statement: parseStatementCsv(d.text) });
+      if (d.kind === "statement")
+        statements.push({ docId: d.id, month: d.month, statement: parseStatementCsv(d.text) });
+      else invoices.push({ docId: d.id, month: d.month, invoice: parseInvoiceText(d.text) });
     } catch {
       // ignored here
     }
   }
-  return out;
+  return { statements, invoices };
 }
 
 // ======================= analysis =======================
@@ -535,6 +550,8 @@ export interface Check {
   explained?: { note: string; at: string };
   /** "income" / "lines" for the payout and invoice-line coverage checks (the page's headline already says this). */
   code?: "income" | "lines";
+  /** An invoice item billed again (services/invoice-repeats.ts): its normalized phrase, for "This recurs". */
+  phrase?: string;
 }
 
 const norm = (s: string) =>
@@ -573,6 +590,8 @@ interface Analysis {
   checks: Check[];
   warnings: string[];
   incomeCategory: Category | null;
+  /** "This recurs" phrases that hid a repeat warning this month. */
+  repeatDismissals: { id: number; phrase: string }[];
 }
 
 function defaultManagerSubcategory(db: DB, propertyId: number): string {
@@ -760,16 +779,18 @@ function claimDeposits(db: DB, propertyId: number, reservations: Reservation[]):
 export interface ManagerContext {
   propertyId: number;
   statements: { docId: number; month: string; statement: ParsedStatement }[];
+  /** Every saved invoice, parsed once, for the cross-month repeat check. */
+  invoices: SavedInvoice[];
   claims: Claims;
 }
 
 export function managerContext(db: DB, propertyId: number, extra?: ParsedStatement): ManagerContext {
-  const statements = savedStatements(db, propertyId);
+  const { statements, invoices } = parseSaved(db, propertyId);
   const byId = new Map<string, Reservation>();
   for (const s of statements) for (const r of s.statement.reservations) byId.set(r.reservation_id, r);
   // A statement passed in directly wins over a saved copy of the same reservations.
   for (const r of extra?.reservations ?? []) byId.set(r.reservation_id, r);
-  return { propertyId, statements, claims: claimDeposits(db, propertyId, [...byId.values()]) };
+  return { propertyId, statements, invoices, claims: claimDeposits(db, propertyId, [...byId.values()]) };
 }
 
 function analyze(db: DB, input: PreviewInput, ctx?: ManagerContext): Analysis {
@@ -917,6 +938,7 @@ function analyze(db: DB, input: PreviewInput, ctx?: ManagerContext): Analysis {
 
   // ---------- invoices ----------
   const lines: LineView[] = [];
+  let repeatDismissals: Analysis["repeatDismissals"] = [];
   const date = lastDayOfMonth(month);
   const invoiceTotal = invoices.reduce((sum, inv) => sum + inv.lines.reduce((s, l) => s + cents(l.amount), 0), 0);
   if (invoices.length) {
@@ -1007,6 +1029,16 @@ function analyze(db: DB, input: PreviewInput, ctx?: ManagerContext): Analysis {
             },
       );
     }
+    // Items billed again: compared with the property's earlier invoices (never later ones).
+    const dismissed = dismissedPhrases(db, propertyId);
+    const repeats = findInvoiceRepeats({
+      month,
+      current: invoices.map((inv) => ({ ...inv, month })),
+      saved: context.invoices.map((s) => ({ ...s.invoice, month: s.month, documentId: s.docId })),
+      dismissed: new Set(dismissed.keys()),
+    });
+    for (const w of repeats.warnings) checks.push({ level: "warn", text: w.text, phrase: w.phrase });
+    repeatDismissals = repeats.suppressed.map((phrase) => ({ id: dismissed.get(phrase)!, phrase }));
     for (const inv of invoices)
       if (inv.paid)
         checks.push({
@@ -1100,6 +1132,7 @@ function analyze(db: DB, input: PreviewInput, ctx?: ManagerContext): Analysis {
     checks,
     warnings,
     incomeCategory,
+    repeatDismissals,
   };
 }
 
@@ -1137,6 +1170,8 @@ function view(db: DB, a: Analysis) {
     unlisted_income: a.unlisted,
     lines: a.lines,
     checks: a.checks,
+    /** "This recurs" phrases that kept a repeat from being flagged this month (DELETE to flag it again). */
+    repeat_dismissals: a.repeatDismissals,
     categories: listCategories(db, false)
       .filter((c) => c.kind === "expense")
       .map((c) => ({ id: c.id, name: c.name })),
