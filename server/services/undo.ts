@@ -11,6 +11,7 @@ import { audit, AppError, badRequest, notFound, requireWrite, type Actor } from 
 import * as ledger from "./ledger.ts";
 import { deleteOccupancy, upsertOccupancy } from "./rental.ts";
 import { dismiss, undismiss } from "./recurring.ts";
+import { dismissRepeat, listRepeatDismissals, undismissRepeat } from "./invoice-repeats.ts";
 import { addReceiptExclusion, listReceiptExclusions, removeReceiptExclusion } from "./receipts.ts";
 import { setSubcategoryReceiptRule } from "./categories.ts";
 import { addOwnerStay, deleteOwnerStay } from "./owner-stays.ts";
@@ -283,6 +284,23 @@ function plan(r: Row): Plan | null {
                 kind: c.kind ?? null,
                 note: c.note ?? "",
               }),
+          }
+        : null;
+    case "invoice_repeat_dismissal:create":
+      return id && typeof c.property_id === "number" && typeof c.phrase === "string"
+        ? {
+            describe: `Flag "${c.phrase}" on invoices again`,
+            run: (db, a) => {
+              if (listRepeatDismissals(db, { property: c.property_id as number }).some((x) => x.id === id))
+                undismissRepeat(db, a, id);
+            },
+          }
+        : null;
+    case "invoice_repeat_dismissal:delete":
+      return typeof c.phrase === "string"
+        ? {
+            describe: `Stop flagging "${c.phrase}" on invoices again`,
+            run: (db, a) => dismissRepeat(db, a, { property_id: c.property_id, phrase: c.phrase, note: c.note ?? "" }),
           }
         : null;
     case "owner_stay_dismissal:create":

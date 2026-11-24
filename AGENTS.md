@@ -62,6 +62,16 @@ release. Add a tool name to select part of the graph. For example, run
   hard-coded (CSV columns match by suffix, the subcategory comes from history).
 - Manager warnings can be "marked as explained" (`manager_acknowledgements`, keyed by a hash of the warning text, so
   changed amounts ask again). Months with entries to add or unexplained warnings count on the To do page.
+- Invoice repeats (`server/services/invoice-repeats.ts`): each month's invoice lines are compared with the property's
+  earlier saved invoices (parsed once in `managerContext().invoices`) at the detail level: `description` split on
+  "; " into sub-items, normalized by `normalizePhrase` (months, years, dates, punctuation, a leading "(2)"/"2 x"
+  stripped; a plain leading number kept). Amounts count only where a sub-item carries its own price; a line with no
+  comparable detail is compared as item + amount. Recurring = the phrase is on 3+ months' invoices counting only
+  months up to the one reviewed, never later ones (a later invoice must never change an earlier month's warnings).
+  Same-month invoices are compared in (issued, saved) order; an invoice passed in directly is never compared with its
+  saved copy (same number). Waiver/commission lines are skipped (reconciled against the statement). "Was scheduled
+  in August" only warns if August's invoice billed the same item. Warnings are checks with `phrase`; "This recurs" is
+  `invoice_repeat_dismissals` (per property, by normalized phrase), "Explained" is the usual acknowledgement.
 - Stored files go through `server/services/storage.ts`: identical bytes share one file across `attachments`,
   `manager_documents` and `pending_uploads`; delete rows first, then `releaseFile`. Backups include every key from all
   three tables. `storeBytes(db, data, ext, save)` takes a synchronous `save(key)`
@@ -155,7 +165,7 @@ release. Add a tool name to select part of the graph. For example, run
 
 Each worktree gets its own throwaway `./data` with fictional data and known logins: Harbor View Cottage (about 3 years
 of transactions, receipts, occupancy, and To do items: a missing bill, a duplicate, a flagged and an unallocated
-entry) and a smaller Pine Ridge Cabin (2 years, its own calendar and one flagged entry), so the property switcher and
+entry, plus last month's manager invoice with lines to add and three "billed again" warnings) and a smaller Pine Ridge Cabin (2 years, its own calendar and one flagged entry), so the property switcher and
 `/p/all` have something to show. T3 Code runs
 `scripts/harness setup` when it creates a worktree.
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import { generate, harnessPort, sampleIcs, sampleReservationsCsv } from "./harness.ts";
 import { parseReservationsCsv } from "./services/calendar.ts";
+import { findInvoiceRepeats } from "./services/invoice-repeats.ts";
+import { parseInvoiceText } from "./services/manager-statement.ts";
 
 describe("test harness data", () => {
   const today = new Date("2026-11-16T12:00:00Z");
@@ -22,6 +24,24 @@ describe("test harness data", () => {
     expect(rows.some((r) => r.needs_review)).toBe(true);
     expect(rows.some((r) => r.allocation === null)).toBe(true);
     expect(rows.some((r) => r.trash)).toBe(true);
+  });
+
+  it("includes manager invoices whose last month bills items again", () => {
+    const { managerInvoices } = generate(today);
+    expect(managerInvoices.map((i) => i.month)).toEqual(["2026-08", "2026-09", "2026-10"]);
+    const parsed = managerInvoices.map((i) => ({ ...parseInvoiceText(i.text), month: i.month, documentId: null }));
+    expect(parsed.every((p) => p.warnings?.length === 0)).toBe(true);
+    const { warnings } = findInvoiceRepeats({
+      month: "2026-10",
+      current: [parsed[2]!],
+      saved: parsed,
+      dismissed: new Set(),
+    });
+    expect(warnings.map((w) => w.phrase)).toEqual([
+      "installed washing machine door latch",
+      "light bulbs",
+      "queen flat sheet",
+    ]);
   });
 
   it("includes receipt-rule scenarios", () => {

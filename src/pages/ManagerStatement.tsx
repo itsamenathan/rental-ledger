@@ -65,6 +65,8 @@ interface Check {
   code?: "income" | "lines";
   key?: string;
   explained?: { note: string; at: string };
+  /** An invoice item billed again: the phrase "This recurs" remembers. */
+  phrase?: string;
 }
 interface Review {
   month: string;
@@ -75,6 +77,7 @@ interface Review {
   unlisted_income: { id: number; date: string; amount: number }[];
   lines: Line[];
   checks: Check[];
+  repeat_dismissals: { id: number; phrase: string }[];
   categories: { id: number; name: string }[];
 }
 interface Applied {
@@ -327,6 +330,17 @@ function MonthView({ month }: { month: string }) {
       toast({ text: (e as Error).message, kind: "error" });
     }
   };
+  /** "This recurs" (phrase) or flag it again (id). */
+  const recurs = async (target: { phrase: string } | { id: number }) => {
+    try {
+      if ("id" in target) await api(`manager/repeat-dismissals/${target.id}`, { method: "DELETE" });
+      else await api(`manager/repeat-dismissals?${property.qs}`, { method: "POST", json: target });
+      reload();
+      window.dispatchEvent(new Event("todo:changed"));
+    } catch (e) {
+      toast({ text: (e as Error).message, kind: "error" });
+    }
+  };
   /** A badge that opens the ledger entry it refers to. */
   const txLink = (id: number | undefined, tone: string, text: string, key?: number) =>
     id ? (
@@ -424,6 +438,7 @@ function MonthView({ month }: { month: string }) {
   const missingCount = income.length - recorded.length + (lines.length - linesDone.length);
   const needsLook = (p?.checks ?? []).filter((c) => c.level === "warn" && !c.code);
   const explained = (p?.checks ?? []).filter((c) => c.explained);
+  const recurring = p?.repeat_dismissals ?? [];
   const otherChecks = (p?.checks ?? []).filter((c) => (c.level !== "warn" || c.code) && !c.explained);
   const multiInvoice = (p?.invoices.length ?? 0) > 1;
 
@@ -538,6 +553,15 @@ function MonthView({ month }: { month: string }) {
                         Mark as explained
                       </button>
                     )}
+                    {canWrite && c.phrase && explaining?.key !== c.key && (
+                      <button
+                        className="btn small ghost ms-explain"
+                        title={`Never flag “${c.phrase}” as billed again on this property's invoices`}
+                        onClick={() => void recurs({ phrase: c.phrase! })}
+                      >
+                        This recurs
+                      </button>
+                    )}
                     {explaining?.key === c.key && (
                       <ExplainForm onSave={(note) => void explain(c.key!, note)} onCancel={() => setExplaining(null)} />
                     )}
@@ -547,10 +571,23 @@ function MonthView({ month }: { month: string }) {
             </section>
           )}
 
-          {explained.length > 0 && (
+          {(explained.length > 0 || recurring.length > 0) && (
             <section className="card ms-look">
               <h2>Explained</h2>
               <ul>
+                {recurring.map((r) => (
+                  <li key={`recurs-${r.id}`}>
+                    <span className="muted">“{r.phrase}” was billed again, and you marked it as recurring</span>
+                    <div className="small">
+                      Not flagged on this property's invoices
+                      {canWrite && (
+                        <button className="btn small ghost ms-explain" onClick={() => void recurs({ id: r.id })}>
+                          Flag again
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                ))}
                 {explained.map((c) => (
                   <li key={c.key}>
                     <span className="muted">{c.text}</span>

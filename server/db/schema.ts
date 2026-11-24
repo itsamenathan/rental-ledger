@@ -283,6 +283,25 @@ export const managerAcknowledgements = sqliteTable(
   (t) => [uniqueIndex("manager_acknowledgements_unique").on(t.propertyId, t.month, t.checkKey)],
 );
 
+/**
+ * Invoice phrases the user said legitimately recur ("light bulbs"), per property, so the cross-month repeat check in
+ * services/invoice-repeats.ts stops flagging them. `phrase` is the normalized text (normalizePhrase).
+ */
+export const invoiceRepeatDismissals = sqliteTable(
+  "invoice_repeat_dismissals",
+  {
+    id: integer("id").primaryKey(),
+    propertyId: integer("property_id")
+      .notNull()
+      .references(() => properties.id),
+    phrase: text("phrase").notNull(),
+    note: text("note").notNull().default(""),
+    createdAt: createdAt(),
+    createdBy: integer("created_by").references(() => users.id),
+  },
+  (t) => [uniqueIndex("invoice_repeat_dismissals_unique").on(t.propertyId, t.phrase)],
+);
+
 export const occupancy = sqliteTable(
   "occupancy",
   {
