@@ -70,6 +70,8 @@ export interface Transaction {
   source: string;
   external_id: string | null;
   attachment_count: number;
+  /** Only in lists: an expense that should have a receipt and doesn't. */
+  needs_receipt?: boolean;
   created_at: string;
   created_by: string | null;
   updated_at: string;

@@ -45,8 +45,10 @@ with_https() {
   # Run the server as a child and forward signals to it, so the trap above also fires when only this script is
   # signalled (a plain foreground child would hold the signal until it exited by itself).
   # Job control gives it its own process group, so the whole tree (vp spawns more processes) gets the signal.
+  # stdin is closed for the child: in its own process group it is a background job of the terminal, and vite reading
+  # the terminal for its "press h" shortcuts would get SIGTTIN and stop, leaving this script to exit at once.
   set -m
-  "$@" &
+  "$@" </dev/null &
   child=$!
   trap 'kill -- "-$child" 2>/dev/null' INT TERM HUP
   wait "$child" || true
