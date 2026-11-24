@@ -2,9 +2,10 @@
 # Test harness for agents working in a git worktree. See server/harness.ts.
 #   scripts/harness setup   install dependencies and seed ./data with fictional data + logins
 #   scripts/harness reset   wipe ./data and seed it again (stop the dev server first)
-#   scripts/harness dev     run `vp dev` on this worktree's own port, listening on all interfaces
+#   scripts/harness dev     run `vp dev` on this worktree's own port, listening on all interfaces (+ https via tailscale)
 #   scripts/harness preview build and run the production server on that port (service worker / offline mode)
 #   scripts/harness info    print data/harness.json (logins, API keys, URL)
+#   scripts/harness https [off]  serve the dev/preview server over https on your tailnet (tailscale serve); off removes it
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -15,6 +16,42 @@ command -v vp >/dev/null || { echo "vp (Vite+) not found on PATH" >&2; exit 127;
 node_version="$(tr -d '[:space:]' < .node-version)"
 with_node() { vp env exec --node "$node_version" "$@"; }
 seed() { LOG_LEVEL="${LOG_LEVEL:-warn}" with_node node server/harness.ts "$@"; }
+
+# Not the dev port itself: the server listens on every interface, tailscale's address included, so tailscaled
+# couldn't take it. Port + 10000 is still unique per worktree.
+https_port() { echo $(($(seed port) + 10000)); }
+https_off() { tailscale serve --https="$(https_port)" off >/dev/null 2>&1 || true; }
+# Prints the https URL; fails (with tailscale's message) when it can't serve, e.g. the operator isn't set yet.
+https_on() {
+  command -v tailscale >/dev/null || { echo "tailscale not found on PATH" >&2; return 127; }
+  local port="$1" hp host
+  hp="$(https_port)"
+  tailscale serve --bg --https="$hp" "http://127.0.0.1:$port" >/dev/null || return 1
+  host="$(tailscale status --json | with_node node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).Self.DNSName.replace(/\.$/,"")))')"
+  echo "https://$host:$hp"
+}
+# dev and preview also publish https on the tailnet while they run (HARNESS_HTTPS=0 skips it); never fatal.
+with_https() {
+  local port="$1"
+  shift
+  if [ "${HARNESS_HTTPS:-1}" != "0" ]; then
+    if url="$(https_on "$port")"; then
+      echo "https (tailnet): $url"
+      trap https_off EXIT
+    else
+      echo "No https: tailscale serve failed (run 'sudo tailscale set --operator=\$USER' once; HARNESS_HTTPS=0 hides this)" >&2
+    fi
+  fi
+  # Run the server as a child and forward signals to it, so the trap above also fires when only this script is
+  # signalled (a plain foreground child would hold the signal until it exited by itself).
+  # Job control gives it its own process group, so the whole tree (vp spawns more processes) gets the signal.
+  set -m
+  "$@" &
+  child=$!
+  trap 'kill -- "-$child" 2>/dev/null' INT TERM HUP
+  wait "$child" || true
+  wait "$child" 2>/dev/null
+}
 
 case "${1:-}" in
   setup)
@@ -27,19 +64,27 @@ case "${1:-}" in
   dev)
     [ -f data/harness.json ] || seed reset
     port="$(seed port)"
-    exec vp env exec --node "$node_version" vp dev --host 0.0.0.0 --port "$port" --strictPort
+    with_https "$port" vp env exec --node "$node_version" vp dev --host 0.0.0.0 --port "$port" --strictPort
     ;;
   preview)
     [ -f data/harness.json ] || seed reset
     port="$(seed port)"
     with_node vp build
-    PORT="$port" LOG_LEVEL="${LOG_LEVEL:-warn}" exec vp env exec --node "$node_version" node server/main.ts
+    PORT="$port" LOG_LEVEL="${LOG_LEVEL:-warn}" with_https "$port" vp env exec --node "$node_version" node server/main.ts
+    ;;
+  https)
+    [ -f data/harness.json ] || seed reset
+    if [ "${2:-}" = "off" ]; then
+      https_off
+    else
+      https_on "$(seed port)"
+    fi
     ;;
   info)
     cat data/harness.json
     ;;
   *)
-    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac

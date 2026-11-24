@@ -146,6 +146,8 @@ export default defineConfig({
     include: ["server/**/*.test.ts", "src/**/*.test.ts"],
     environment: "node",
   },
-  server: { port: 5173 },
+  // `.ts.net` lets `tailscale serve` front the dev server with https (see `scripts/harness https`); Vite would
+  // otherwise answer 403 to the tailnet hostname.
+  server: { port: 5173, allowedHosts: [".ts.net"] },
   plugins: lazyPlugins(() => [react(), devApi(), serviceWorker(), precompress()]),
 });
