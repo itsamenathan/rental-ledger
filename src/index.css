@@ -3562,6 +3562,61 @@ table.conflict thead th {
 }
 
 /* ---------- booking calendar ---------- */
+.cal-info-btn {
+  margin-right: auto;
+  flex: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-style: italic;
+  font-family: Georgia, serif;
+  line-height: 1;
+  cursor: pointer;
+}
+.cal-info-btn:hover,
+.cal-info-btn[aria-expanded="true"] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.cal-help {
+  font-size: 0.85rem;
+  color: var(--text-2);
+}
+.cal-help ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+/* month summary: small, above the grid */
+.cal-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.5rem;
+  margin: 0;
+}
+.cal-stats > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.cal-stats dd {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.cal-stats dt {
+  font-size: 0.78rem;
+  color: var(--text-2);
+}
 .cal-nav {
   display: flex;
   align-items: center;
@@ -3773,6 +3828,12 @@ table.conflict thead th {
 .cal-stay-nights {
   margin-left: auto;
   font-weight: 600;
+}
+.cal-stay-form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
 }
 .cal-kv {
   margin: 0 0 1rem;

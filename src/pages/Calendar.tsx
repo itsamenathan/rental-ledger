@@ -6,7 +6,8 @@ import { fmtDate, monthTitle, shiftMonth, thisMonth, today } from "../format.ts"
 import { propertySettingsPath } from "../scope.ts";
 import { useApi, usePersistentState, useSession, useToast, useProperty } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
-import { saveOwnerStay, STAY_KINDS, type StayKind } from "../owner-stays.ts";
+import { KindToggle } from "../components/OwnerStays.tsx";
+import { saveOwnerStay, type StayKind } from "../owner-stays.ts";
 
 type Kind = "reserved" | "blocked";
 
@@ -82,7 +83,8 @@ export default function Calendar() {
     `calendar?from=${shiftMonth(month, -1)}&to=${shiftMonth(month, 1)}&property_id=${propertyId}`,
   );
   const [open, setOpen] = useState<CalEvent | null>(null);
-  const [stayKind, setStayKind] = useState<StayKind | "">("");
+  const [help, setHelp] = useState(false);
+  const [stayKind, setStayKind] = useState<StayKind>("owner");
 
   // A blocked range the owner (or family) actually stayed: it becomes an owner stay (personal days).
   const markOwnerStay = async (e: CalEvent) => {
@@ -91,10 +93,10 @@ export default function Calendar() {
         property_id: propertyId,
         start_date: e.start_date,
         end_date: e.end_date,
-        kind: stayKind || null,
+        kind: stayKind,
       });
       setOpen(null);
-      setStayKind("");
+      setStayKind("owner");
     } catch (err) {
       toast({ text: (err as Error).message, kind: "error" });
     }
@@ -181,14 +183,61 @@ export default function Calendar() {
     <div className="page">
       <header className="page-head">
         <h1>Calendar</h1>
+        <button
+          className="cal-info-btn"
+          onClick={() => setHelp(!help)}
+          aria-expanded={help}
+          aria-controls="cal-help"
+          aria-label="About this calendar"
+          title="About this calendar"
+        >
+          i
+        </button>
         <div className="head-actions"></div>
       </header>
-      <p className="muted">
-        When the house is booked or free, from your Airbnb/VRBO calendars, plus past stays from an imported reservations
-        export and your manager statements. Each bar runs from the check-in day to the checkout day, so the day it ends
-        is free for the next guest. Click a bar for details. Private bookings and owner stays only show if you blocked
-        the dates on a platform; open a blocked range to mark it as an owner stay.
-      </p>
+      {help && (
+        <div id="cal-help" className="cal-help card">
+          <ul>
+            <li>
+              Shows when the house is booked or free, from your Airbnb and VRBO calendars. Past stays also come from an
+              imported reservations export and your manager statements.
+            </li>
+            <li>
+              Each bar runs from check-in to checkout, so the checkout day is free for the next guest. Click a bar for
+              details.
+            </li>
+            <li>
+              A hatched bar means the dates are blocked on a platform. The calendar can&apos;t tell whether that is an
+              owner stay, a hold or another platform&apos;s guest. Click it and choose &quot;Mark as owner stay&quot; if
+              you stayed.
+            </li>
+          </ul>
+        </div>
+      )}
+
+      {s && (
+        <dl className="cal-stats" aria-label={`${monthTitle(month)} summary`}>
+          <div>
+            <dd>
+              {s.booked_nights}
+              <span className="muted"> / {s.nights}</span>
+            </dd>
+            <dt>Booked nights</dt>
+          </div>
+          <div>
+            <dd>{s.free_nights}</dd>
+            <dt>Free nights</dt>
+          </div>
+          <div title="Blocked on a platform, not booked">
+            <dd>{s.blocked_nights}</dd>
+            <dt>Not available</dt>
+          </div>
+          <div>
+            <dd>{s.check_ins}</dd>
+            <dt>Check-ins</dt>
+          </div>
+        </dl>
+      )}
 
       <div className="cal-nav">
         <button className="btn small" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Previous month">
@@ -292,29 +341,6 @@ export default function Calendar() {
         </Link>
       </p>
 
-      {s && (
-        <div className="tiles">
-          <div className="tile">
-            <span className="tile-label">Booked nights</span>
-            <span className="tile-value">{s.booked_nights}</span>
-            <span className="tile-sub">of {s.nights}</span>
-          </div>
-          <div className="tile">
-            <span className="tile-label">Free nights</span>
-            <span className="tile-value">{s.free_nights}</span>
-          </div>
-          <div className="tile">
-            <span className="tile-label">Not available</span>
-            <span className="tile-value">{s.blocked_nights}</span>
-            <span className="tile-sub">blocked, not booked</span>
-          </div>
-          <div className="tile">
-            <span className="tile-label">Check-ins</span>
-            <span className="tile-value">{s.check_ins}</span>
-          </div>
-        </div>
-      )}
-
       <section className="card">
         <h2 className="section-head">Bookings in {monthTitle(month)}</h2>
         {hidden > 0 && (
@@ -378,7 +404,7 @@ export default function Calendar() {
             </dd>
             <dt>Source</dt>
             <dd>{open.feed}</dd>
-            {open.summary && (
+            {open.kind === "reserved" && open.summary && (
               <>
                 <dt>Details</dt>
                 <dd>{open.summary}</dd>
@@ -387,24 +413,15 @@ export default function Calendar() {
           </dl>
           {open.kind === "blocked" && (
             <p className="muted small">
-              The platform only says these nights aren&apos;t available: another platform&apos;s guest, an owner stay or
-              a hold.
+              The platform only says these nights are blocked. It could be an owner stay, a hold, or another
+              platform&apos;s guest.
+              {canWrite && " If you stayed here, record it below so the nights count as personal use."}
             </p>
           )}
           {open.kind === "blocked" && canWrite && (
-            <div className="form-actions">
-              <select
-                value={stayKind}
-                onChange={(e) => setStayKind(e.target.value as StayKind | "")}
-                aria-label="Kind of stay"
-              >
-                <option value="">Kind (optional)</option>
-                {STAY_KINDS.map((k) => (
-                  <option key={k.value} value={k.value}>
-                    {k.label}
-                  </option>
-                ))}
-              </select>
+            <div className="cal-stay-form">
+              <span className="muted small">Who stayed?</span>
+              <KindToggle value={stayKind} onChange={setStayKind} />
               <button className="btn primary" onClick={() => void markOwnerStay(open)}>
                 Mark as owner stay
               </button>
