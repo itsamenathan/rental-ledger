@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
-import { api, type User } from "./api.ts";
+import { api, DEFAULT_SETTINGS, type User, type UserSettings } from "./api.ts";
 import { useApi, useOutbox, useProperty, useSession } from "./hooks.ts";
 import { Modal, SessionProvider, ToastProvider } from "./lib.tsx";
 import { OutboxProvider, SyncBanner } from "./components/Outbox.tsx";
@@ -24,6 +24,7 @@ import { propertySettingsPath } from "./scope.ts";
 interface Me {
   user: User | null;
   can_write: boolean;
+  settings?: UserSettings | null;
 }
 
 export default function App() {
@@ -47,6 +48,7 @@ export default function App() {
           <SessionProvider
             user={me.user}
             canWrite={me.can_write}
+            settings={{ ...DEFAULT_SETTINGS, ...me.settings }}
             onLogout={() => setMe({ user: null, can_write: false })}
           >
             <OutboxProvider>

@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { api } from "../api.ts";
-import { ago, syncText, type Feed, type HistorySummary, type SyncResult } from "../calendar.ts";
+import {
+  ago,
+  monthWeeks,
+  syncText,
+  weekdayNames,
+  type Feed,
+  type HistorySummary,
+  type SyncResult,
+} from "../calendar.ts";
 import { fmtDate, monthTitle, shiftMonth, thisMonth, today } from "../format.ts";
 import { propertySettingsPath } from "../scope.ts";
 import { useApi, usePersistentState, useSession, useToast, useProperty } from "../hooks.ts";
@@ -43,7 +51,6 @@ interface CalendarData {
 
 const KIND_LABEL: Record<Kind, string> = { reserved: "Booked", blocked: "Not available" };
 
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 /** Where in a day (0 = start, 1 = end) a bar begins on check-in and ends on checkout: guests leave in the morning. */
 const CHECK_IN_AT = 0.5;
 const CHECK_OUT_AT = 0.35;
@@ -69,7 +76,7 @@ const historyText = (h: HistorySummary) =>
 
 /** Read-only availability from the imported Airbnb/VRBO calendars. */
 export default function Calendar() {
-  const { canWrite } = useSession();
+  const { canWrite, settings } = useSession();
   const toast = useToast();
   const propertyId = useProperty().single;
   const linked = useSearchParams()[0].get("month");
@@ -141,13 +148,9 @@ export default function Calendar() {
   const events = inMonth.filter((e) => holding.has(e.id));
   const hidden = inMonth.length - events.length;
 
-  // grid: from the Sunday on/before the 1st to the Saturday on/after the last day, one row per week
-  const gridStart = addDays(first, -new Date(`${first}T00:00:00Z`).getUTCDay());
-  const lastDay = addDays(nextFirst, -1);
-  const gridEnd = addDays(lastDay, 6 - new Date(`${lastDay}T00:00:00Z`).getUTCDay());
-  const weeks: string[][] = [];
-  for (let d = gridStart; d <= gridEnd; d = addDays(d, 7))
-    weeks.push(Array.from({ length: 7 }, (_, i) => addDays(d, i)));
+  // grid: from the first day of the week the 1st falls in to the last day of the week the month ends in, one row per
+  // week; the week starts on the day the person chose in Settings → Preferences
+  const weeks = monthWeeks(month, settings.week_start);
   const now = today();
 
   // A stay is drawn as one bar from the middle of the check-in day to the morning of the checkout day (the day after
@@ -270,7 +273,7 @@ export default function Calendar() {
       <div className="card cal-card">
         <div className="cal-grid" role="grid" aria-label={monthTitle(month)}>
           <div className="cal-wds">
-            {WEEKDAYS.map((w) => (
+            {weekdayNames(settings.week_start).map((w) => (
               <div key={w} className="cal-wd" role="columnheader">
                 {w}
               </div>

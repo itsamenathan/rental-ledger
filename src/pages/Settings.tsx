@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link, NavLink, Navigate, Route, Routes } from "react-router";
-import { api, type Property } from "../api.ts";
+import { api, type Property, type UserSettings } from "../api.ts";
 import { useApi, useProperty, useSession, useToast } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 import CategorySettings from "./CategorySettings.tsx";
@@ -17,6 +17,7 @@ export default function Settings() {
       </header>
       <nav className="tabs">
         <NavLink to="/settings/account">Account</NavLink>
+        <NavLink to="/settings/preferences">Preferences</NavLink>
         <NavLink to="/settings/api-keys">API keys &amp; agents</NavLink>
         <NavLink to="/settings/properties">Properties</NavLink>
         <NavLink to="/settings/categories">Categories</NavLink>
@@ -26,6 +27,7 @@ export default function Settings() {
       </nav>
       <Routes>
         <Route path="account" element={<Account />} />
+        <Route path="preferences" element={<Preferences />} />
         <Route path="api-keys" element={<ApiKeys />} />
         <Route path="properties" element={<Properties />} />
         <Route path="categories" element={<CategorySettings />} />
@@ -96,6 +98,87 @@ function Account() {
         <button className="btn primary">Update password</button>
       </form>
     </div>
+  );
+}
+
+/** One preference: what it is on the left, the choices on the right. */
+function Choice<T extends string | number>({
+  title,
+  help,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  title: string;
+  help: string;
+  value: T;
+  options: { value: T; label: string }[];
+  disabled?: boolean;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="pref">
+      <div className="pref-text">
+        <strong>{title}</strong>
+        <span className="muted small">{help}</span>
+      </div>
+      <div className="segmented" role="radiogroup" aria-label={title}>
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={value === o.value}
+            className={value === o.value ? "on" : ""}
+            disabled={disabled}
+            onClick={() => value !== o.value && onChange(o.value)}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Your own preferences: they follow you to any device and don't change anyone else's view. */
+function Preferences() {
+  const { settings, updateSettings } = useSession();
+  const toast = useToast();
+  const [saving, setSaving] = useState(false);
+  const save = async (patch: Partial<UserSettings>) => {
+    setSaving(true);
+    try {
+      await updateSettings(patch);
+      toast({ text: "Preference saved", kind: "ok" });
+    } catch (err) {
+      toast({ text: (err as Error).message, kind: "error" });
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <>
+      <p className="muted">These apply to your account only, on any device you sign in from.</p>
+      <div className="grid-2">
+        <section className="card">
+          <h2>Calendar</h2>
+          <Choice
+            title="Week starts on"
+            help="The first column of the calendar grid."
+            value={settings.week_start}
+            options={[
+              { value: 0, label: "Sunday" },
+              { value: 1, label: "Monday" },
+              { value: 6, label: "Saturday" },
+            ]}
+            disabled={saving}
+            onChange={(week_start) => void save({ week_start })}
+          />
+        </section>
+      </div>
+    </>
   );
 }
 

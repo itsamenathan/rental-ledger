@@ -19,6 +19,7 @@ import {
   userCreateInput,
   verifyPassword,
 } from "../services/auth.ts";
+import { getUserSettings, updateUserSettings } from "../services/user-settings.ts";
 import { actorOf, clearRateLimit, clientIp, rateLimit, SESSION_COOKIE, type Env } from "./middleware.ts";
 
 export const authRoutes = new Hono<Env>();
@@ -99,7 +100,19 @@ authRoutes.post("/logout", (c) => {
 
 authRoutes.get("/me", (c) => {
   const a = c.get("actor");
-  return c.json({ user: a?.user ?? null, can_write: a?.canWrite ?? false, via: a?.via ?? null });
+  return c.json({
+    user: a?.user ?? null,
+    can_write: a?.canWrite ?? false,
+    via: a?.via ?? null,
+    settings: a ? getUserSettings(getDb(), a.user.id) : null,
+  });
+});
+
+/** The caller's own preferences (read-only accounts included: they change nothing in the ledger). */
+authRoutes.patch("/settings", async (c) => {
+  const actor = actorOf(c);
+  if (actor.apiKeyId) throw new AppError(403, "Change your preferences from a browser session");
+  return c.json(updateUserSettings(getDb(), actor, await c.req.json().catch(() => null)));
 });
 
 authRoutes.post("/password", async (c) => {

@@ -20,6 +20,10 @@ export const users = sqliteTable(
       .default("member"),
     oidcSub: text("oidc_sub").unique(),
     disabled: integer("disabled", { mode: "boolean" }).notNull().default(false),
+    /** The person's own preferences (see services/user-settings.ts); only keys they changed are stored */
+    settings: text("settings", { mode: "json" })
+      .notNull()
+      .default(sql`'{}'`),
     createdAt: createdAt(),
   },
   (t) => [

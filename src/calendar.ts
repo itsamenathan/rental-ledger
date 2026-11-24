@@ -1,4 +1,4 @@
-import { fmtDate } from "./format.ts";
+import { fmtDate, shiftMonth } from "./format.ts";
 
 /** Booking-calendar feeds (Airbnb/VRBO iCal links) are property settings: managed in Settings → Properties. */
 export interface Feed {
@@ -59,4 +59,32 @@ export function syncText(r: SyncResult) {
     r.removed && `${r.removed} cancelled`,
   ].filter(Boolean);
   return `${r.name}: ${parts.length ? parts.join(", ") : "no changes"}`;
+}
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+const shiftDay = (iso: string, n: number) =>
+  new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+/** How many days `iso` is past the start of its week (0 = it is the first day). weekStart: 0 = Sunday … 6 = Saturday. */
+const daysIntoWeek = (iso: string, weekStart: number) => (new Date(`${iso}T00:00:00Z`).getUTCDay() - weekStart + 7) % 7;
+
+/** Weekday headers in display order for a week that starts on `weekStart`. */
+export const weekdayNames = (weekStart: number) => Array.from({ length: 7 }, (_, i) => DAY_NAMES[(weekStart + i) % 7]!);
+
+/**
+ * The weeks a month grid shows, one array of seven YYYY-MM-DD days per row: from the first day of the week the 1st
+ * falls in to the last day of the week the month's last day falls in.
+ */
+export function monthWeeks(month: string, weekStart: number): string[][] {
+  const first = `${month}-01`;
+  const last = shiftDay(`${shiftMonth(month, 1)}-01`, -1);
+  const weeks: string[][] = [];
+  for (
+    let d = shiftDay(first, -daysIntoWeek(first, weekStart));
+    d <= shiftDay(last, 6 - daysIntoWeek(last, weekStart));
+    d = shiftDay(d, 7)
+  )
+    weeks.push(Array.from({ length: 7 }, (_, i) => shiftDay(d, i)));
+  return weeks;
 }

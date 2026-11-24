@@ -649,6 +649,32 @@ label.check {
     var(--shadow),
     0 0 0 1px var(--border);
 }
+.segmented button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* a preference: name and help on the left, its choices on the right (wraps under on a narrow screen) */
+.pref {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.25rem;
+  padding: 0.85rem 0;
+}
+.pref + .pref {
+  border-top: 1px solid var(--border);
+}
+.pref-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 12rem;
+  flex: 1;
+}
+.pref-text strong {
+  font-weight: 550;
+}
 .kind-toggle {
   margin-bottom: 1rem;
   width: 100%;
