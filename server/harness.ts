@@ -303,7 +303,9 @@ export function generate(today: Date) {
       const nights = 2 + Math.floor(ahead() * 4);
       const end = Math.min(day + nights, last);
       stayList.push({ platform: i === 1 ? "vrbo" : "airbnb", start: at(day), end: at(end) });
-      day = end + 2 + Math.floor(ahead() * 5);
+      // the first guest leaves the morning the second arrives (a same-day turnover), then there's a gap
+      const gap = 2 + Math.floor(ahead() * 5);
+      day = i === 0 ? end : end + gap;
     }
     if (k === 1 && day + 3 <= last) ownerStays.push({ start: at(day), end: at(day + 3) });
   }
