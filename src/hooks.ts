@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { api, type Category, type Overview, type Property, type User } from "./api.ts";
+import { api, type Category, type Overview, type Property, type User, type UserSettings } from "./api.ts";
 import type { OutboxEntry } from "./outbox.ts";
 
 // ---------------- session + reference data ----------------
@@ -7,6 +7,10 @@ import type { OutboxEntry } from "./outbox.ts";
 export interface Session {
   user: User;
   canWrite: boolean;
+  /** The signed-in person's own preferences (every key has a value) */
+  settings: UserSettings;
+  /** Save some preferences; rejects (message for a toast) when the server can't be reached or refuses */
+  updateSettings: (patch: Partial<UserSettings>) => Promise<void>;
   overview: Overview;
   reloadOverview: () => Promise<void>;
   category: (id: number) => Category | undefined;

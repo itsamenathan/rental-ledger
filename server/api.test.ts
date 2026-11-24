@@ -92,6 +92,57 @@ describe("auth", () => {
   });
 });
 
+describe("user settings", () => {
+  it("starts with defaults on auth/me and keeps what was set, per user", async () => {
+    expect((await call("GET", "/api/auth/me")).json.settings).toEqual({ week_start: 0 });
+    const r = await call("PATCH", "/api/auth/settings", { week_start: 1 });
+    expect(r.status).toBe(200);
+    expect(r.json).toEqual({ week_start: 1 });
+    expect((await call("GET", "/api/auth/me")).json.settings).toEqual({ week_start: 1 });
+    // an empty patch leaves everything alone
+    expect((await call("PATCH", "/api/auth/settings", {})).json).toEqual({ week_start: 1 });
+    // the change is in the audit log as a before/after
+    const log = await call("GET", "/api/audit?entity=user_settings");
+    expect(JSON.stringify(log.json)).toContain('"week_start":[0,1]');
+  });
+
+  it("rejects unknown keys and values outside the choices", async () => {
+    expect((await call("PATCH", "/api/auth/settings", { week_start: 3 })).status).toBe(400);
+    expect((await call("PATCH", "/api/auth/settings", { week_start: "monday" })).status).toBe(400);
+    expect((await call("PATCH", "/api/auth/settings", { colour: "red" })).status).toBe(400);
+    expect((await call("PATCH", "/api/auth/settings", [1])).status).toBe(400);
+    expect((await call("GET", "/api/auth/me")).json.settings).toEqual({ week_start: 1 });
+  });
+
+  it("is not changeable with an API key, and a bad stored value falls back to the default", async () => {
+    expect((await call("PATCH", "/api/auth/settings", { week_start: 6 }, bearer(writeKey))).status).toBe(403);
+    db.$client
+      .prepare("UPDATE users SET settings = ? WHERE lower(email) = 'owner@example.com'")
+      .run('{"week_start":9,"old":1}');
+    const me = await call("GET", "/api/auth/me");
+    expect(me.status).toBe(200);
+    expect(me.json.settings).toEqual({ week_start: 0 });
+    // saving another key later keeps working and doesn't need the bad one
+    expect((await call("PATCH", "/api/auth/settings", { week_start: 6 })).json).toEqual({ week_start: 6 });
+  });
+
+  it("lets a read-only account change its own preferences without touching anyone else's", async () => {
+    const owner = cookie;
+    const made = await call("POST", "/api/users", {
+      email: "view@example.com",
+      password: "0123456789abc",
+      role: "viewer",
+    });
+    expect(made.status).toBe(201);
+    const login = await call("POST", "/api/auth/login", { email: "view@example.com", password: "0123456789abc" });
+    cookie = login.res.headers.get("set-cookie")!.split(";")[0]!;
+    expect((await call("GET", "/api/auth/me")).json.settings).toEqual({ week_start: 0 });
+    expect((await call("PATCH", "/api/auth/settings", { week_start: 1 })).json).toEqual({ week_start: 1 });
+    cookie = owner;
+    expect((await call("GET", "/api/auth/me")).json.settings).toEqual({ week_start: 6 });
+  });
+});
+
 describe("transactions", () => {
   it("creates an expense with default allocation and enforces sign", async () => {
     const bad = await call(

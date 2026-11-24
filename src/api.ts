@@ -7,6 +7,14 @@ export interface User {
   role: "admin" | "member" | "viewer";
 }
 
+/** A person's own preferences (GET auth/me, PATCH auth/settings); see server/services/user-settings.ts. */
+export interface UserSettings {
+  /** First day of the calendar week: 0 = Sunday, 1 = Monday, 6 = Saturday */
+  week_start: 0 | 1 | 6;
+}
+
+export const DEFAULT_SETTINGS: UserSettings = { week_start: 0 };
+
 export interface Category {
   id: number;
   name: string;

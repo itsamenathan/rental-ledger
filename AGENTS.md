@@ -50,6 +50,13 @@ release. Add a tool name to select part of the graph. For example, run
   on API calls; the shell's `PropertySwitcher` is the only property picker (hidden with one active property). Old
   URLs redirect to the last property used. `/settings` stays app-wide; `/p/<id>/settings` is the property's own.
 - PATCH bodies go through `parsePatch` in `ledger.ts`: zod 4 fills `.default()` values even inside `.partial()`.
+- User preferences (`server/services/user-settings.ts`): a person's own UI choices live as JSON in `users.settings`,
+  not on the property or app-wide. To add one, put its validator in `fields` and its default in `DEFAULTS`; no
+  migration. Only changed keys are stored; reads fall back to the default per key and never throw (`auth/me` returns
+  them, so a bad value mustn't look like being signed out). `PATCH /api/auth/settings` merges only the sent keys, is
+  browser-session only (viewers allowed, API keys 403) and REST only like uploads, and audits before/after. Client:
+  `useSession().settings` / `updateSettings`, edited in Settings → Preferences. `week_start` (Sun/Mon/Sat, default
+  Sunday) drives the Calendar grid via `monthWeeks`/`weekdayNames` in `src/calendar.ts`.
 - Recurring-bill detection (`server/services/recurring.ts`) is computed from history on each request; the only stored
   state is user feedback in `recurring_dismissals` (month = '' means stop tracking the series). Tests in
   `server/recurring.test.ts` pin the rules with a fixed `today`.

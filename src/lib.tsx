@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { api, type Overview, type User } from "./api.ts";
+import { api, type Overview, type User, type UserSettings } from "./api.ts";
 import { money, THIS_YEAR } from "./format.ts";
 import { SessionCtx, ToastCtx, useSession, type Session, type Toast } from "./hooks.ts";
 
@@ -8,16 +8,24 @@ import { SessionCtx, ToastCtx, useSession, type Session, type Toast } from "./ho
 export function SessionProvider({
   user,
   canWrite,
+  settings: initialSettings,
   onLogout,
   children,
 }: {
   user: User;
   canWrite: boolean;
+  settings: UserSettings;
   onLogout: () => void;
   children: ReactNode;
 }) {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const [settings, setSettings] = useState(initialSettings);
+  const updateSettings = useCallback(async (patch: Partial<UserSettings>) => {
+    setSettings(await api<UserSettings>("auth/settings", { method: "PATCH", json: patch }));
+    // The service worker keeps the last "who am I" for offline starts; refresh it so a reload offline keeps the choice.
+    void api("auth/me").catch(() => undefined);
+  }, []);
   const reloadOverview = useCallback(async () => setOverview(await api<Overview>("overview")), []);
   const boot = useCallback(() => api<Overview>("overview").then(setOverview, (e: Error) => setFailed(e.message)), []);
   useEffect(() => {
@@ -43,6 +51,8 @@ export function SessionProvider({
   const value: Session = {
     user,
     canWrite,
+    settings,
+    updateSettings,
     overview,
     reloadOverview,
     category: (id) => overview.categories.find((c) => c.id === id),
