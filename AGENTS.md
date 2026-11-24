@@ -116,6 +116,9 @@ release. Add a tool name to select part of the graph. For example, run
   them) and from saved manager statements (derived on every read, negative ids, nothing stored). `listEvents` drops a
   reservation that overlaps one from a higher source (feed > history > statement). The production server refreshes
   linked feeds every `CALENDAR_REFRESH_MINUTES` (`server/scheduler.ts`, started in `main.ts`, never in `vp dev`).
+- Calendar grid (`src/pages/Calendar.tsx`): each reservation is a bar from the middle of its check-in day to the
+  morning of its checkout day (Hostaway style; `CHECK_IN_AT`/`CHECK_OUT_AT` are assumed, not a setting), built from `nights` and cut per
+  week row; click the bar, not the day. The page loads the month before and after so bars reach the greyed days.
 - Owner stays (`server/services/owner-stays.ts`, `owner_stays`): personal-use stays by date, end_date = checkout day
   (not a night), each night counted in its own month/year. Occupancy stays the record of rental/personal days, but
   owner_nights is derived on read: for a (property, month) with any stay night it is the stays' nights, else the

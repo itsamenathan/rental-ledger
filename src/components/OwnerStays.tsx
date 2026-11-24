@@ -19,7 +19,7 @@ import {
 } from "../owner-stays.ts";
 
 /** Who stayed: one tap instead of a dropdown. */
-function KindToggle({
+export function KindToggle({
   value,
   onChange,
   small = false,
