@@ -39,6 +39,8 @@ export interface Property {
   recovery_years: number;
   notes: string;
   archived: boolean;
+  /** the state sales-tax Location ID its quarterly return is filed under (State tax page) */
+  state_tax_location_id: string;
 }
 
 export interface Transaction {

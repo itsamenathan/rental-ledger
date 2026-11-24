@@ -58,6 +58,7 @@ const PROPERTY_FIELDS = [
   "recovery_years",
   "notes",
   "archived",
+  "state_tax_location_id",
 ];
 const OCCUPANCY_FIELDS = ["nights_available", "nights_booked", "owner_nights", "check_ins", "notes"];
 

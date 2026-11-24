@@ -13,6 +13,7 @@ import { transactionsCsv } from "./csv.ts";
 import { listTransactions } from "./ledger.ts";
 import { personalUseRanges } from "./owner-stays.ts";
 import { taxReport, taxReportCsv } from "./reports.ts";
+import { stateTaxSummaryLines } from "./state-tax.ts";
 import { gatedZipStream, type ZipSource } from "./zip.ts";
 
 const usd = (n: number) =>
@@ -20,7 +21,7 @@ const usd = (n: number) =>
 const row = (label: string, value: string, width = 44) => `  ${label.padEnd(width, ".")} ${value.padStart(14)}`;
 const safe = (s: string) => s.replace(/[^\w .&()-]+/g, "").trim() || "receipt";
 
-function summaryText(r: ReturnType<typeof taxReport>, receipts: number) {
+function summaryText(r: ReturnType<typeof taxReport>, receipts: number, stateTax: string[] = []) {
   const L: string[] = [];
   L.push(`${r.property.name} — rental income and expenses for ${r.year}`);
   if (r.property.address) L.push(r.property.address);
@@ -92,6 +93,8 @@ function summaryText(r: ReturnType<typeof taxReport>, receipts: number) {
   L.push(row("Total deductible expenses", usd(r.totals.deductible_expenses)));
   L.push(row("Net", usd(r.totals.net)), "");
 
+  L.push(...stateTax);
+
   if (r.checks.length) {
     L.push("NOTES / ITEMS TO CONFIRM");
     for (const c of r.checks) L.push(`  - ${c.message}`);
@@ -148,7 +151,10 @@ export function preparerPackage(db: DB, actor: Actor | null, year: number, prope
   }
 
   const { stream } = gatedZipStream([
-    { name: "Summary.txt", data: Buffer.from(summaryText(r, receipts.length)) },
+    {
+      name: "Summary.txt",
+      data: Buffer.from(summaryText(r, receipts.length, stateTaxSummaryLines(db, r.property.id, year))),
+    },
     { name: `Tax summary ${year}.csv`, data: Buffer.from(taxReportCsv(r)) },
     { name: `Transactions ${year}.csv`, data: Buffer.from(transactionsCsv(items)) },
     ...receipts,

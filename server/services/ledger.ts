@@ -80,6 +80,12 @@ export const propertyInput = z.object({
   recovery_years: z.number().positive().max(60).default(27.5),
   notes: z.string().max(5000).default(""),
   archived: z.boolean().default(false),
+  state_tax_location_id: z
+    .string()
+    .trim()
+    .max(50)
+    .default("")
+    .describe("The state sales-tax Location ID this property's quarterly return is filed under"),
 });
 
 type PropertyRow = typeof properties.$inferSelect;
@@ -93,6 +99,7 @@ const toProperty = (r: PropertyRow) => ({
   recovery_years: r.recoveryYears,
   notes: r.notes,
   archived: r.archived,
+  state_tax_location_id: r.stateTaxLocationId,
 });
 export type Property = ReturnType<typeof toProperty>;
 
@@ -105,6 +112,7 @@ const propertyValues = (p: Partial<z.infer<typeof propertyInput>>) => ({
   recoveryYears: p.recovery_years,
   notes: p.notes,
   archived: p.archived,
+  stateTaxLocationId: p.state_tax_location_id,
 });
 
 const byName = (col: typeof properties.name | typeof categories.name, name: string) =>

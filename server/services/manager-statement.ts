@@ -76,7 +76,7 @@ export function toIsoDate(raw: string | undefined): string | null {
 const usd = (c: number) =>
   `${c < 0 ? "-" : ""}$${(Math.abs(c) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const isAirbnb = (r: { channel: string }) => /airbnb/i.test(r.channel);
+export const isAirbnb = (r: { channel: string }) => /airbnb/i.test(r.channel);
 const channelLabel = (rs: { channel: string }[]) =>
   [
     ...new Set(
@@ -420,6 +420,22 @@ export function savedStatements(db: DB, propertyId: number) {
     }
   }
   return out;
+}
+
+/**
+ * Every reservation on the property's saved statements, once per reservation id: a stay can show up on several
+ * statements (a deposit month and a stay month), and the latest statement (by month, then upload) wins. `month` is
+ * the statement it was read from.
+ */
+export function savedReservations(
+  db: DB,
+  propertyId: number,
+  statements = savedStatements(db, propertyId),
+): (Reservation & { month: string })[] {
+  const byId = new Map<string, Reservation & { month: string }>();
+  for (const s of statements)
+    for (const r of s.statement.reservations) byId.set(r.reservation_id, { ...r, month: s.month });
+  return [...byId.values()];
 }
 
 // ======================= analysis =======================
@@ -766,7 +782,10 @@ export interface ManagerContext {
 export function managerContext(db: DB, propertyId: number, extra?: ParsedStatement): ManagerContext {
   const statements = savedStatements(db, propertyId);
   const byId = new Map<string, Reservation>();
-  for (const s of statements) for (const r of s.statement.reservations) byId.set(r.reservation_id, r);
+  for (const r of savedReservations(db, propertyId, statements)) {
+    const { month: _m, ...rest } = r;
+    byId.set(r.reservation_id, rest);
+  }
   // A statement passed in directly wins over a saved copy of the same reservations.
   for (const r of extra?.reservations ?? []) byId.set(r.reservation_id, r);
   return { propertyId, statements, claims: claimDeposits(db, propertyId, [...byId.values()]) };

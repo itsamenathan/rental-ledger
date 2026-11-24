@@ -4,6 +4,7 @@ import { listTransactions } from "./ledger.ts";
 import { recurring } from "./recurring.ts";
 import { managerAttention } from "./manager-statement.ts";
 import { occupancyAttention } from "./occupancy-calendar.ts";
+import { stateTaxAttention } from "./state-tax.ts";
 
 /** Last month of tax season (April): until then, the To do page asks about last year's receipts. */
 const TAX_SEASON_END = 4;
@@ -27,9 +28,11 @@ export function todoSummary(db: DB, opts: { propertyId?: number; today?: string 
   // Likely owner stays to confirm and guest nights that disagree with the calendar (services/occupancy-calendar.ts).
   const occupancy = occupancyAttention(db, opts);
   const occupancyItems = occupancy.reduce((a, o) => a + o.owner_stays.length + o.guest_nights.length, 0);
+  // Quarterly state tax returns due within two weeks or overdue (services/state-tax.ts).
+  const stateTax = stateTaxAttention(db, { propertyId: opts.propertyId, today: opts.today?.slice(0, 10) });
   return {
     /** what the badge shows: things that are probably wrong or missing */
-    total: flagged + unallocatedNotFlagged + recurringWarnings + manager.length + occupancyItems,
+    total: flagged + unallocatedNotFlagged + recurringWarnings + manager.length + occupancyItems + stateTax.length,
     flagged,
     unallocated,
     recurring: recurringWarnings,
@@ -40,6 +43,9 @@ export function todoSummary(db: DB, opts: { propertyId?: number; today?: string 
     /** owner stays to confirm + guest-night months to check */
     occupancy: occupancyItems,
     occupancy_items: occupancy,
+    /** unpaid state tax returns due soon or overdue */
+    state_tax: stateTax.length,
+    state_tax_items: stateTax,
     /** optional: expenses in receipts_year that should have a receipt and don't (services/receipts.ts; not in total) */
     missing_receipts: count({ needs_receipt: true, year: String(receiptsYear) }),
     receipts_year: receiptsYear,
