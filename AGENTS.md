@@ -163,6 +163,13 @@ entry) and a smaller Pine Ridge Cabin (2 years, its own calendar and one flagged
   `data/harness.json`). `scripts/harness reset` reseeds; stop the dev server first (reset refuses while it runs).
 - `scripts/harness preview` builds and runs the production server on the same port and data. Use it for anything
   that needs the service worker (installing, offline mode, the outbox); `vp dev` doesn't register one.
+- `scripts/harness dev` and `preview` also put the server behind `tailscale serve` while they run, with a real
+  certificate, at `https://<this machine>.<tailnet>.ts.net:<port + 10000>` (tailnet only; printed at start, removed on
+  exit; `HARNESS_HTTPS=0` skips it, and a failure only prints a note). Browsers only allow the live camera and the
+  service worker on https or localhost, so use it to try the scanner/camera or the installed app from a phone. It needs
+  `sudo tailscale set --operator=$USER` once, and `server.allowedHosts` in `vite.config.ts` allows `.ts.net` hosts.
+  `scripts/harness https [off]` does the same for a server started some other way. The dev port itself can't be reused
+  for https: the server listens on every interface.
 - Logins: `admin@example.com`, `member@example.com`, `viewer@example.com`, password `password`.
 - `scripts/harness info` prints the URL, a write and a read API key (`Authorization: Bearer …`), an admin session
   cookie for curl, `data/sample-bank-export.csv` for trying CSV import, `data/sample-airbnb.ics` (one new
