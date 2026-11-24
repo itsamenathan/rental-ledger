@@ -57,6 +57,14 @@ release. Add a tool name to select part of the graph. For example, run
   browser-session only (viewers allowed, API keys 403) and REST only like uploads, and audits before/after. Client:
   `useSession().settings` / `updateSettings`, edited in Settings → Preferences. `week_start` (Sun/Mon/Sat, default
   Sunday) drives the Calendar grid via `monthWeeks`/`weekdayNames` in `src/calendar.ts`.
+- Month page (`src/pages/Month.tsx`, `src/components/MonthTransactions.tsx`): the Transactions card's filter chips,
+  search, category, date order and List/By category layout live in the URL (`show`, `q`, `cat`, `sort`, `view`;
+  `src/month-view.ts`, defaults left out) and are applied in the browser to the month's entries. The search and
+  filters mean the same as the API's `q`/`kind`/`needs_review`/`needs_receipt`/`category`, so "Export CSV" sends them
+  and downloads what's on screen. Month links and Add's `back` keep the view. `listTransactions` adds `needs_receipt`
+  to each item (from `missingReceiptIds`, never a second rule). Row flag/receipt buttons use the normal PATCH and
+  attachments routes (online only; no outbox). The recurring card folds done bills away and becomes one line when
+  nothing needs attention.
 - Recurring-bill detection (`server/services/recurring.ts`) is computed from history on each request; the only stored
   state is user feedback in `recurring_dismissals` (month = '' means stop tracking the series). Tests in
   `server/recurring.test.ts` pin the rules with a fixed `today`.

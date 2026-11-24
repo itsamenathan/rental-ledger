@@ -29,6 +29,19 @@ function setup() {
   return { db, actor, add, cat, needing };
 }
 
+describe("transaction list", () => {
+  it("marks each entry that still needs a receipt", () => {
+    const { db, add, needing } = setup();
+    const big = add("Maintenance", -200);
+    const small = add("Maintenance", -10);
+    const income = add("Rental Income", 500);
+    const flag = () =>
+      Object.fromEntries(ledger.listTransactions(db, { month: "2026-06" }).items.map((i) => [i.id, i.needs_receipt]));
+    expect(flag()).toEqual({ [big]: true, [small]: false, [income]: false });
+    expect(needing()).toEqual([big]);
+  });
+});
+
 describe("receipt policy", () => {
   it("defaults to the $75 threshold, and mortgage (line 12) to never", () => {
     const { add, cat, needing } = setup();

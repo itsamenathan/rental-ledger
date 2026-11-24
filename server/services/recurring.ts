@@ -101,7 +101,8 @@ export const seriesKey = (propertyId: number, categoryId: number, vendor: string
 
 function labelOf(category: string, vendor: string, subcategory: string) {
   const what = subcategory ? `${category}: ${subcategory}` : category;
-  return vendor ? `${what} (${vendor})` : what;
+  // "Management Fee: Acme" for a vendor named Acme too would read "(Acme)" twice
+  return vendor && norm(vendor) !== norm(subcategory) ? `${what} (${vendor})` : what;
 }
 
 /** Grace period after a due date before a payment counts as missing. */

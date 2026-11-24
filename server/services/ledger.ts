@@ -6,6 +6,7 @@ import {
   eq,
   exists,
   gte,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -39,7 +40,13 @@ import {
   requireWrite,
   type Actor,
 } from "../context.ts";
-import { defaultReceiptPolicy, needsReceipt, RECEIPT_POLICIES, type ReceiptPolicy } from "./receipts.ts";
+import {
+  defaultReceiptPolicy,
+  missingReceiptIds,
+  needsReceipt,
+  RECEIPT_POLICIES,
+  type ReceiptPolicy,
+} from "./receipts.ts";
 import { claimUploads, uploadIds } from "./uploads.ts";
 
 // ======================= shared schema bits =======================
@@ -616,8 +623,20 @@ export function listTransactions(db: DB, raw: unknown) {
     .limit(q.limit)
     .offset(q.offset)
     .all();
+  // which of these entries still need a receipt (decided only by needsReceipt(), same as To do and Files)
+  const missing = new Set(
+    items.length
+      ? missingReceiptIds(
+          db,
+          inArray(
+            t.id,
+            items.map((i) => i.id),
+          ),
+        )
+      : [],
+  );
   return {
-    items,
+    items: items.map((i) => ({ ...i, needs_receipt: missing.has(i.id) })),
     total: agg.total,
     totals: { net: agg.net / 100, income: agg.income / 100, expense: agg.expense / 100 },
     limit: q.limit,

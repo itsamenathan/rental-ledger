@@ -31,6 +31,13 @@ const months = (from: string, n: number) =>
   });
 
 describe("recurring detection", () => {
+  it("doesn't repeat a vendor that is also the subcategory in the label", () => {
+    const { db, add } = setup();
+    for (const m of months("2025-11", 13))
+      add(`${m}-28`, -900, "Management Fee", { subcategory: "Acme PM", vendor: "Acme PM" });
+    expect(recurring(db, { today: TODAY }).series.map((s) => s.label)).toEqual(["Management Fee: Acme PM"]);
+  });
+
   it("learns a monthly bill and flags a missing month", () => {
     const { db, add } = setup();
     for (const m of months("2025-11", 13))
