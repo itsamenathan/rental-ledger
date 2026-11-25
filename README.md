@@ -134,6 +134,21 @@ CI publishes an image for every commit on `main` once the checks pass: `ghcr.io/
 (e.g. `:5d17935`) and `:latest`, which follows the newest one. The package is private like the repo, so log in first
 with a token that has `read:packages`: `docker login ghcr.io -u <user>`.
 
+### Tailscale HTTPS
+
+`compose.tailscale.yaml` runs the app behind a Tailscale sidecar and Tailscale Serve. It does not publish a port on the
+host; the app is reachable only by devices allowed by your tailnet policy. Enable MagicDNS and HTTPS certificates in
+the Tailscale admin console, create an auth key, then add it to a `.env` file beside the Compose file:
+
+```dotenv
+TS_AUTHKEY=tskey-auth-...
+```
+
+Start it with `docker compose -f compose.tailscale.yaml up -d --build`. Open `https://rental-ledger.<your-tailnet>.ts.net`
+from a device on your tailnet. Sign in with the app's local username and password accounts; password login is enabled
+and OIDC is not configured. App data and Tailscale identity persist in Docker volumes. If you later enable OIDC, set
+`PUBLIC_URL` to that full HTTPS URL in the `rental-ledger` service so the callback is correct.
+
 | Variable                                              | Default                         | Purpose                                                                                                                                 |
 | ----------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `PORT`                                                | `3000`                          | HTTP port                                                                                                                               |
