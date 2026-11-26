@@ -10,7 +10,7 @@ import {
   type TxList,
 } from "../api.ts";
 import AttentionList from "../components/AttentionList.tsx";
-import MonthPicker from "../components/MonthPicker.tsx";
+import { MonthNav } from "../components/MonthPicker.tsx";
 import MonthTransactions from "../components/MonthTransactions.tsx";
 import RecordBills from "../components/RecordBills.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
@@ -100,15 +100,7 @@ function Month({ ym }: { ym: string }) {
   return (
     <div className="page">
       <header className="page-head">
-        <div className="month-nav">
-          <Link className="icon-btn" to={monthPath(shiftMonth(ym, -1))} aria-label="Previous month">
-            ‹
-          </Link>
-          <MonthPicker ym={ym} to={monthPath} />
-          <Link className="icon-btn" to={monthPath(shiftMonth(ym, 1))} aria-label="Next month">
-            ›
-          </Link>
-        </div>
+        <MonthNav ym={ym} to={monthPath} />
         <div className="head-actions">
           <Link className="btn" to={scoped(`/?year=${year}`)}>
             All of {year}

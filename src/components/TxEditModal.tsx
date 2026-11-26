@@ -4,6 +4,7 @@ import { useApi, useSession, useToast } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 import { enqueueDelete, isUnreachable, SAVE_TIMEOUT_MS, timeout } from "../outbox.ts";
 import TxForm from "./TxForm.tsx";
+import { txParts } from "../month-view.ts";
 
 /**
  * Load a transaction and edit it in a dialog. Deleting offers an undo toast. With no connection, the last copy the
@@ -26,7 +27,7 @@ export default function TxEditModal({
   const fallback = !loaded.data && loaded.error && initial ? { ...initial, attachments: [] } : null;
   const data = loaded.data ?? fallback;
   const error = data ? null : loaded.error;
-  const label = data ? `${data.category}${data.vendor ? ` (${data.vendor})` : ""} · ${money(data.amount)}` : "";
+  const label = data ? `${txParts(data).main} · ${money(data.amount)}` : "";
 
   const queued = (text: string) => {
     toast({ text, kind: "ok" });
@@ -35,7 +36,6 @@ export default function TxEditModal({
   };
 
   const del = async () => {
-    if (!confirm("Delete this transaction?")) return;
     try {
       const guard = data ? `?expected_updated_at=${encodeURIComponent(data.updated_at)}` : "";
       await api(`transactions/${id}${guard}`, { method: "DELETE", signal: timeout(SAVE_TIMEOUT_MS) });

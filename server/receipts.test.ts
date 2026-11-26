@@ -40,6 +40,34 @@ describe("transaction list", () => {
     expect(flag()).toEqual({ [big]: true, [small]: false, [income]: false });
     expect(needing()).toEqual([big]);
   });
+
+  it("counts each quick filter under the other filters, whichever one is picked", () => {
+    const { db, add } = setup();
+    add("Maintenance", -200, { needs_review: true });
+    add("Maintenance", -10);
+    add("Rental Income", 500, { needs_review: true });
+    add("Maintenance", -300, { date: "2025-06-01" });
+    const want = { all: 3, income: 1, expense: 2, needs_review: 2, needs_receipt: 1 };
+    expect(ledger.listTransactions(db, { year: "2026", counts: "true" }).counts).toEqual(want);
+    const picked = ledger.listTransactions(db, { year: "2026", kind: "income", counts: "true" });
+    expect(picked.total).toBe(1);
+    expect(picked.counts).toEqual(want);
+    expect(ledger.listTransactions(db, { year: "2026" })).not.toHaveProperty("counts");
+  });
+
+  it("can list just the given entries", () => {
+    const { db, add } = setup();
+    const a = add("Maintenance", -20);
+    add("Maintenance", -30);
+    const c = add("Rental Income", 100);
+    const ids = (q: Record<string, unknown>) =>
+      ledger
+        .listTransactions(db, q)
+        .items.map((i) => i.id)
+        .sort((x, y) => x - y);
+    expect(ids({ ids: `${a},${c}` })).toEqual([a, c].sort((x, y) => x - y));
+    expect(ids({ ids: [c] })).toEqual([c]);
+  });
 });
 
 describe("receipt policy", () => {

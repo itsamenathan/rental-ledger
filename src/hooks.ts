@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { api, type Category, type Overview, type Property, type User, type UserSettings } from "./api.ts";
 import type { OutboxEntry } from "./outbox.ts";
+import { THIS_YEAR } from "./format.ts";
 
 // ---------------- session + reference data ----------------
 
@@ -58,6 +59,21 @@ export function useApi<T>(path: string | null) {
 export type Toast = { id: number; text: string; kind: "ok" | "error"; action?: { label: string; run: () => void } };
 export const ToastCtx = createContext<(t: Omit<Toast, "id">) => void>(() => {});
 export const useToast = () => useContext(ToastCtx);
+
+/** A question before something that can't be undone; anything that can be undone acts at once and offers Undo. */
+export interface ConfirmOptions {
+  title?: string;
+  message: string;
+  /** the button that goes ahead, e.g. "Revoke key" */
+  confirm: string;
+  /** red button: something is deleted or stops working */
+  danger?: boolean;
+}
+export const ConfirmCtx = createContext<(o: ConfirmOptions) => Promise<boolean>>(async (o) =>
+  window.confirm(o.message),
+);
+/** `if (!(await confirm({ message, confirm: "Remove" }))) return;` shows the app's own dialog, not the browser's. */
+export const useConfirm = () => useContext(ConfirmCtx);
 
 // ---------------- persisted UI state ----------------
 
@@ -124,3 +140,43 @@ export const useProperty = () => {
 };
 /** Link helper: `to={scoped("/months/2026-10")}`. */
 export const useScopedPath = () => useProperty().path;
+
+/** Edits, deletes and receipts saved offline and not yet synced, by entry id (new entries have no row yet). */
+export function usePendingByEntry(): Map<number, string> {
+  const outbox = useOutbox();
+  return new Map(outbox.entries.filter((e) => e.tx_id != null && e.op !== "create").map((e) => [e.tx_id!, e.op]));
+}
+
+/** Select mode for a list of rows: on/off, the ticked ids, and the `select` part of a RowCtx. */
+export function useTxSelection() {
+  const [on, setOn] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const toggle = (id: number) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  return {
+    on,
+    selected,
+    setSelected,
+    start: () => setOn(true),
+    stop: () => {
+      setOn(false);
+      setSelected(new Set());
+    },
+    ctx: on ? { selected, toggle } : undefined,
+  };
+}
+export type TxSelection = ReturnType<typeof useTxSelection>;
+
+/**
+ * The year you're working in, shared by Overview, Categories, Occupancy, Transactions and the Manager list, so
+ * picking 2025 on one page carries to the next. The tax report keeps its own (it starts at last year on purpose).
+ * `opened` (a link's ?year=) wins and becomes the shared year. Kept under the Overview's old key, so it's not lost.
+ */
+export function useWorkingYear(opened?: number) {
+  return usePersistentState("dash-year", THIS_YEAR, opened && opened > 1900 ? opened : undefined);
+}

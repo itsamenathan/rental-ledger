@@ -487,6 +487,13 @@ export const transactionQuery = z.object({
   from: isoDate.optional(),
   to: isoDate.optional(),
   property_id: z.coerce.number().int().optional(),
+  ids: z
+    .preprocess(
+      (v) => (typeof v === "string" ? v.split(",").filter(Boolean) : v),
+      z.array(z.coerce.number().int().positive()).max(500),
+    )
+    .optional()
+    .describe('Only these entries ("12,15,40" or an array)'),
   category: z.union([z.coerce.number().int(), z.string()]).optional(),
   kind: z.enum(["income", "expense"]).optional(),
   allocation: z.enum(["direct", "indirect", "none"]).optional(),
@@ -505,6 +512,12 @@ export const transactionQuery = z.object({
   min_amount: z.coerce.number().optional().describe("Minimum absolute amount"),
   max_amount: z.coerce.number().optional().describe("Maximum absolute amount"),
   sort: z.enum(["date_desc", "date_asc", "amount_desc", "amount_asc", "updated_desc"]).default("date_desc"),
+  counts: z
+    .preprocess((v) => (v === "true" ? true : v === "false" ? false : v), z.boolean())
+    .optional()
+    .describe(
+      "true = also return `counts`: how many entries match the other filters as all / income / expense / needs_review / needs_receipt (kind, needs_review and needs_receipt are left out of them)",
+    ),
   limit: z.coerce.number().int().min(1).max(5000).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -553,6 +566,7 @@ function transactionFilters(db: DB, q: TransactionQuery): SQL | undefined {
   if (q.from) where.push(gte(t.date, q.from));
   if (q.to) where.push(lte(t.date, q.to));
   if (q.property_id) where.push(eq(t.propertyId, q.property_id));
+  if (q.ids) where.push(q.ids.length ? inArray(t.id, q.ids) : sql`0`);
   if (q.category != null && q.category !== "") where.push(eq(t.categoryId, resolveCategory(db, q.category).id));
   if (q.kind) where.push(eq(categories.kind, q.kind));
   if (q.allocation === "none") where.push(isNull(t.allocation));
@@ -639,9 +653,31 @@ export function listTransactions(db: DB, raw: unknown) {
     items: items.map((i) => ({ ...i, needs_receipt: missing.has(i.id) })),
     total: agg.total,
     totals: { net: agg.net / 100, income: agg.income / 100, expense: agg.expense / 100 },
+    ...(q.counts ? { counts: transactionCounts(db, q) } : {}),
     limit: q.limit,
     offset: q.offset,
   };
+}
+
+/**
+ * How many entries each quick filter would show (the Transactions page's chips): the other filters apply, but not
+ * kind / needs_review / needs_receipt, so every chip's number stays put while another chip is picked.
+ */
+function transactionCounts(db: DB, q: TransactionQuery) {
+  const where = transactionFilters(db, { ...q, kind: undefined, needs_review: undefined, needs_receipt: undefined });
+  const n = (cond: SQL) => sql<number>`coalesce(sum(CASE WHEN ${cond} THEN 1 ELSE 0 END), 0)`;
+  return db
+    .select({
+      all: count(),
+      income: n(sql`${categories.kind} = 'income'`),
+      expense: n(sql`${categories.kind} = 'expense'`),
+      needs_review: n(sql`${t.needsReview} = 1`),
+      needs_receipt: n(needsReceipt()),
+    })
+    .from(t)
+    .innerJoin(categories, eq(categories.id, t.categoryId))
+    .where(where)
+    .get()!;
 }
 
 function checkSign(category: Category, amountCents: number, refund: boolean) {

@@ -12,9 +12,10 @@ import {
 } from "../calendar.ts";
 import { fmtDate, monthTitle, shiftMonth, thisMonth, today } from "../format.ts";
 import { propertySettingsPath } from "../scope.ts";
-import { useApi, usePersistentState, useSession, useToast, useProperty } from "../hooks.ts";
+import { useApi, usePersistentState, useScopedPath, useSession, useToast, useProperty } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 import { KindToggle } from "../components/OwnerStays.tsx";
+import { MonthNav } from "../components/MonthPicker.tsx";
 import { saveOwnerStay, type StayKind } from "../owner-stays.ts";
 
 type Kind = "reserved" | "blocked";
@@ -79,12 +80,14 @@ export default function Calendar() {
   const { canWrite, settings } = useSession();
   const toast = useToast();
   const propertyId = useProperty().single;
+  // The month is in the address (?month=), so links can open one and Back steps through them; without one, the
+  // month last looked at on this device.
   const linked = useSearchParams()[0].get("month");
-  const [month, setMonth] = usePersistentState(
-    "cal-month",
-    thisMonth(),
-    linked && /^\d{4}-\d{2}$/.test(linked) ? linked : undefined,
-  );
+  const [saved] = usePersistentState("cal-month", thisMonth());
+  const month = linked && /^\d{4}-\d{2}$/.test(linked) ? linked : saved;
+  useEffect(() => localStorage.setItem("cal-month", JSON.stringify(month)), [month]);
+  const scoped = useScopedPath();
+  const monthPath = (m: string) => scoped(`/calendar?month=${m}`);
   // the month before and after come along so bars reach into the greyed days at the edges of the grid
   const { data, reload } = useApi<CalendarData>(
     `calendar?from=${shiftMonth(month, -1)}&to=${shiftMonth(month, 1)}&property_id=${propertyId}`,
@@ -185,7 +188,7 @@ export default function Calendar() {
   return (
     <div className="page">
       <header className="page-head">
-        <h1>Calendar</h1>
+        <MonthNav ym={month} to={monthPath} />
         <button
           className="cal-info-btn"
           onClick={() => setHelp(!help)}
@@ -243,19 +246,6 @@ export default function Calendar() {
       )}
 
       <div className="cal-nav">
-        <button className="btn small" onClick={() => setMonth(shiftMonth(month, -1))} aria-label="Previous month">
-          ‹
-        </button>
-        <h2>{monthTitle(month)}</h2>
-        <button className="btn small" onClick={() => setMonth(shiftMonth(month, 1))} aria-label="Next month">
-          ›
-        </button>
-        {month !== thisMonth() && (
-          <button className="btn small ghost" onClick={() => setMonth(thisMonth())}>
-            This month
-          </button>
-        )}
-        <span className="spacer" />
         <div className="cal-legend" aria-hidden="true">
           {(["reserved", "blocked"] as const).map((k) => (
             <span key={k}>

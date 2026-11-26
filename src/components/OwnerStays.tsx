@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api.ts";
 import { monthTitle } from "../format.ts";
-import { useApi, useSession, useToast } from "../hooks.ts";
+import { useApi, useSession, useToast, useConfirm } from "../hooks.ts";
 import TodoRow from "./TodoRow.tsx";
 import { scopePath } from "../scope.ts";
 import {
@@ -170,12 +170,15 @@ function GuestNightRow({ m, onChange }: { m: GuestMonth; onChange: () => void })
   const [note, setNote] = useState("");
   const cal = m.calendar!;
 
-  const apply = () => {
+  const confirm = useConfirm();
+  const apply = async () => {
     if (
       m.calendar_lower &&
-      !confirm(
-        `The calendar has fewer nights than you entered for ${monthTitle(m.month)}. Direct bookings aren't on the calendar. Use the calendar's numbers anyway?`,
-      )
+      !(await confirm({
+        title: "Use the calendar's numbers?",
+        message: `The calendar has fewer nights than you entered for ${monthTitle(m.month)}. Direct bookings aren't on the calendar.`,
+        confirm: "Use the calendar's",
+      }))
     )
       return;
     void run(async () => {
@@ -346,10 +349,27 @@ export function OwnerStaysPanel({
       setStart("");
       setEnd("");
     });
-  const remove = (s: OwnerStay) => {
-    if (confirm(`Delete the owner stay ${rangeLabel(s)}?`))
-      void run(() => api(`owner-stays/${s.id}`, { method: "DELETE" }));
-  };
+  // no question: Undo saves the same stay again
+  const remove = (s: OwnerStay) =>
+    run(async () => {
+      await api(`owner-stays/${s.id}`, { method: "DELETE" });
+      toast({
+        text: `Deleted the owner stay ${rangeLabel(s)}`,
+        kind: "ok",
+        action: {
+          label: "Undo",
+          run: () =>
+            void run(() =>
+              saveOwnerStay(toast, {
+                property_id: propertyId,
+                start_date: s.start_date,
+                end_date: s.end_date,
+                kind: s.kind ?? "owner",
+              }),
+            ),
+        },
+      });
+    });
 
   return (
     <section className="card" aria-labelledby="owner-stays-h">

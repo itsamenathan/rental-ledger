@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import type { Allocation, Transaction } from "../api.ts";
+import { qs, type Allocation, type Transaction, type TxList } from "../api.ts";
 import TxForm, { type TxPrefill } from "../components/TxForm.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
 import { OutboxList } from "../components/Outbox.tsx";
-import { fmtDate, thisMonth } from "../format.ts";
-import { useToast, useScopedPath } from "../hooks.ts";
-import { AllocationBadge, Amount } from "../lib.tsx";
+import { TxRow, type RowCtx } from "../components/TxRows.tsx";
+import { money, thisMonth } from "../format.ts";
+import { txParts } from "../month-view.ts";
+import { useApi, usePendingByEntry, useSession, useToast, useScopedPath } from "../hooks.ts";
 
 export default function AddEntry() {
   const scoped = useScopedPath();
@@ -28,6 +29,26 @@ export default function AddEntry() {
     description: params.get("description") ?? undefined,
   };
   const back = params.get("back");
+  // The saved rows read back from the list (it adds needs_receipt and shows later edits), newest first. While it
+  // loads, the copy the save returned stands in; once it has answered, an entry it no longer has was deleted.
+  const list = useApi<TxList>(
+    added.length ? `transactions${qs({ ids: added.map((t) => t.id).join(","), limit: 500 })}` : null,
+  );
+  const fresh = new Map(list.data?.items.map((t) => [t.id, t]));
+  const settled = list.data && !list.loading;
+  const addedRows = added.flatMap((t) => {
+    const row = fresh.get(t.id);
+    return row ? [row] : settled ? [] : [t];
+  });
+  const { canWrite } = useSession();
+  const pending = usePendingByEntry();
+  const ctx: RowCtx = {
+    canWrite,
+    showProperty: false,
+    onOpen: setEditing,
+    onChanged: () => void list.reload(),
+    pending,
+  };
 
   return (
     <div className="page narrow">
@@ -49,28 +70,18 @@ export default function AddEntry() {
           compact
           onSaved={(t, { another }) => {
             setAdded((a) => [t, ...a]);
-            toast({ text: `Saved ${t.category} ${Math.abs(t.amount).toFixed(2)}`, kind: "ok" });
+            toast({ text: `Saved ${txParts(t).main} ${money(Math.abs(t.amount))}`, kind: "ok" });
             if (!another) void navigate(scoped(back?.startsWith("/") ? back : "/transactions"));
           }}
           onQueued={(text) => toast({ text, kind: "ok" })}
         />
       </div>
-      {added.length > 0 && (
+      {addedRows.length > 0 && (
         <section className="card">
           <h2>Added just now</h2>
-          <ul className="tx-mini">
-            {added.map((t) => (
-              <li key={t.id}>
-                <button className="row-btn" onClick={() => setEditing(t.id)}>
-                  <span>{fmtDate(t.date)}</span>
-                  <span>
-                    {t.category}
-                    {t.vendor && <small> · {t.vendor}</small>}
-                  </span>
-                  <AllocationBadge value={t.allocation} />
-                  <Amount value={t.amount} />
-                </button>
-              </li>
+          <ul className="tx-mini tx-flat">
+            {addedRows.map((t) => (
+              <TxRow key={t.id} t={t} ctx={ctx} withCategory />
             ))}
           </ul>
         </section>
@@ -81,7 +92,7 @@ export default function AddEntry() {
           id={editing}
           initial={added.find((t) => t.id === editing)}
           onClose={() => setEditing(null)}
-          onChanged={() => setAdded([])}
+          onChanged={() => void list.reload()}
         />
       )}
     </div>

@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { api, ApiError, type Allocation, type Attachment, type Transaction } from "../api.ts";
 import { fmtDate, money, today } from "../format.ts";
-import { useApi, useSession, useProperty } from "../hooks.ts";
+import { useApi, useSession, useProperty, useConfirm } from "../hooks.ts";
 import {
   asText,
   editQueued,
@@ -122,6 +122,7 @@ function changedFields(before: Seed, payload: Record<string, unknown>) {
 
 export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueued, onDelete, compact }: Props) {
   const { overview, user } = useSession();
+  const confirm = useConfirm();
   const sugg = useApi<Suggestions>("suggestions");
   const currentProperty = useProperty().single;
   const [seed] = useState<Seed | undefined>(() =>
@@ -345,7 +346,15 @@ export default function TxForm({ existing, queued, prefill = {}, onSaved, onQueu
   };
 
   const removeAttachment = async (id: number) => {
-    if (!confirm("Delete this attachment?")) return;
+    if (
+      !(await confirm({
+        title: "Delete this receipt?",
+        message: "The file is removed from this entry.",
+        confirm: "Delete",
+        danger: true,
+      }))
+    )
+      return;
     await api(`attachments/${id}`, { method: "DELETE" });
     setAttachments((a) => a.filter((x) => x.id !== id));
   };

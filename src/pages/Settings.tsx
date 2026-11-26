@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, NavLink, Navigate, Route, Routes } from "react-router";
 import { api, type Property, type UserSettings } from "../api.ts";
-import { useApi, useProperty, useSession, useToast } from "../hooks.ts";
+import { useApi, useProperty, useSession, useToast, useConfirm } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 import CategorySettings from "./CategorySettings.tsx";
 import { PropertyCalendars } from "../components/CalendarFeeds.tsx";
@@ -198,6 +198,7 @@ function ApiKeys() {
   const [scope, setScope] = useState("write");
   const [created, setCreated] = useState<string | null>(null);
   const toast = useToast();
+  const confirm = useConfirm();
   const origin = location.origin;
 
   const create = async (e: FormEvent) => {
@@ -212,7 +213,15 @@ function ApiKeys() {
     }
   };
   const revoke = async (id: number) => {
-    if (!confirm("Revoke this key? Anything using it will stop working.")) return;
+    if (
+      !(await confirm({
+        title: "Revoke this key?",
+        message: "Anything using it will stop working.",
+        confirm: "Revoke key",
+        danger: true,
+      }))
+    )
+      return;
     await api(`api-keys/${id}`, { method: "DELETE" });
     void reload();
   };
@@ -850,11 +859,12 @@ function details(r: AuditRow) {
 function AuditLog() {
   const { canWrite } = useSession();
   const toast = useToast();
+  const confirm = useConfirm();
   const [offset, setOffset] = useState(0);
   const [logins, setLogins] = useState(false);
   const { data, reload } = useApi<AuditRow[]>(`audit?limit=100&offset=${offset}${logins ? "" : "&hide_logins=true"}`);
   const undo = async (r: AuditRow) => {
-    if (!confirm(`Undo this change?\n\n${r.undo}`)) return;
+    if (!(await confirm({ title: "Undo this change?", message: r.undo ?? "", confirm: "Undo" }))) return;
     try {
       await api(`audit/${r.id}/undo`, { method: "POST" });
       toast({ text: "Undone", kind: "ok" });

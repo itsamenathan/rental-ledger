@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { api, qs, type TxList } from "../api.ts";
+import { qs, type Transaction, type TxCounts, type TxList } from "../api.ts";
 import TxEditModal from "../components/TxEditModal.tsx";
-import { fmtDate, money } from "../format.ts";
-import { useApi, useOutbox, useSession, useToast, useProperty } from "../hooks.ts";
-import { AllocationBadge, Amount } from "../lib.tsx";
+import { BulkBar, SelectToggle, TxRow, type RowCtx } from "../components/TxRows.tsx";
+import { money, monthTitle } from "../format.ts";
+import { useApi, usePendingByEntry, useSession, useProperty, useTxSelection, useWorkingYear } from "../hooks.ts";
 
 const PAGE = 100;
+/** Every filter the page sends to the API, so links from other pages (To do, Reports, Files…) keep working. */
 const FILTER_KEYS = [
   "year",
   "month",
@@ -15,27 +16,47 @@ const FILTER_KEYS = [
   "allocation",
   "q",
   "amount",
+  "min_amount",
+  "max_amount",
   "needs_review",
   "has_attachment",
   "needs_receipt",
   "vendor",
 ] as const;
+/** the filters behind the "Filters" button */
+const MORE_KEYS = ["month", "category", "allocation", "amount", "min_amount", "max_amount", "has_attachment", "vendor"];
 
+type Chip = "all" | "income" | "expense" | "review" | "receipt";
+/** `count` = its number in the API's `counts`; optional chips hide when nothing would show, as on the Month page */
+const CHIPS: { key: Chip; label: string; count: keyof TxCounts; optional?: boolean }[] = [
+  { key: "all", label: "All", count: "all" },
+  { key: "income", label: "Income", count: "income" },
+  { key: "expense", label: "Expenses", count: "expense" },
+  { key: "review", label: "Flagged", count: "needs_review", optional: true },
+  { key: "receipt", label: "Needs receipt", count: "needs_receipt", optional: true },
+];
+const SORTS = [
+  ["date_desc", "Newest first"],
+  ["date_asc", "Oldest first"],
+  ["amount_desc", "Largest first"],
+  ["amount_asc", "Smallest first"],
+  ["updated_desc", "Recently changed"],
+] as const;
+
+/**
+ * Every entry, filtered and paged by the server. Rows look and behave like the Month page's list (same chips, search,
+ * flag and receipt icons); this page adds the year, the filters the month list has no need for, select mode for
+ * changing several entries at once, and month headings while the list is in date order.
+ */
 export default function Transactions() {
   const { path: scoped, key: propertyKey } = useProperty();
-  const all = propertyKey === "all";
   const { overview, canWrite } = useSession();
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState(params.get("q") ?? "");
   const [amount, setAmount] = useState(params.get("amount") ?? "");
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const sel = useTxSelection();
   const [editing, setEditing] = useState<number | null>(null);
-  const toast = useToast();
-  // Changes saved offline and not yet synced, by entry (the list itself shows the server's copy until then).
-  const outbox = useOutbox();
-  const pending = new Map(
-    outbox.entries.filter((e) => e.tx_id != null && e.op !== "create").map((e) => [e.tx_id!, e.op]),
-  );
+  const pending = usePendingByEntry();
 
   // Default to the current year. ?year=all shows every year; a month filter implies its own year.
   const yearParam = params.get("year");
@@ -44,13 +65,18 @@ export default function Transactions() {
     ...Object.fromEntries(FILTER_KEYS.map((k) => [k, params.get(k) ?? ""])),
     property_id: propertyKey,
   };
-  filters.year = allYears ? "" : yearParam || (filters.month ? "" : String(new Date().getFullYear()));
+  // with no year in the address, the shared working year (picked here or on Overview, Categories, Occupancy…)
+  const [workingYear, setWorkingYear] = useWorkingYear();
+  filters.year = allYears ? "" : yearParam || (filters.month ? "" : String(workingYear));
   const offset = Number(params.get("offset") ?? 0);
-  const query = qs({ ...filters, limit: PAGE, offset, sort: params.get("sort") ?? "date_desc" });
+  const sort = params.get("sort") ?? "date_desc";
+  const query = qs({ ...filters, limit: PAGE, offset, sort, counts: "true" });
   const { data, error, loading, reload } = useApi<TxList>(`transactions${query}`);
 
-  useEffect(() => setSelected(new Set()), [query]);
-  // debounce search box into the URL
+  const moreActive = MORE_KEYS.filter((k) => params.get(k)).length;
+  const [moreOpen, setMoreOpen] = useState(moreActive > 0);
+
+  // debounce the text boxes into the URL
   useEffect(() => {
     const t = setTimeout(() => {
       if ((params.get("q") ?? "") !== search) set("q", search);
@@ -66,51 +92,63 @@ export default function Transactions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amount]);
 
-  function set(key: string, value: string) {
+  function update(patch: Record<string, string>) {
     const next = new URLSearchParams(params);
-    if (value) next.set(key, value);
-    else next.delete(key);
+    for (const [k, v] of Object.entries(patch)) {
+      if (v) next.set(k, v);
+      else next.delete(k);
+    }
     next.delete("offset");
     setParams(next, { replace: true });
   }
+  const set = (key: string, value: string) => update({ [key]: value });
 
-  const toggle = (id: number) =>
-    setSelected((s) => {
-      const n = new Set(s);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
+  // Each chip lights up from its own filter, so a link that combines them (expenses that need a receipt) shows both;
+  // picking a chip makes it the only one, like on the Month page.
+  const chipOn: Record<Chip, boolean> = {
+    income: filters.kind === "income",
+    expense: filters.kind === "expense",
+    review: filters.needs_review === "true",
+    receipt: filters.needs_receipt === "true",
+    all: false,
+  };
+  chipOn.all = !chipOn.income && !chipOn.expense && !chipOn.review && !chipOn.receipt;
+  const pickChip = (c: Chip) =>
+    update({
+      kind: c === "income" || c === "expense" ? c : "",
+      needs_review: c === "review" ? "true" : "",
+      needs_receipt: c === "receipt" ? "true" : "",
     });
-  const allOnPage = data?.items.length ? data.items.every((t) => selected.has(t.id)) : false;
-
-  const bulk = async (patch: Record<string, unknown>, label: string) => {
-    const ids = [...selected];
-    try {
-      await api("transactions/bulk-update", { method: "POST", json: { ids, patch } });
-      toast({ text: `${label}: ${ids.length} updated`, kind: "ok" });
-      void reload();
-    } catch (e) {
-      toast({ text: (e as Error).message, kind: "error" });
-    }
-  };
-  const bulkDelete = async () => {
-    const ids = [...selected];
-    if (!confirm(`Delete ${ids.length} transaction(s)?`)) return;
-    await api("transactions/bulk-delete", { method: "POST", json: { ids } });
-    toast({ text: `${ids.length} deleted`, kind: "ok" });
-    void reload();
-  };
 
   const yearSel = allYears ? "all" : filters.year || (filters.month ?? "").slice(0, 4);
-  const active = FILTER_KEYS.filter((k) => params.get(k)).length;
+  const narrowed = FILTER_KEYS.some((k) => k !== "year" && params.get(k));
   const years = [...new Set([new Date().getFullYear(), ...overview.years])].sort((a, b) => b - a);
+  const clear = () => {
+    setSearch("");
+    setAmount("");
+    const next = new URLSearchParams();
+    if (params.get("year")) next.set("year", params.get("year")!);
+    if (params.get("sort")) next.set("sort", params.get("sort")!);
+    setParams(next, { replace: true });
+  };
+
+  const ctx: RowCtx = {
+    canWrite,
+    showProperty: propertyKey === "all",
+    onOpen: setEditing,
+    onChanged: () => void reload(),
+    pending,
+    select: sel.ctx,
+  };
+  // in date order the page reads as months, each heading a link to that month's page
+  const groups = sort.startsWith("date_") ? byMonth(data?.items ?? []) : [{ ym: "", items: data?.items ?? [] }];
 
   return (
     <div className="page">
       <header className="page-head">
         <h1>Transactions</h1>
         <div className="head-actions">
-          <a className="btn" href={`/api/export/transactions.csv${qs(filters)}`}>
+          <a className="btn" href={`/api/export/transactions.csv${qs({ ...filters, sort })}`}>
             Export CSV
           </a>
           {canWrite && (
@@ -126,281 +164,217 @@ export default function Transactions() {
         </div>
       </header>
 
-      <div className="filters card">
-        <input
-          type="search"
-          placeholder="Search vendor, description, ref, $amount…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          aria-label="Search"
-        />
-        <input
-          className="amount-search"
-          inputMode="decimal"
-          placeholder="Amount: 69.95, 50-100, >500, ~70"
-          title="Amount (sign ignored): 69.95 exact · 70 = $70.00–70.99 · 50-100 range · >500 · <20 · ~70 within 10%"
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          aria-label="Amount"
-        />
-        <select
-          value={yearSel}
-          onChange={(e) => {
-            const next = new URLSearchParams(params);
-            next.set("year", e.target.value);
-            next.delete("month");
-            next.delete("offset");
-            setParams(next, { replace: true });
-          }}
-          aria-label="Year"
-        >
-          <option value="all">All years</option>
-          {years.map((y) => (
-            <option key={y}>{y}</option>
-          ))}
-        </select>
-        <select
-          value={filters.month ? filters.month.slice(5) : ""}
-          onChange={(e) => set("month", e.target.value && !allYears ? `${yearSel}-${e.target.value}` : "")}
-          disabled={allYears}
-          aria-label="Month"
-        >
-          <option value="">All months</option>
-          {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, "0")).map((m) => (
-            <option key={m} value={m}>
-              {new Date(2000, Number(m) - 1).toLocaleString("en-US", { month: "long" })}
-            </option>
-          ))}
-        </select>
-        <select value={filters.category} onChange={(e) => set("category", e.target.value)} aria-label="Category">
-          <option value="">All categories</option>
-          {overview.categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-              {c.archived ? " (archived)" : ""}
-            </option>
-          ))}
-        </select>
-        <select value={filters.kind} onChange={(e) => set("kind", e.target.value)} aria-label="Type">
-          <option value="">Income &amp; expenses</option>
-          <option value="income">Income</option>
-          <option value="expense">Expenses</option>
-        </select>
-        <select
-          value={filters.allocation}
-          onChange={(e) => set("allocation", e.target.value)}
-          aria-label="Tax treatment"
-        >
-          <option value="">Direct &amp; indirect</option>
-          <option value="direct">Direct</option>
-          <option value="indirect">Indirect</option>
-          <option value="none">Not set</option>
-        </select>
-        <select
-          value={filters.needs_receipt === "true" ? "needs" : filters.has_attachment}
-          onChange={(e) => {
-            // "Needs a receipt" uses the category/vendor receipt rules (same list as To do, Files and the tax check)
-            const v = e.target.value;
-            const next = new URLSearchParams(params);
-            next.delete("has_attachment");
-            next.delete("needs_receipt");
-            if (v === "needs") next.set("needs_receipt", "true");
-            else if (v) next.set("has_attachment", v);
-            next.delete("offset");
-            setParams(next, { replace: true });
-          }}
-          aria-label="Receipts"
-        >
-          <option value="">Any receipt status</option>
-          <option value="true">Has receipt</option>
-          <option value="false">No receipt</option>
-          <option value="needs">Needs a receipt</option>
-        </select>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={filters.needs_review === "true"}
-            onChange={(e) => set("needs_review", e.target.checked ? "true" : "")}
-          />
-          Needs review
-        </label>
-        {active > 0 && (
-          <button
-            className="link"
-            onClick={() => {
-              setSearch("");
-              setAmount("");
-              setParams(new URLSearchParams(), { replace: true });
-            }}
-          >
-            Clear filters
-          </button>
-        )}
-      </div>
-
-      {data && (
-        <div className="totals-bar">
-          <span>
-            <strong>{data.total.toLocaleString()}</strong> transactions
-          </span>
-          <span>
-            Income <strong className="pos">{money(data.totals.income)}</strong>
-          </span>
-          <span>
-            Expenses <strong className="neg">{money(data.totals.expense)}</strong>
-          </span>
-          <span>
-            Net <strong>{money(data.totals.net)}</strong>
-          </span>
+      <section className="card tx-card">
+        <div className="section-head">
+          <h2>{yearSel === "all" ? "All years" : filters.month ? monthTitle(filters.month) : yearSel}</h2>
+          {data && (
+            <span className="tx-summary muted small">
+              <span>
+                {data.total.toLocaleString()} {data.total === 1 ? "entry" : "entries"}
+              </span>
+              <span>
+                In <strong className="pos">{money(data.totals.income)}</strong>
+              </span>
+              <span>
+                Out <strong className="neg">{money(data.totals.expense)}</strong>
+              </span>
+              <span>
+                Net <strong>{money(data.totals.net)}</strong>
+              </span>
+            </span>
+          )}
         </div>
-      )}
 
-      {selected.size > 0 && canWrite && (
-        <div className="bulk-bar card">
-          <strong>{selected.size} selected</strong>
-          <select
-            defaultValue=""
-            onChange={(e) =>
-              e.target.value &&
-              void bulk({ category_id: Number(e.target.value) }, "Category changed").then(() => (e.target.value = ""))
-            }
-            aria-label="Set category"
-          >
-            <option value="">Set category…</option>
-            {overview.categories
-              .filter((c) => !c.archived)
-              .map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-          </select>
-          <button className="btn small" onClick={() => void bulk({ allocation: "direct" }, "Marked direct")}>
-            Direct
-          </button>
-          <button className="btn small" onClick={() => void bulk({ allocation: "indirect" }, "Marked indirect")}>
-            Indirect
-          </button>
-          <button className="btn small" onClick={() => void bulk({ needs_review: false }, "Reviewed")}>
-            Mark reviewed
-          </button>
-          <button className="btn small danger-outline" onClick={() => void bulkDelete()}>
-            Delete
-          </button>
-          <button className="link" onClick={() => setSelected(new Set())}>
-            Clear
-          </button>
-        </div>
-      )}
-
-      {error && <div className="alert error">{error}</div>}
-      <div className={`card table-card ${loading ? "loading" : ""}`}>
-        <table className="tx-table">
-          <thead>
-            <tr>
-              {canWrite && (
-                <th className="sel">
-                  <input
-                    type="checkbox"
-                    checked={allOnPage}
-                    aria-label="Select all on page"
-                    onChange={() => setSelected(allOnPage ? new Set() : new Set(data?.items.map((t) => t.id)))}
-                  />
-                </th>
-              )}
-              <th>
-                <SortHeader label="Date" asc="date_asc" desc="date_desc" params={params} set={set} />
-              </th>
-              <th>Category</th>
-              <th>Vendor / description</th>
-              <th>Tax</th>
-              <th className="num">
-                <SortHeader label="Amount" asc="amount_asc" desc="amount_desc" params={params} set={set} />
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {data?.items.map((t) => (
-              <tr key={t.id} className={t.needs_review ? "flagged" : ""} onClick={() => setEditing(t.id)}>
-                {canWrite && (
-                  <td className="sel" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={selected.has(t.id)}
-                      onChange={() => toggle(t.id)}
-                      aria-label={`Select #${t.id}`}
-                    />
-                  </td>
-                )}
-                <td className="date">{fmtDate(t.date)}</td>
-                <td>
-                  {t.category}
-                  {t.subcategory && <small className="muted"> · {t.subcategory}</small>}
-                  {all && <small className="tx-property">{t.property}</small>}
-                </td>
-                <td className="desc">
-                  {t.vendor && <strong>{t.vendor} </strong>}
-                  <span className="muted">{t.description || t.reference}</span>
-                  {t.attachment_count > 0 && (
-                    <span className="clip" title={`${t.attachment_count} receipt(s)`}>
-                      📎
-                    </span>
-                  )}
-                  {pending.has(t.id) && (
-                    <span className="badge muted" title="Saved on this device; syncs when you're back online">
-                      {pending.get(t.id) === "delete"
-                        ? "Delete waiting to sync"
-                        : pending.get(t.id) === "attach"
-                          ? "Receipt waiting to sync"
-                          : "Changes waiting to sync"}
-                    </span>
-                  )}
-                  {t.needs_review && (
-                    <span className="badge warn" title={t.review_note}>
-                      ⚑ Review
-                    </span>
-                  )}
-                </td>
-                <td>
-                  <AllocationBadge value={t.allocation} />
-                </td>
-                <td className="num">
-                  <Amount value={t.amount} />
-                </td>
-              </tr>
+        <div className="tx-toolbar">
+          <div className="chips" role="group" aria-label="Show">
+            {CHIPS.filter((c) => !c.optional || chipOn[c.key] || !data?.counts || data.counts[c.count] > 0).map((c) => (
+              <button
+                key={c.key}
+                className={`chip ${chipOn[c.key] ? "on" : ""}`}
+                aria-pressed={chipOn[c.key]}
+                onClick={() => pickChip(c.key)}
+              >
+                {c.label} {data?.counts && <small>{data.counts[c.count].toLocaleString()}</small>}
+              </button>
             ))}
-            {data && data.items.length === 0 && (
-              <tr>
-                <td colSpan={6} className="empty">
-                  No transactions match.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {data && data.total > PAGE && (
-        <div className="pager">
-          <button
-            className="btn"
-            disabled={offset === 0}
-            onClick={() => setParams((p) => (p.set("offset", String(Math.max(0, offset - PAGE))), p))}
-          >
-            ← Newer
-          </button>
-          <span>
-            {offset + 1}–{Math.min(offset + PAGE, data.total)} of {data.total}
-          </span>
-          <button
-            className="btn"
-            disabled={offset + PAGE >= data.total}
-            onClick={() => setParams((p) => (p.set("offset", String(offset + PAGE)), p))}
-          >
-            Older →
-          </button>
+          </div>
+          <SelectToggle sel={sel} />
         </div>
-      )}
+
+        <div className="tx-tools">
+          <input
+            type="search"
+            className="tx-search"
+            placeholder="Search name, note, ref or amount"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search"
+          />
+          <select
+            value={yearSel}
+            onChange={(e) => {
+              update({ year: e.target.value, month: "" });
+              if (e.target.value !== "all") setWorkingYear(Number(e.target.value));
+            }}
+            aria-label="Year"
+          >
+            <option value="all">All years</option>
+            {years.map((y) => (
+              <option key={y}>{y}</option>
+            ))}
+          </select>
+          <select
+            value={sort}
+            onChange={(e) => set("sort", e.target.value === "date_desc" ? "" : e.target.value)}
+            aria-label="Order"
+          >
+            {SORTS.map(([v, label]) => (
+              <option key={v} value={v}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <button
+            className={`btn small ${moreActive ? "has-count" : ""}`}
+            aria-expanded={moreOpen}
+            aria-controls="tx-more"
+            onClick={() => setMoreOpen((o) => !o)}
+          >
+            Filters{moreActive > 0 && <span className="count">{moreActive}</span>}
+          </button>
+          {narrowed && (
+            <button className="link" onClick={clear}>
+              Clear filters
+            </button>
+          )}
+        </div>
+
+        {moreOpen && (
+          <div className="tx-more" id="tx-more">
+            <label>
+              Month
+              <select
+                value={filters.month ? filters.month.slice(5) : ""}
+                onChange={(e) => set("month", e.target.value && !allYears ? `${yearSel}-${e.target.value}` : "")}
+                disabled={allYears}
+                title={allYears ? "Pick a year first" : undefined}
+              >
+                <option value="">All months</option>
+                {Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, "0")).map((m) => (
+                  <option key={m} value={m}>
+                    {new Date(2000, Number(m) - 1).toLocaleString("en-US", { month: "long" })}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Category
+              <select value={filters.category} onChange={(e) => set("category", e.target.value)}>
+                <option value="">All categories</option>
+                {overview.categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {c.archived ? " (archived)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Tax treatment
+              <select value={filters.allocation} onChange={(e) => set("allocation", e.target.value)}>
+                <option value="">Direct &amp; indirect</option>
+                <option value="direct">Direct</option>
+                <option value="indirect">Indirect</option>
+                <option value="none">Not set</option>
+              </select>
+            </label>
+            <label>
+              Receipt
+              <select value={filters.has_attachment} onChange={(e) => set("has_attachment", e.target.value)}>
+                <option value="">Any</option>
+                <option value="true">Has a receipt</option>
+                <option value="false">No receipt</option>
+              </select>
+            </label>
+            <label>
+              Amount
+              <input
+                inputMode="decimal"
+                placeholder="69.95, 50-100, >500, ~70"
+                title="Amount (sign ignored): 69.95 exact · 70 = $70.00–70.99 · 50-100 range · >500 · <20 · ~70 within 10%"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+              />
+            </label>
+            {/* filters that only arrive by link have no control of their own; show them so they can be removed */}
+            {(filters.vendor || filters.min_amount || filters.max_amount) && (
+              <div className="chips tx-link-filters">
+                {filters.vendor && (
+                  <button className="chip small on" onClick={() => set("vendor", "")} aria-label="Remove vendor filter">
+                    Name: {filters.vendor} ✕
+                  </button>
+                )}
+                {filters.min_amount && (
+                  <button className="chip small on" onClick={() => set("min_amount", "")} aria-label="Remove minimum">
+                    At least {money(Number(filters.min_amount))} ✕
+                  </button>
+                )}
+                {filters.max_amount && (
+                  <button className="chip small on" onClick={() => set("max_amount", "")} aria-label="Remove maximum">
+                    At most {money(Number(filters.max_amount))} ✕
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        <BulkBar sel={sel} ids={data?.items.map((t) => t.id) ?? []} onChanged={() => void reload()} />
+
+        {error && <div className="alert error">{error}</div>}
+        <div className={loading ? "loading" : ""}>
+          {data && data.items.length === 0 ? (
+            <p className="muted">No transactions match.</p>
+          ) : (
+            groups.map((g) => (
+              <div key={g.ym || "all"} className="tx-group">
+                {g.ym && (
+                  <h3 className="group-title">
+                    <Link to={scoped(`/months/${g.ym}`)}>{monthTitle(g.ym)} ›</Link>
+                  </h3>
+                )}
+                <ul className="tx-mini tx-flat">
+                  {g.items.map((t) => (
+                    <TxRow key={t.id} t={t} ctx={ctx} withCategory />
+                  ))}
+                </ul>
+              </div>
+            ))
+          )}
+        </div>
+
+        {data && data.total > PAGE && (
+          <div className="pager">
+            <button
+              className="btn"
+              disabled={offset === 0}
+              onClick={() => setParams((p) => (p.set("offset", String(Math.max(0, offset - PAGE))), p))}
+            >
+              ← Prev
+            </button>
+            <span>
+              {offset + 1}–{Math.min(offset + PAGE, data.total)} of {data.total.toLocaleString()}
+            </span>
+            <button
+              className="btn"
+              disabled={offset + PAGE >= data.total}
+              onClick={() => setParams((p) => (p.set("offset", String(offset + PAGE)), p))}
+            >
+              Next →
+            </button>
+          </div>
+        )}
+      </section>
 
       {editing && (
         <TxEditModal
@@ -414,24 +388,14 @@ export default function Transactions() {
   );
 }
 
-function SortHeader({
-  label,
-  asc,
-  desc,
-  params,
-  set,
-}: {
-  label: string;
-  asc: string;
-  desc: string;
-  params: URLSearchParams;
-  set: (k: string, v: string) => void;
-}) {
-  const sort = params.get("sort") ?? "date_desc";
-  const dir = sort === asc ? "↑" : sort === desc ? "↓" : "";
-  return (
-    <button className="th-btn" onClick={() => set("sort", sort === desc ? asc : desc)}>
-      {label} {dir}
-    </button>
-  );
+/** Consecutive entries of the same month, in the order they came. */
+function byMonth(items: Transaction[]) {
+  const out: { ym: string; items: Transaction[] }[] = [];
+  for (const t of items) {
+    const ym = t.date.slice(0, 7);
+    const last = out.at(-1);
+    if (last?.ym === ym) last.items.push(t);
+    else out.push({ ym, items: [t] });
+  }
+  return out;
 }

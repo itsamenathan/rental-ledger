@@ -1,18 +1,18 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, type Attachment, type MonthDetail } from "../api.ts";
-import { fmtDate, money, money0, monthTitle } from "../format.ts";
-import { useApi, usePersistentState, useSession, useToast } from "../hooks.ts";
-import { AllocationBadge, Amount } from "../lib.tsx";
+import { useState } from "react";
+import { type MonthDetail } from "../api.ts";
+import { money, money0, monthTitle } from "../format.ts";
+import { usePendingByEntry, usePersistentState, useSession, useTxSelection } from "../hooks.ts";
+import { Amount } from "../lib.tsx";
 import {
   applyView,
   isNarrowed,
   showCount,
-  txParts,
   type MonthView,
   type Tx,
   type TxLayout,
   type TxShow,
 } from "../month-view.ts";
+import { BulkBar, SelectToggle, TxRow, type RowCtx } from "./TxRows.tsx";
 
 const CHIPS: { key: TxShow; label: string; optional?: boolean }[] = [
   { key: "all", label: "All" },
@@ -21,14 +21,6 @@ const CHIPS: { key: TxShow; label: string; optional?: boolean }[] = [
   { key: "review", label: "Flagged", optional: true },
   { key: "receipt", label: "Needs receipt", optional: true },
 ];
-
-interface RowCtx {
-  canWrite: boolean;
-  /** the month adds up several properties, so say which one each entry is in */
-  showProperty: boolean;
-  onOpen: (id: number) => void;
-  onChanged: () => void;
-}
 
 export default function MonthTransactions({
   detail,
@@ -60,7 +52,9 @@ export default function MonthTransactions({
   const categories = [...new Map(items.map((t) => [t.category_id, t.category])).entries()].sort((a, b) =>
     a[1].localeCompare(b[1]),
   );
-  const ctx: RowCtx = { canWrite, showProperty, onOpen, onChanged };
+  const pending = usePendingByEntry();
+  const sel = useTxSelection();
+  const ctx: RowCtx = { canWrite, showProperty, onOpen, onChanged, pending, select: sel.ctx };
   const clear = () => {
     setText("");
     setView({ show: "all", q: "", cat: null });
@@ -93,20 +87,23 @@ export default function MonthTransactions({
                 </button>
               ))}
             </div>
-            <div className="segmented small" role="group" aria-label="Layout">
-              {(["list", "category"] as const).map((l) => (
-                <button
-                  key={l}
-                  className={layout === l ? "on" : ""}
-                  aria-pressed={layout === l}
-                  onClick={() => {
-                    setSaved(l);
-                    setView({ layout: l });
-                  }}
-                >
-                  {l === "list" ? "List" : "By category"}
-                </button>
-              ))}
+            <div className="tx-toolbar-end">
+              <div className="segmented small" role="group" aria-label="Layout">
+                {(["list", "category"] as const).map((l) => (
+                  <button
+                    key={l}
+                    className={layout === l ? "on" : ""}
+                    aria-pressed={layout === l}
+                    onClick={() => {
+                      setSaved(l);
+                      setView({ layout: l });
+                    }}
+                  >
+                    {l === "list" ? "List" : "By category"}
+                  </button>
+                ))}
+              </div>
+              <SelectToggle sel={sel} />
             </div>
           </div>
           <div className="tx-tools">
@@ -135,19 +132,21 @@ export default function MonthTransactions({
                 ))}
               </select>
             )}
-            <button
-              className="btn small"
-              onClick={() => setView({ sort: view.sort === "asc" ? "desc" : "asc" })}
-              title="Order by date"
+            <select
+              aria-label="Order"
+              value={view.sort}
+              onChange={(e) => setView({ sort: e.target.value === "desc" ? "desc" : "asc" })}
             >
-              {view.sort === "asc" ? "Oldest first ↑" : "Newest first ↓"}
-            </button>
+              <option value="asc">Oldest first</option>
+              <option value="desc">Newest first</option>
+            </select>
             {narrowed && (
               <button className="link" onClick={clear}>
                 Clear filters
               </button>
             )}
           </div>
+          <BulkBar sel={sel} ids={rows.map((t) => t.id)} onChanged={onChanged} />
           {rows.length === 0 ? (
             <p className="muted">Nothing matches.</p>
           ) : layout === "list" ? (
@@ -162,256 +161,6 @@ export default function MonthTransactions({
         </>
       )}
     </section>
-  );
-}
-
-function TxLabel({ t }: { t: Tx }) {
-  const { main, rest } = txParts(t);
-  return (
-    <>
-      {main}
-      {rest.map((r) => (
-        <small key={r} className="tx-sub">
-          {r}
-        </small>
-      ))}
-      {t.needs_review && <small className="tx-note">⚑ {t.review_note || "Flagged for review"}</small>}
-    </>
-  );
-}
-
-function TxRow({ t, ctx, withCategory }: { t: Tx; ctx: RowCtx; withCategory?: boolean }) {
-  const { hasName } = txParts(t);
-  // the category column says nothing new when the entry has no name of its own (the name already is the category)
-  const where = [withCategory && hasName ? t.category : null, ctx.showProperty ? t.property : null].filter(Boolean);
-  return (
-    <li className="tx-row">
-      <button className="row-btn" onClick={() => ctx.onOpen(t.id)}>
-        <span className="tx-date">{fmtDate(t.date)}</span>
-        <span className="tx-name">
-          <TxLabel t={t} />
-          {where.length > 0 && !withCategory && <small className="tx-where"> · {where.join(" · ")}</small>}
-          {/* a narrow screen has no date or category column: both go on one line under the name */}
-          <small className="tx-meta">{[fmtDate(t.date), ...where].join(" · ")}</small>
-        </span>
-        {withCategory && (
-          <span className="tx-cat muted small">
-            {hasName && <span>{t.category}</span>}
-            {ctx.showProperty && <small>{t.property}</small>}
-          </span>
-        )}
-        <AllocationBadge value={t.allocation} />
-        <Amount value={t.amount} />
-      </button>
-      <RowActions t={t} ctx={ctx} />
-    </li>
-  );
-}
-
-const Clip = () => (
-  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-    <path
-      d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l9-9a3.3 3.3 0 0 1 4.7 4.7l-9 9a1.7 1.7 0 0 1-2.4-2.4l8.3-8.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-/**
- * An entry's flag and receipt as two icons (amber = needs attention, green = receipt attached, faint = nothing yet).
- * Each opens a small popover that shows what's there and offers the action (receipts: the files and "add"; flag: the
- * reason, with a way to change or clear it).
- */
-function RowActions({ t, ctx }: { t: Tx; ctx: RowCtx }) {
-  const [open, setOpen] = useState<"receipt" | "flag" | null>(null);
-  const box = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(null);
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(null);
-    document.addEventListener("mousedown", away);
-    document.addEventListener("keydown", esc);
-    return () => {
-      document.removeEventListener("mousedown", away);
-      document.removeEventListener("keydown", esc);
-    };
-  }, [open]);
-
-  const receipts = t.attachment_count;
-  const receiptClass = t.needs_receipt ? "need" : receipts ? "has" : "idle";
-  const receiptLabel = t.needs_receipt
-    ? "Needs a receipt"
-    : receipts
-      ? `${receipts} ${receipts === 1 ? "receipt" : "receipts"} attached`
-      : "Add a receipt";
-  const clip = (
-    <>
-      <Clip />
-      {receipts > 0 && <small>{receipts}</small>}
-    </>
-  );
-
-  if (!ctx.canWrite) {
-    return (
-      <span className="row-actions">
-        {(t.needs_receipt || receipts > 0) && (
-          <span className={`act-btn ${receiptClass}`} title={receiptLabel}>
-            {clip}
-          </span>
-        )}
-      </span>
-    );
-  }
-  const icon = (kind: "receipt" | "flag", cls: string, label: string, content: ReactNode) => (
-    <button
-      className={`act-btn ${cls} ${open === kind ? "open" : ""}`}
-      aria-haspopup="dialog"
-      aria-expanded={open === kind}
-      aria-label={label}
-      title={label}
-      onClick={() => setOpen(open === kind ? null : kind)}
-    >
-      {content}
-    </button>
-  );
-  const flagLabel = t.needs_review
-    ? `Flagged for review${t.review_note ? `: ${t.review_note}` : ""}`
-    : "Flag for review";
-  return (
-    <span className="row-actions" ref={box}>
-      {icon("flag", t.needs_review ? "flagged" : "idle", flagLabel, "⚑")}
-      {icon("receipt", receiptClass, receiptLabel, clip)}
-      {open === "receipt" && <ReceiptPop t={t} ctx={ctx} onDone={() => setOpen(null)} />}
-      {open === "flag" && <FlagPop t={t} ctx={ctx} onDone={() => setOpen(null)} />}
-    </span>
-  );
-}
-
-/** Runs a change from a popover: busy state, a toast, a reload. */
-function useRowChange(ctx: RowCtx, onDone: () => void) {
-  const toast = useToast();
-  const [busy, setBusy] = useState(false);
-  const run = async (work: () => Promise<unknown>, done: string, action?: { label: string; run: () => void }) => {
-    setBusy(true);
-    try {
-      await work();
-      toast({ text: done, kind: "ok", action });
-      ctx.onChanged();
-      onDone();
-    } catch (e) {
-      toast({ text: (e as Error).message, kind: "error" });
-      setBusy(false);
-    }
-  };
-  return { busy, run };
-}
-
-function ReceiptPop({ t, ctx, onDone }: { t: Tx; ctx: RowCtx; onDone: () => void }) {
-  const files = useApi<Attachment[]>(`transactions/${t.id}/attachments`);
-  const { busy, run } = useRowChange(ctx, onDone);
-  const input = useRef<HTMLInputElement>(null);
-  const attach = (picked: FileList | null) => {
-    if (!picked?.length) return;
-    const form = new FormData();
-    for (const f of picked) form.append("file", f);
-    void run(() => api(`transactions/${t.id}/attachments`, { method: "POST", body: form }), "Receipt attached");
-  };
-  return (
-    <div className="row-pop" role="dialog" aria-label="Receipts">
-      {files.error ? (
-        <p className="muted small">{files.error}</p>
-      ) : !files.data ? (
-        <p className="muted small">Loading…</p>
-      ) : files.data.length === 0 ? (
-        <p className="small">
-          {t.needs_receipt ? "This expense needs a receipt and has none." : "No receipt attached."}
-        </p>
-      ) : (
-        <ul className="pop-files">
-          {files.data.map((f) => (
-            <li key={f.id}>
-              <span title={f.filename}>{f.filename}</span>
-              <a className="link small" href={`/api/attachments/${f.id}`} target="_blank" rel="noreferrer">
-                View
-              </a>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="pop-actions">
-        <button className="btn small" disabled={busy} onClick={() => input.current?.click()}>
-          {files.data?.length ? "Add another…" : "Choose file…"}
-        </button>
-        <button className="link small" onClick={() => ctx.onOpen(t.id)}>
-          Open entry
-        </button>
-      </div>
-      <input
-        ref={input}
-        type="file"
-        hidden
-        multiple
-        accept="image/*,application/pdf"
-        onChange={(e) => {
-          attach(e.target.files);
-          e.target.value = "";
-        }}
-      />
-    </div>
-  );
-}
-
-function FlagPop({ t, ctx, onDone }: { t: Tx; ctx: RowCtx; onDone: () => void }) {
-  const { busy, run } = useRowChange(ctx, onDone);
-  const [note, setNote] = useState(t.review_note);
-  const patch = (json: Record<string, unknown>) =>
-    api(`transactions/${t.id}`, { method: "PATCH", json: { ...json, expected_updated_at: t.updated_at } });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    const text = note.trim();
-    if (!t.needs_review) void run(() => patch({ needs_review: true, review_note: text }), "Flagged for review");
-    else if (text !== t.review_note) void run(() => patch({ review_note: text }), "Note saved");
-    else onDone();
-  };
-  return (
-    <form className="row-pop" role="dialog" aria-label="Flag for review" onSubmit={submit}>
-      <label className="small">
-        {t.needs_review ? "Why it's flagged" : "Why flag it? (optional)"}
-        <input
-          autoFocus
-          value={note}
-          maxLength={2000}
-          placeholder="e.g. check the amount against the statement"
-          onChange={(e) => setNote(e.target.value)}
-        />
-      </label>
-      <div className="pop-actions">
-        <button className="btn small primary" disabled={busy}>
-          {t.needs_review ? "Save note" : "Flag"}
-        </button>
-        {t.needs_review && (
-          <button
-            type="button"
-            className="btn small"
-            disabled={busy}
-            onClick={() =>
-              void run(() => patch({ needs_review: false }), "Flag cleared", {
-                // clearing a flag also clears its note, so offer to put both back
-                label: "Undo",
-                run: () =>
-                  void api(`transactions/${t.id}`, {
-                    method: "PATCH",
-                    json: { needs_review: true, review_note: t.review_note },
-                  }).then(ctx.onChanged),
-              })
-            }
-          >
-            Clear flag
-          </button>
-        )}
-      </div>
-    </form>
   );
 }
 

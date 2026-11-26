@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import type { CategoryMonths, Recurring, Totals, TxList } from "../api.ts";
 import {
@@ -9,10 +9,12 @@ import {
   type MonthPoint,
   type StackSeries,
 } from "../components/Charts.tsx";
+import TxEditModal from "../components/TxEditModal.tsx";
+import { TxRow, type RowCtx } from "../components/TxRows.tsx";
 import type { TodoSummary } from "./Todo.tsx";
-import { fmtDate, money, money0, monthLabel, percent, thisMonth, THIS_YEAR } from "../format.ts";
-import { useApi, usePersistentState, useSession, useProperty } from "../hooks.ts";
-import { AllocationBadge, Amount, YearSelect } from "../lib.tsx";
+import { money, money0, monthLabel, percent, thisMonth, THIS_YEAR } from "../format.ts";
+import { useApi, usePendingByEntry, useSession, useWorkingYear, useProperty } from "../hooks.ts";
+import { YearSelect } from "../lib.tsx";
 
 interface Summary {
   totals: Totals;
@@ -59,7 +61,7 @@ export default function Overview() {
   const scope = useProperty();
   const { path: scoped, qs: pq } = scope;
   const [params, setParams] = useSearchParams();
-  const [year, setYear] = usePersistentState("dash-year", THIS_YEAR);
+  const [year, setYear] = useWorkingYear();
   // /?year=2025 (e.g. from a month page) selects that year
   useEffect(() => {
     const y = Number(params.get("year"));
@@ -72,11 +74,20 @@ export default function Overview() {
   const rec = useApi<Recurring>(`recurring?${pq}`);
   const todo = useApi<TodoSummary>(`todo?${pq}`);
   const recent = useApi<TxList>(`transactions?limit=8&sort=updated_desc&${pq}`);
+  const [editing, setEditing] = useState<number | null>(null);
+  const pending = usePendingByEntry();
   const prev = useApi<Summary>(`reports/summary?year=${year - 1}&${pq}`);
   const cats = useApi<CategoryMonths>(`reports/categories?year=${year}&${pq}`);
   const years = useApi<(Totals & { year: number; nights_booked: number })[]>(`reports/years?${pq}`);
   const navigate = useNavigate();
   const { canWrite } = useSession();
+  const recentCtx: RowCtx = {
+    canWrite,
+    showProperty: scope.key === "all",
+    onOpen: setEditing,
+    onChanged: () => void recent.reload(),
+    pending,
+  };
   const openMonth = (m: string) => void navigate(scoped(`/months/${m}`));
 
   const missingByMonth = new Map<string, number>();
@@ -391,23 +402,26 @@ export default function Overview() {
             All transactions →
           </Link>
         </div>
-        <ul className="tx-mini">
+        <ul className="tx-mini tx-flat">
           {recent.data?.items.map((t) => (
-            <li key={t.id}>
-              <Link to={scoped(`/transactions?year=all&q=${t.id}`)} className="row-btn">
-                <span>{fmtDate(t.date)}</span>
-                <span>
-                  {t.category}
-                  {t.vendor && <small> · {t.vendor}</small>}
-                  {t.source !== "web" && <small className="muted"> · via {t.source}</small>}
-                </span>
-                <AllocationBadge value={t.allocation} />
-                <Amount value={t.amount} />
-              </Link>
-            </li>
+            <TxRow
+              key={t.id}
+              t={t}
+              ctx={recentCtx}
+              withCategory
+              note={t.source !== "web" ? `via ${t.source}` : undefined}
+            />
           ))}
         </ul>
       </section>
+      {editing && (
+        <TxEditModal
+          id={editing}
+          initial={recent.data?.items.find((t) => t.id === editing)}
+          onClose={() => setEditing(null)}
+          onChanged={() => void recent.reload()}
+        />
+      )}
     </div>
   );
 }

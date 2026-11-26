@@ -1,8 +1,8 @@
 import { Fragment, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { qs, type CategoryMonths } from "../api.ts";
-import { money, money0, monthLabel, THIS_YEAR } from "../format.ts";
-import { useApi, usePersistentState, useProperty } from "../hooks.ts";
+import { money, money0, monthLabel } from "../format.ts";
+import { useApi, useProperty, useWorkingYear } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
 
 type Row = CategoryMonths["rows"][number];
@@ -41,7 +41,7 @@ function group(rows: Row[]): Group[] {
 export default function Categories() {
   const { path: scoped, qs: pq } = useProperty();
   const [params, setParams] = useSearchParams();
-  const [savedYear, setYear] = usePersistentState("dash-year", THIS_YEAR);
+  const [savedYear, setYear] = useWorkingYear();
   const year = Number(params.get("year")) || savedYear;
   const kind = params.get("kind") === "income" ? "income" : "expense";
   const { data, error, loading } = useApi<CategoryMonths>(`reports/categories?year=${year}&${pq}`);
@@ -138,7 +138,10 @@ export default function Categories() {
                     <th scope="row" className="sticky-col">
                       {splittable ? (
                         <button className="th-btn" onClick={() => toggle(g.category_id)} aria-expanded={isOpen}>
-                          {isOpen ? "▾" : "▸"} {g.category}
+                          <span className="fold-mark" aria-hidden="true">
+                            {isOpen ? "▾" : "▸"}
+                          </span>
+                          {g.category}
                         </button>
                       ) : (
                         <span className="no-caret">{g.category}</span>
