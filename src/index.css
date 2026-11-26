@@ -1792,20 +1792,6 @@ tr.dirty td {
 .tx-flat li:first-child {
   border-top: 1px solid var(--border);
 }
-.tx-flat .tx-cat-inline {
-  display: none;
-}
-@media (max-width: 640px) {
-  .tx-flat .row-btn {
-    grid-template-columns: 1fr auto;
-  }
-  .tx-flat .tx-cat {
-    display: none;
-  }
-  .tx-flat .tx-cat-inline {
-    display: block;
-  }
-}
 
 .tx-tools {
   display: flex;
@@ -1839,6 +1825,63 @@ tr.dirty td {
 .row-btn .tx-note {
   display: block;
   color: #c98300;
+}
+.tx-row .tx-meta {
+  display: none;
+}
+.tx-row .tx-sub::before {
+  content: " · ";
+  white-space: pre;
+}
+/* a narrow screen: name and amount share the first line; date, category and property go on one line under the name */
+@media (max-width: 640px) {
+  .tx-row {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tx-row .row-btn,
+  .tx-flat .row-btn {
+    grid-template-columns: minmax(0, 1fr) minmax(4.6rem, auto);
+    align-items: start;
+    gap: 0.5rem;
+    padding: 0.7rem 0;
+    min-height: 5rem; /* room for the icons under the amount when the entry has no memo line */
+  }
+  .tx-row .row-btn > .tx-date,
+  .tx-row .row-btn > .tx-cat,
+  .tx-row .row-btn > .badge,
+  .tx-row .tx-where {
+    display: none;
+  }
+  .tx-row .row-btn > .tx-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .tx-row .tx-sub {
+    display: block;
+  }
+  .tx-row .tx-sub::before {
+    content: none;
+  }
+  .tx-row .tx-meta {
+    display: block;
+    margin-top: 0.1rem;
+    font-size: 0.78rem;
+  }
+  .tx-row .row-btn > :last-child {
+    white-space: nowrap;
+  }
+  /* flag and receipt sit under the amount instead of taking a column of their own */
+  .tx-row .row-actions {
+    position: absolute;
+    right: 0;
+    bottom: 0.2rem;
+    gap: 0;
+  }
+  .tx-row .row-actions .act-btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
 }
 .row-actions {
   position: relative;

@@ -171,7 +171,9 @@ function TxLabel({ t }: { t: Tx }) {
     <>
       {main}
       {rest.map((r) => (
-        <small key={r}> · {r}</small>
+        <small key={r} className="tx-sub">
+          {r}
+        </small>
       ))}
       {t.needs_review && <small className="tx-note">⚑ {t.review_note || "Flagged for review"}</small>}
     </>
@@ -185,15 +187,12 @@ function TxRow({ t, ctx, withCategory }: { t: Tx; ctx: RowCtx; withCategory?: bo
   return (
     <li className="tx-row">
       <button className="row-btn" onClick={() => ctx.onOpen(t.id)}>
-        <span>{fmtDate(t.date)}</span>
-        <span>
+        <span className="tx-date">{fmtDate(t.date)}</span>
+        <span className="tx-name">
           <TxLabel t={t} />
-          {where.length > 0 &&
-            (withCategory ? (
-              <small className="tx-cat-inline muted">{where.join(" · ")}</small>
-            ) : (
-              <small> · {where.join(" · ")}</small>
-            ))}
+          {where.length > 0 && !withCategory && <small className="tx-where"> · {where.join(" · ")}</small>}
+          {/* a narrow screen has no date or category column: both go on one line under the name */}
+          <small className="tx-meta">{[fmtDate(t.date), ...where].join(" · ")}</small>
         </span>
         {withCategory && (
           <span className="tx-cat muted small">
