@@ -592,6 +592,24 @@ label.check {
 .btn.block {
   width: 100%;
 }
+.btn.danger {
+  background: var(--neg);
+  border-color: var(--neg);
+  color: #fff;
+}
+.btn.danger:hover {
+  background: color-mix(in srgb, var(--neg) 85%, #000);
+}
+.confirm-text {
+  margin: 0 0 1rem;
+  white-space: pre-line;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
 .btn.danger-outline {
   color: var(--neg);
   border-color: color-mix(in srgb, var(--neg) 40%, var(--border));
@@ -991,25 +1009,6 @@ tr.dirty td {
   cursor: pointer;
   padding: 0;
 }
-.tx-table tbody tr {
-  cursor: pointer;
-}
-.tx-table tbody tr:hover td {
-  background: var(--surface-2);
-}
-.tx-table tr.flagged td:first-child {
-  box-shadow: inset 3px 0 0 var(--warning);
-}
-.tx-table .sel {
-  width: 36px;
-}
-.tx-table .date {
-  white-space: nowrap;
-  color: var(--text-2);
-}
-.tx-table .desc {
-  max-width: 420px;
-}
 .desc {
   overflow-wrap: anywhere;
 }
@@ -1025,56 +1024,6 @@ tr.dirty td {
 .cell-input.wide {
   width: 9rem;
   text-align: left;
-}
-
-@media (max-width: 720px) {
-  .tx-table thead {
-    display: none;
-  }
-  .tx-table,
-  .tx-table tbody {
-    display: block;
-  }
-  .tx-table tr {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    grid-template-areas: "sel cat amt" "sel desc tax" "sel date date";
-    gap: 0.1rem 0.6rem;
-    padding: 0.7rem 0.9rem;
-    border-bottom: 1px solid var(--grid);
-  }
-  .tx-table td {
-    padding: 0;
-    border: 0;
-  }
-  .tx-table td.sel {
-    grid-area: sel;
-    width: auto;
-    align-self: center;
-  }
-  .tx-table td:nth-last-child(5) {
-    grid-area: date;
-    font-size: 0.78rem;
-  }
-  .tx-table td:nth-last-child(4) {
-    grid-area: cat;
-    font-weight: 600;
-  }
-  .tx-table td:nth-last-child(3) {
-    grid-area: desc;
-    font-size: 0.85rem;
-  }
-  .tx-table td:nth-last-child(2) {
-    grid-area: tax;
-    text-align: right;
-  }
-  .tx-table td:last-child {
-    grid-area: amt;
-    font-weight: 600;
-  }
-  .tx-table td.empty {
-    grid-column: 1 / -1;
-  }
 }
 
 .filters {
@@ -1773,6 +1722,14 @@ tr.dirty td {
   gap: 0.6rem 1rem;
   margin: 0.6rem 0 0.75rem;
 }
+.tx-toolbar-end {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tx-toolbar-end > .btn {
+  min-height: 30px;
+}
 .tx-toolbar .chip {
   min-height: 30px;
   padding: 0.2rem 0.7rem;
@@ -1882,6 +1839,43 @@ tr.dirty td {
     min-width: 36px;
     min-height: 36px;
   }
+}
+/* a picker row (no flag/receipt buttons) */
+.tx-row.no-actions {
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (max-width: 640px) {
+  .tx-row.no-actions .row-btn {
+    min-height: 0;
+  }
+}
+/* select mode: a checkbox column before the row */
+.tx-row.selectable {
+  grid-template-columns: 2rem minmax(0, 1fr) 4.4rem;
+}
+@media (max-width: 640px) {
+  .tx-row.selectable {
+    grid-template-columns: 2rem minmax(0, 1fr);
+  }
+}
+.tx-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+}
+.tx-check input {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin: 0;
+}
+.tx-row.selected {
+  background: var(--accent-soft);
+}
+.row-btn .tx-pending {
+  display: block;
+  color: var(--text-2);
+  font-style: italic;
 }
 .row-actions {
   position: relative;
@@ -2123,18 +2117,19 @@ button.act-btn:hover,
   gap: 0.75rem;
   align-items: center;
   padding: 0.6rem 0;
-  cursor: pointer;
-  list-style: none;
 }
-.cat-group summary::-webkit-details-marker {
-  display: none;
+/* a grid summary: the marker goes on the name, not as a grid item of its own */
+.cat-group summary::before {
+  content: none;
 }
 .cat-group summary .cat-name::before {
-  content: "▸ ";
+  content: "▸";
+  display: inline-block;
+  width: 1.1em;
   color: var(--muted);
 }
 .cat-group[open] summary .cat-name::before {
-  content: "▾ ";
+  content: "▾";
 }
 .cat-group summary .amount {
   text-align: right;
@@ -2700,6 +2695,28 @@ a.todo-main {
     justify-content: flex-start;
   }
 }
+/* ---------- folding sections: one look for <details> and the toggle buttons that act like them ---------- */
+summary {
+  cursor: pointer;
+  list-style: none;
+}
+summary::-webkit-details-marker {
+  display: none;
+}
+summary::before,
+.fold-mark {
+  content: "▸";
+  display: inline-block;
+  width: 1.1em;
+  color: var(--muted);
+  font-weight: 400;
+}
+details[open] > summary::before {
+  content: "▾";
+}
+.section-toggle .fold-title {
+  font-weight: 650;
+}
 .section-toggle {
   display: flex;
   justify-content: space-between;
@@ -3003,19 +3020,9 @@ dl.details dd {
   gap: 1rem;
   flex-wrap: wrap;
   padding: 0.9rem 1.2rem;
-  cursor: pointer;
-  list-style: none;
-}
-.ms-block > summary::-webkit-details-marker {
-  display: none;
 }
 .ms-block > summary::before {
-  content: "▸";
-  color: var(--muted);
-  margin-right: 0.5rem;
-}
-.ms-block[open] > summary::before {
-  content: "▾";
+  margin-right: -0.5rem; /* the flex gap already spaces it */
 }
 .ms-title {
   font-weight: 650;
@@ -3067,11 +3074,6 @@ dl.details dd {
   gap: 0.8rem;
   align-items: end;
   margin-bottom: 0.9rem;
-}
-.ms-year {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
 }
 .ms-drop {
   display: grid;
@@ -3176,23 +3178,12 @@ dl.details dd {
   margin-top: 1.25rem;
 }
 .file-list,
-.file-links,
-.file-missing {
+.file-links {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.file-missing li {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 0.4rem 1rem;
-  align-items: center;
-  padding: 0.6rem 0.5rem;
-  margin: 0 -0.5rem;
-  border-top: 1px solid var(--grid);
-  border-radius: 8px;
-}
-.file-missing li.drop-over {
+.tx-row.drop-over {
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
   background: var(--surface-2);
@@ -3276,13 +3267,6 @@ dl.details dd {
     height: 48px;
   }
   .file-actions {
-    grid-column: 1 / -1;
-    justify-content: flex-start;
-  }
-  .file-missing li {
-    grid-template-columns: 1fr auto;
-  }
-  .file-missing .todo-actions {
     grid-column: 1 / -1;
     justify-content: flex-start;
   }
@@ -3411,7 +3395,6 @@ a.section-toggle:hover span:last-child {
   margin-top: 0.8rem;
 }
 .imp-advanced summary {
-  cursor: pointer;
   font-size: 0.88rem;
   font-weight: 550;
   color: var(--text-2);
@@ -3687,7 +3670,6 @@ select.imp-need {
   margin-top: 0.6rem;
 }
 .imp-errors summary {
-  cursor: pointer;
   font-weight: 550;
 }
 .imp-errors ul {
@@ -3988,12 +3970,6 @@ table.conflict thead th {
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
-}
-.cal-nav h2 {
-  margin: 0;
-  min-width: 9.5rem;
-  text-align: center;
-  font-size: 1.15rem;
 }
 .cal-legend {
   display: flex;
@@ -4626,5 +4602,147 @@ table.conflict thead th {
   }
   100% {
     opacity: 0;
+  }
+}
+
+/* ---------- Transactions page (same list as the Month page, filtered and paged by the server) ---------- */
+.tx-card .section-head {
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+.tx-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1rem;
+}
+.tx-summary strong {
+  font-weight: 650;
+}
+.tx-card .tx-toolbar > .btn {
+  min-height: 30px;
+}
+.btn .count {
+  display: inline-block;
+  min-width: 1.25rem;
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  text-align: center;
+}
+.tx-more {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: 0.6rem 0.75rem;
+  margin: -0.25rem 0 0.9rem;
+  padding: 0.75rem;
+  background: var(--surface-2);
+  border-radius: 9px;
+}
+.tx-more label {
+  margin: 0;
+  font-size: 0.78rem;
+}
+.tx-more select,
+.tx-more input {
+  min-height: 34px;
+  padding: 0.3rem 0.6rem;
+  width: 100%;
+}
+.tx-link-filters {
+  grid-column: 1 / -1;
+}
+.tx-bulk {
+  position: sticky;
+  top: 0.5rem;
+  z-index: 6;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+}
+.tx-bulk label.check {
+  margin: 0;
+}
+.tx-group + .tx-group .group-title {
+  margin-top: 1.1rem;
+}
+.tx-group .group-title a {
+  color: inherit;
+  text-decoration: none;
+}
+.tx-group .group-title a:hover {
+  color: var(--accent);
+}
+.tx-card .loading {
+  opacity: 0.6;
+}
+.tx-card .pager {
+  padding-bottom: 0;
+}
+@media (max-width: 640px) {
+  .tx-card {
+    padding: 0.9rem 0.9rem 0.6rem;
+  }
+  /* the chips scroll sideways in one line, with Select kept beside them */
+  .tx-card .tx-toolbar {
+    flex-wrap: nowrap;
+  }
+  .tx-card .tx-toolbar .chips {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: -2px 0;
+    padding: 2px 0;
+  }
+  /* fade the right edge so a cut-off chip reads as "scroll for more" */
+  .tx-card .tx-toolbar .chips {
+    mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);
+    padding-right: 1.25rem;
+  }
+  /* "Clear filters" gets its own line so the menus keep their width */
+  .tx-card .tx-tools > .link {
+    flex-basis: 100%;
+    text-align: left;
+  }
+  .tx-card .tx-toolbar .chips::-webkit-scrollbar {
+    display: none;
+  }
+  .tx-card .tx-toolbar .chip {
+    flex: none;
+    white-space: nowrap;
+  }
+  /* the bulk actions stay one line (scrolling sideways) so the sticky bar doesn't cover the list */
+  .tx-bulk {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tx-bulk > * {
+    flex: none;
+    white-space: nowrap;
+  }
+  .tx-bulk select {
+    width: auto;
+    min-height: 32px;
+    padding: 0.2rem 0.5rem;
+  }
+  /* search takes its own line; year, order and Filters share the next */
+  .tx-card .tx-tools .tx-search {
+    flex-basis: 100%;
+  }
+  .tx-card .tx-tools select {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .tx-more {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

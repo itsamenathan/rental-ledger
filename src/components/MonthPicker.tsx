@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { monthLabel, monthTitle, thisMonth } from "../format.ts";
+import { monthLabel, monthTitle, shiftMonth, thisMonth } from "../format.ts";
 
 /** The month's title as a button: opens a year and 12 months to jump to, instead of stepping with the arrows. */
 export default function MonthPicker({ ym, to }: { ym: string; to: (ym: string) => string }) {
@@ -70,6 +70,24 @@ export default function MonthPicker({ ym, to }: { ym: string; to: (ym: string) =
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The one way to move between months (Month, Files, Calendar, Manager): ‹ title ›, where the title opens the picker.
+ * Each is a link, so the month is in the address and Back steps through the months visited.
+ */
+export function MonthNav({ ym, to }: { ym: string; to: (ym: string) => string }) {
+  return (
+    <div className="month-nav">
+      <Link className="icon-btn" to={to(shiftMonth(ym, -1))} aria-label="Previous month">
+        ‹
+      </Link>
+      <MonthPicker ym={ym} to={to} />
+      <Link className="icon-btn" to={to(shiftMonth(ym, 1))} aria-label="Next month">
+        ›
+      </Link>
     </div>
   );
 }

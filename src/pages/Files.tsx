@@ -1,13 +1,22 @@
-import { useRef, useState, type DragEvent, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { api, qs, type FileLibrary, type LibraryFile, type Transaction, type TxList } from "../api.ts";
+import { MonthNav } from "../components/MonthPicker.tsx";
 import TxEditModal from "../components/TxEditModal.tsx";
-import { fmtDate, money, monthTitle, shiftMonth, thisMonth, THIS_YEAR } from "../format.ts";
-import { useApi, usePersistentState, useSession, useToast, useProperty, useScopedPath } from "../hooks.ts";
+import { TxRow, type RowCtx } from "../components/TxRows.tsx";
+import { txParts } from "../month-view.ts";
+import { fmtDate, money, monthTitle, thisMonth, THIS_YEAR } from "../format.ts";
+import {
+  useApi,
+  usePendingByEntry,
+  usePersistentState,
+  useSession,
+  useToast,
+  useProperty,
+  useScopedPath,
+} from "../hooks.ts";
 import { uploadOrQueue } from "../outbox.ts";
-import { Amount, Modal } from "../lib.tsx";
-
-const ACCEPT = "image/*,application/pdf,text/plain,text/csv,.heic,.heif";
+import { Amount, Modal, YearSelect } from "../lib.tsx";
 
 const size = (b: number) =>
   b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${Math.round(b / 1024)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
@@ -21,8 +30,9 @@ const typeLabel = (f: LibraryFile) =>
       : f.content_type.startsWith("image/")
         ? f.content_type.slice(6).toUpperCase()
         : "TXT";
+/** an entry's name, the same way the transaction lists name it */
 const entryLabel = (t: { vendor: string; subcategory: string; description: string; category: string }) =>
-  t.vendor || t.subcategory || t.description || t.category;
+  txParts(t).main;
 
 export default function Files() {
   const { path: scoped, key: property } = useProperty();
@@ -51,12 +61,19 @@ export default function Files() {
     setParams(next, { replace: true });
   };
   const go = (p: { month?: string; year?: string }) => set({ month: p.month ?? null, year: p.year ?? null });
+  /** this page for another month, keeping the search and source */
+  const monthPath = (m: string) => {
+    const next = new URLSearchParams(params);
+    next.set("month", m);
+    next.delete("year");
+    return scoped(`/files?${next}`);
+  };
   const reload = () => void lib.reload();
 
   const upload = async (tx: Transaction, files: File[]) => {
     if (!files.length) return;
     try {
-      const label = `${tx.category} · ${money(tx.amount)}`;
+      const label = `${entryLabel(tx)} · ${money(tx.amount)}`;
       const what = files.length === 1 ? files[0]!.name : `${files.length} files`;
       if ((await uploadOrQueue(user.id, { id: tx.id, date: tx.date, label }, files)) === "queued") {
         toast({ text: `No connection: ${what} kept on this device; it uploads when you reconnect`, kind: "ok" });
@@ -67,6 +84,16 @@ export default function Files() {
     } catch (e) {
       toast({ text: (e as Error).message, kind: "error" });
     }
+  };
+
+  // the expenses still missing a receipt, as entry rows: tap opens the entry, the paperclip or a dropped file attaches
+  const missingCtx: RowCtx = {
+    canWrite,
+    showProperty: property === "all",
+    onOpen: setEditing,
+    onChanged: reload,
+    pending: usePendingByEntry(),
+    onDropFiles: canWrite ? (t, files) => void upload(t, files) : undefined,
   };
 
   const rename = async (f: LibraryFile, name: string) => {
@@ -119,30 +146,10 @@ export default function Files() {
   return (
     <div className="page">
       <header className="page-head">
-        <div className="month-nav">
-          {month ? (
-            <>
-              <button className="icon-btn" onClick={() => go({ month: shiftMonth(month, -1) })} aria-label="Previous">
-                ‹
-              </button>
-              <h1>{monthTitle(month)}</h1>
-              <button className="icon-btn" onClick={() => go({ month: shiftMonth(month, 1) })} aria-label="Next">
-                ›
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="icon-btn" onClick={() => go({ year: String(Number(year) - 1) })} aria-label="Previous">
-                ‹
-              </button>
-              <h1>Files {year}</h1>
-              <button className="icon-btn" onClick={() => go({ year: String(Number(year) + 1) })} aria-label="Next">
-                ›
-              </button>
-            </>
-          )}
-        </div>
+        {month ? <MonthNav ym={month} to={monthPath} /> : <h1>Files</h1>}
         <div className="head-actions">
+          {/* a year is picked the way it is everywhere else: the year menu */}
+          {year && <YearSelect value={Number(year)} onChange={(v) => go({ year: String(v) })} />}
           <div className="segmented" role="group" aria-label="Period">
             <button
               className={month ? "on" : ""}
@@ -162,9 +169,10 @@ export default function Files() {
         </div>
       </header>
 
-      <div className="filters">
+      <div className="tx-tools">
         <input
           type="search"
+          className="tx-search"
           placeholder="Search files, vendors, categories"
           defaultValue={q}
           onChange={(e) => set({ q: e.target.value })}
@@ -205,8 +213,11 @@ export default function Files() {
             aria-expanded={missingOpen}
             aria-controls="needs-receipt"
           >
-            <span>
-              {missingOpen ? "▾" : "▸"} Needs a receipt <span className="muted small">optional</span>
+            <span className="fold-title">
+              <span className="fold-mark" aria-hidden="true">
+                {missingOpen ? "▾" : "▸"}
+              </span>
+              Needs a receipt <span className="muted small">optional</span>
             </span>
             <span className="muted small">
               {d.missing_total} {d.missing_total === 1 ? "expense" : "expenses"} without one
@@ -217,11 +228,11 @@ export default function Files() {
               <p className="muted small">
                 Not required, but handy if your preparer asks. Expenses of {money(d.receipt_min).replace(/\.00$/, "")}+
                 by default; <Link to="/settings/categories">choose per category or vendor</Link>.
-                {canWrite && " Drop a file on a row, or use Attach."}
+                {canWrite && " Drop a file on a row, or tap its paperclip."}
               </p>
-              <ul className="file-missing">
+              <ul className="tx-mini tx-flat">
                 {d.missing.map((t) => (
-                  <MissingRow key={t.id} tx={t} canWrite={canWrite} onOpen={setEditing} onFiles={upload} />
+                  <TxRow key={t.id} t={t} ctx={missingCtx} withCategory />
                 ))}
               </ul>
               {d.missing_total > d.missing.length && (
@@ -310,73 +321,6 @@ export default function Files() {
       )}
       {editing && <TxEditModal id={editing} onClose={() => setEditing(null)} onChanged={reload} />}
     </div>
-  );
-}
-
-function MissingRow({
-  tx,
-  canWrite,
-  onOpen,
-  onFiles,
-}: {
-  tx: Transaction;
-  canWrite: boolean;
-  onOpen: (id: number) => void;
-  onFiles: (tx: Transaction, files: File[]) => Promise<void>;
-}) {
-  const input = useRef<HTMLInputElement>(null);
-  const [over, setOver] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const send = async (files: File[]) => {
-    setBusy(true);
-    await onFiles(tx, files);
-    setBusy(false);
-  };
-  const drop = canWrite
-    ? {
-        onDragOver: (e: DragEvent) => {
-          e.preventDefault();
-          setOver(true);
-        },
-        onDragLeave: () => setOver(false),
-        onDrop: (e: DragEvent) => {
-          e.preventDefault();
-          setOver(false);
-          void send([...e.dataTransfer.files]);
-        },
-      }
-    : {};
-  return (
-    <li className={over ? "drop-over" : undefined} {...drop}>
-      <button className="todo-main" onClick={() => onOpen(tx.id)}>
-        <span>
-          <strong>{entryLabel(tx)}</strong>
-          {tx.vendor && tx.subcategory && <span className="muted"> · {tx.subcategory}</span>}
-        </span>
-        <span className="muted small">
-          {fmtDate(tx.date)} · {tx.category}
-        </span>
-      </button>
-      <Amount value={tx.amount} />
-      {canWrite && (
-        <span className="todo-actions">
-          <input
-            ref={input}
-            type="file"
-            multiple
-            accept={ACCEPT}
-            hidden
-            onChange={(e) => {
-              void send([...(e.target.files ?? [])]);
-              e.target.value = "";
-            }}
-          />
-          <button className="btn small" disabled={busy} onClick={() => input.current?.click()}>
-            {busy ? "Uploading…" : "Attach"}
-          </button>
-        </span>
-      )}
-    </li>
   );
 }
 
@@ -543,34 +487,42 @@ function LinkDialog({ file, onClose, onDone }: { file: LibraryFile; onClose: () 
       toast({ text: (e as Error).message, kind: "error" });
     }
   };
+  // tapping a row links the file; no flag/receipt buttons in a picker
+  const pick: RowCtx = {
+    canWrite: false,
+    showProperty: false,
+    actions: false,
+    onOpen: (id) => {
+      const t = list.data?.items.find((x) => x.id === id);
+      if (t) void link(t);
+    },
+    onChanged: () => {},
+  };
   return (
     <Modal title={`Link ${file.filename}`} onClose={onClose}>
       <p className="muted small">
         Pick another entry to attach this file to. It stays on the {file.links.length === 1 ? "entry" : "entries"} it's
         already on; unlink those separately if it was on the wrong one.
       </p>
-      <div className="filters">
-        <input type="search" placeholder="Search entries" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+      <div className="tx-tools">
+        <input
+          type="search"
+          className="tx-search"
+          placeholder="Search name, note or amount"
+          aria-label="Search entries"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          autoFocus
+        />
         <label className="check">
           <input type="checkbox" checked={anyDate} onChange={(e) => setAnyDate(e.target.checked)} /> Any month
         </label>
       </div>
-      <ul className="tx-mini">
+      <ul className="tx-mini tx-flat">
         {list.data?.items
           .filter((t) => !linked.has(t.id))
           .map((t) => (
-            <li key={t.id}>
-              <button className="row-btn" onClick={() => void link(t)}>
-                <span>{fmtDate(t.date)}</span>
-                <span>
-                  {entryLabel(t)}
-                  {t.vendor && t.subcategory && <small> · {t.subcategory}</small>}
-                  <small> · {t.category}</small>
-                </span>
-                <span />
-                <Amount value={t.amount} />
-              </button>
-            </li>
+            <TxRow key={t.id} t={t} ctx={pick} withCategory />
           ))}
       </ul>
       {list.data && list.data.items.every((t) => linked.has(t.id)) && <p className="muted">No entries found.</p>}

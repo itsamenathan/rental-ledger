@@ -4,7 +4,7 @@ import type { Transaction } from "../api.ts";
 import { fmtDate, money } from "../format.ts";
 import { Modal } from "../lib.tsx";
 import TxForm from "./TxForm.tsx";
-import { OutboxCtx, useOutbox, useSession, useToast, useScopedPath } from "../hooks.ts";
+import { OutboxCtx, useOutbox, useSession, useToast, useScopedPath, useConfirm } from "../hooks.ts";
 import {
   asText,
   discardOutbox,
@@ -159,6 +159,7 @@ export function OutboxList() {
   const { entries, syncing, syncNow } = useOutbox();
   const { overview } = useSession();
   const toast = useToast();
+  const confirm = useConfirm();
   const [editing, setEditing] = useState<OutboxEntry | null>(null);
   // Sync skips an entry while it's open here, so it can't be sent half-edited.
   useEffect(() => {
@@ -271,7 +272,14 @@ export function OutboxList() {
                         : e.op === "create"
                           ? "The entry is saved; its receipts aren't."
                           : "The entry on the server stays as it is.";
-                    if (confirm(`Discard "${describe(e)}"? ${lost}`)) void discardOutbox(e.id);
+                    void confirm({
+                      title: "Discard this change?",
+                      message: `"${describe(e)}" will be removed from this device. ${lost}`,
+                      confirm: "Discard",
+                      danger: true,
+                    }).then((ok) => {
+                      if (ok) void discardOutbox(e.id);
+                    });
                   }}
                 >
                   Discard

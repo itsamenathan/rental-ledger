@@ -31,11 +31,24 @@ const months = (from: string, n: number) =>
   });
 
 describe("recurring detection", () => {
-  it("doesn't repeat a vendor that is also the subcategory in the label", () => {
+  it("names a series like its entries, without repeating a vendor that is also the subcategory", () => {
     const { db, add } = setup();
     for (const m of months("2025-11", 13))
       add(`${m}-28`, -900, "Management Fee", { subcategory: "Acme PM", vendor: "Acme PM" });
-    expect(recurring(db, { today: TODAY }).series.map((s) => s.label)).toEqual(["Management Fee: Acme PM"]);
+    expect(recurring(db, { today: TODAY }).series.map((s) => s.label)).toEqual(["Acme PM"]);
+  });
+
+  it("names a series vendor first, then subcategory, and by its category when it has neither", () => {
+    const { db, add } = setup();
+    for (const m of months("2025-11", 13)) {
+      add(`${m}-05`, -79.99, "Utilities", { subcategory: "Internet", vendor: "Example Fiber" });
+      add(`${m}-12`, -500, "Insurance");
+    }
+    expect(
+      recurring(db, { today: TODAY })
+        .series.map((s) => s.label)
+        .sort(),
+    ).toEqual(["Example Fiber · Internet", "Insurance"]);
   });
 
   it("learns a monthly bill and flags a missing month", () => {
@@ -43,14 +56,14 @@ describe("recurring detection", () => {
     for (const m of months("2025-11", 13))
       if (m !== "2026-08") add(`${m}-01`, -69.95, "Utilities", { subcategory: "Internet" });
     const r = recurring(db, { today: TODAY });
-    const internet = r.series.find((s) => s.label === "Utilities: Internet")!;
+    const internet = r.series.find((s) => s.label === "Internet")!;
     expect(internet).toMatchObject({ cadence: 1, typical_amount: -69.95, fixed_amount: true, status: "missing" });
     expect(internet.missing_months).toEqual(["2026-08"]);
     expect(internet.next_due).toBe("2026-12-01");
     expect(r.alerts).toEqual([expect.objectContaining({ type: "missing", month: "2026-08" })]);
 
     const aug = monthChecklist(db, "2026-08", { today: TODAY });
-    expect(aug.items).toEqual([expect.objectContaining({ label: "Utilities: Internet", state: "missing" })]);
+    expect(aug.items).toEqual([expect.objectContaining({ label: "Internet", state: "missing" })]);
     const nov = monthChecklist(db, "2026-11", { today: TODAY });
     expect(nov.items[0]).toMatchObject({ state: "paid", amount: -69.95 });
   });

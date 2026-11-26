@@ -65,6 +65,26 @@ release. Add a tool name to select part of the graph. For example, run
   to each item (from `missingReceiptIds`, never a second rule). Row flag/receipt buttons use the normal PATCH and
   attachments routes (online only; no outbox). The recurring card folds done bills away and becomes one line when
   nothing needs attention.
+- Transactions page (`src/pages/Transactions.tsx`) uses the same rows as the Month page (`TxRow` in
+  `src/components/TxRows.tsx`: flag/receipt popovers, offline-pending note, optional select checkbox) and the same
+  chips/search/order controls, but filters and pages on the server with the API's own params (`kind`, `needs_review`,
+  `needs_receipt`, `sort=date_desc`…, not `month-view.ts`), so links from To do, Reports, Files etc. keep working.
+  Less-used filters sit behind "Filters"; in date order rows are grouped under month headings that link to the Month
+  page. Its chip numbers come from `counts=true` on the list (`transactionCounts`: the other filters, without
+  kind/needs_review/needs_receipt). Every list of entries uses `TxRow` (Overview's Recently changed, Add's "Added just
+  now" via the list's `ids` filter, Files' "Needs a receipt" with `onDropFiles` and its link picker with
+  `actions: false`), and entries are named by `txParts` everywhere (Files, To do, the edit dialog, toasts); recurring
+  series use the same rule on the server (`labelOf`: vendor · subcategory, else the category). Files has the Month
+  page's `MonthPicker` and the same `tx-tools` search row. "Select" + `BulkBar` (`useTxSelection` in hooks.ts) is on both Month and Transactions
+  and acts only on the ticked entries still on screen.
+- Shared UI rules: months are changed only with `MonthNav` (‹ `MonthPicker` ›, links, so the month is in the URL and
+  Back steps through them) on Month, Files, Calendar (`?month=`, else the last one viewed) and the Manager month page;
+  years only with `YearSelect`. Overview, Categories, Occupancy, Transactions (no `?year`) and the Manager list share
+  one remembered year (`useWorkingYear`, key `dash-year`); the tax report keeps its own on purpose. Anything that can
+  be undone acts at once and offers Undo in the toast (entry delete, bulk delete, owner stays, unlink); anything else
+  asks with `useConfirm()` (the app's dialog, `ConfirmProvider` in lib.tsx; focus on Cancel when `danger`), never
+  `window.confirm`. Folding sections use `<details>`/`<summary>` (shared ▸/▾ marker in index.css) or a
+  `.section-toggle` button with a `.fold-mark`.
 - Recurring-bill detection (`server/services/recurring.ts`) is computed from history on each request; the only stored
   state is user feedback in `recurring_dismissals` (month = '' means stop tracking the series). Tests in
   `server/recurring.test.ts` pin the rules with a fixed `today`.

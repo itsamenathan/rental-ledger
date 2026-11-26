@@ -1,9 +1,11 @@
 import { useEffect, useState, type DragEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api.ts";
-import { fmtDate, money, monthTitle, shiftMonth, thisMonth } from "../format.ts";
-import { useApi, useSession, useToast, useScopedPath, useProperty } from "../hooks.ts";
+import { fmtDate, money, monthTitle } from "../format.ts";
+import { useApi, useSession, useToast, useScopedPath, useProperty, useWorkingYear, useConfirm } from "../hooks.ts";
 import TxEditModal from "../components/TxEditModal.tsx";
+import { MonthNav } from "../components/MonthPicker.tsx";
+import { YearSelect } from "../lib.tsx";
 
 // ---------------- types ----------------
 
@@ -199,7 +201,7 @@ function YearView() {
   const scoped = useScopedPath();
   const { canWrite } = useSession();
   const navigate = useNavigate();
-  const [year, setYear] = useState(() => Number(thisMonth().slice(0, 4)));
+  const [year, setYear] = useWorkingYear();
   const property = useMsProperty();
   const months = useApi<{ months: MonthRow[] }>(`manager/months?year=${year}&${property.qs}`);
   const rows = months.data?.months ?? [];
@@ -210,14 +212,8 @@ function YearView() {
     <div className="page ms">
       <header className="page-head">
         <h1>Manager statements</h1>
-        <div className="ms-year">
-          <button className="icon-btn" onClick={() => setYear(year - 1)} aria-label="Previous year">
-            ‹
-          </button>
-          <strong>{year}</strong>
-          <button className="icon-btn" onClick={() => setYear(year + 1)} aria-label="Next year">
-            ›
-          </button>
+        <div className="head-actions">
+          <YearSelect value={year} onChange={setYear} />
         </div>
       </header>
 
@@ -296,6 +292,7 @@ function MonthView({ month }: { month: string }) {
   const scoped = useScopedPath();
   const { canWrite } = useSession();
   const toast = useToast();
+  const confirm = useConfirm();
   const [subcategory, setSubcategory] = useState("");
   const [applied, setApplied] = useState("");
   const property = useMsProperty();
@@ -395,7 +392,15 @@ function MonthView({ month }: { month: string }) {
   };
 
   const removeDoc = async (d: Doc) => {
-    if (!confirm(`Remove ${d.filename}? Entries already added stay in the ledger.`)) return;
+    if (
+      !(await confirm({
+        title: "Remove this document?",
+        message: `${d.filename} will be removed. Entries already added stay in the ledger.`,
+        confirm: "Remove",
+        danger: true,
+      }))
+    )
+      return;
     try {
       await api(`manager/documents/${d.id}`, { method: "DELETE" });
       reload();
@@ -434,15 +439,7 @@ function MonthView({ month }: { month: string }) {
           <Link to={scoped("/statement")} className="muted small">
             ← All months
           </Link>
-          <h1>{monthTitle(month)}</h1>
-        </div>
-        <div className="ms-year">
-          <Link className="icon-btn" to={scoped(`/statement/${shiftMonth(month, -1)}`)} aria-label="Previous month">
-            ‹
-          </Link>
-          <Link className="icon-btn" to={scoped(`/statement/${shiftMonth(month, 1)}`)} aria-label="Next month">
-            ›
-          </Link>
+          <MonthNav ym={month} to={(m) => scoped(`/statement/${m}`)} />
         </div>
       </header>
 

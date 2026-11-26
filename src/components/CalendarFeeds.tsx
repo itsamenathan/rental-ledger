@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { api, ApiError } from "../api.ts";
 import { ago, syncText, type Feed, type HistoryImport, type HistorySummary, type SyncResult } from "../calendar.ts";
 import { fmtDate } from "../format.ts";
-import { useApi, useSession, useToast } from "../hooks.ts";
+import { useApi, useSession, useToast, useConfirm } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 
 /** A property's settings page: its imported booking calendars. */
@@ -54,6 +54,7 @@ export function PropertyCalendars({ propertyId }: { propertyId: number }) {
 function FeedRow({ feed, onEdit, onChanged }: { feed: Feed; onEdit: () => void; onChanged: () => void }) {
   const { canWrite } = useSession();
   const toast = useToast();
+  const confirm = useConfirm();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
 
@@ -79,7 +80,15 @@ function FeedRow({ feed, onEdit, onChanged }: { feed: Feed; onEdit: () => void; 
       }),
     );
   const remove = async () => {
-    if (!confirm(`Remove "${feed.name}" and the ${feed.events} events imported from it?`)) return;
+    if (
+      !(await confirm({
+        title: "Remove this calendar?",
+        message: `"${feed.name}" and the ${feed.events} events imported from it will be removed.`,
+        confirm: "Remove",
+        danger: true,
+      }))
+    )
+      return;
     try {
       await api(`calendar/feeds/${feed.id}`, { method: "DELETE" });
       onChanged();
@@ -216,8 +225,18 @@ function PastStays({ propertyId }: { propertyId: number }) {
   const toast = useToast();
   const { data, reload } = useApi<HistorySummary>(`calendar/history?property_id=${propertyId}`);
   const [importing, setImporting] = useState(false);
+  const confirm = useConfirm();
   const clear = async () => {
-    if (!data || !confirm(`Remove the ${data.stays} stays imported from a reservations export?`)) return;
+    if (
+      !data ||
+      !(await confirm({
+        title: "Remove imported stays?",
+        message: `The ${data.stays} stays imported from a reservations export will be removed.`,
+        confirm: "Remove",
+        danger: true,
+      }))
+    )
+      return;
     try {
       await api(`calendar/history?property_id=${propertyId}`, { method: "DELETE" });
       void reload();

@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, type Overview, type User, type UserSettings } from "./api.ts";
 import { money, THIS_YEAR } from "./format.ts";
-import { SessionCtx, ToastCtx, useSession, type Session, type Toast } from "./hooks.ts";
+import {
+  ConfirmCtx,
+  SessionCtx,
+  ToastCtx,
+  useSession,
+  type ConfirmOptions,
+  type Session,
+  type Toast,
+} from "./hooks.ts";
 
 // ---------------- session + reference data ----------------
 
@@ -97,6 +105,41 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         ))}
       </div>
     </ToastCtx.Provider>
+  );
+}
+
+// ---------------- confirm dialog ----------------
+
+/** The app's own "are you sure?" (the browser's looks out of place, most of all on a phone). */
+export function ConfirmProvider({ children }: { children: ReactNode }) {
+  const [ask, setAsk] = useState<(ConfirmOptions & { done: (ok: boolean) => void }) | null>(null);
+  const confirm = useCallback((o: ConfirmOptions) => new Promise<boolean>((done) => setAsk({ ...o, done })), []);
+  const close = (ok: boolean) => {
+    ask?.done(ok);
+    setAsk(null);
+  };
+  return (
+    <ConfirmCtx.Provider value={confirm}>
+      {children}
+      {ask && (
+        <Modal title={ask.title ?? "Are you sure?"} onClose={() => close(false)}>
+          <p className="confirm-text">{ask.message}</p>
+          <div className="modal-actions">
+            {/* focus starts on the safe choice when the action removes something */}
+            <button className="btn" onClick={() => close(false)} autoFocus={ask.danger}>
+              Cancel
+            </button>
+            <button
+              className={`btn ${ask.danger ? "danger" : "primary"}`}
+              onClick={() => close(true)}
+              autoFocus={!ask.danger}
+            >
+              {ask.confirm}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </ConfirmCtx.Provider>
   );
 }
 

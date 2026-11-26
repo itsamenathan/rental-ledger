@@ -89,10 +89,20 @@ export interface Attachment {
   has_preview?: boolean;
 }
 
+/** How many entries each quick filter would show under the other filters (`counts=true` on the list). */
+export interface TxCounts {
+  all: number;
+  income: number;
+  expense: number;
+  needs_review: number;
+  needs_receipt: number;
+}
 export interface TxList {
   items: Transaction[];
   total: number;
   totals: { net: number; income: number; expense: number };
+  /** only when asked for with counts=true */
+  counts?: TxCounts;
   limit: number;
   offset: number;
 }

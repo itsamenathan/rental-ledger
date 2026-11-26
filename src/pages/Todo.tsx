@@ -16,6 +16,7 @@ import { CandidateList, GuestNightList } from "../components/OwnerStays.tsx";
 import type { MonthCompare, StayCandidate } from "../owner-stays.ts";
 import { dateInMonth, fmtDate, money, monthTitle } from "../format.ts";
 import { useApi, useSession, useToast, useProperty } from "../hooks.ts";
+import { txParts } from "../month-view.ts";
 import { useDismissAlert } from "../recurring-dismiss.ts";
 import { Amount } from "../lib.tsx";
 import { scopePath } from "../scope.ts";
@@ -183,7 +184,7 @@ export default function Todo() {
           }
         >
           {entryRows.map(({ tx, flagged: isFlagged, unallocated: isUnallocated }) => {
-            const who = tx.subcategory || tx.vendor;
+            const { main, rest, hasName } = txParts(tx);
             const problems = [
               isFlagged ? (tx.review_note ? `Flagged: ${tx.review_note}` : "Flagged for review.") : "",
               isUnallocated ? "Rental only or whole property?" : "",
@@ -191,15 +192,10 @@ export default function Todo() {
             return (
               <TodoRow
                 key={tx.id}
-                title={who ? `${tx.category} · ${who}` : tx.category}
-                when={fmtDate(tx.date)}
+                title={[main, ...rest].join(" · ")}
+                when={hasName ? `${fmtDate(tx.date)} · ${tx.category}` : fmtDate(tx.date)}
                 property={propName(tx.property_id)}
-                note={
-                  <>
-                    {problems.join(" ")}
-                    {tx.description && <span className="muted"> · {tx.description}</span>}
-                  </>
-                }
+                note={<>{problems.join(" ")}</>}
                 amount={tx.amount}
                 onOpen={() => setEditing(tx.id)}
               >
@@ -433,7 +429,7 @@ function DuplicateEntries({ alert: a, series: s, act }: { alert: RecurringAlert;
         <li key={t.id}>
           <span>
             {fmtDate(t.date)}
-            {(t.description || t.account) && <span className="muted"> · {t.description || t.account}</span>}
+            <span className="muted"> · {[txParts(t).main, ...txParts(t).rest].join(" · ")}</span>
           </span>
           <Amount value={t.amount} />
           {canWrite ? (

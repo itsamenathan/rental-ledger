@@ -197,6 +197,7 @@ export function buildMcpServer(actor: Actor) {
         from: z.string().optional(),
         to: z.string().optional(),
         property: scope,
+        ids: z.array(z.number().int()).max(500).optional().describe("Only these entries"),
         category: z.string().optional(),
         kind: z.enum(["income", "expense"]).optional(),
         allocation: z.enum(["direct", "indirect", "none"]).optional(),
@@ -215,6 +216,12 @@ export function buildMcpServer(actor: Actor) {
         min_amount: z.number().optional(),
         max_amount: z.number().optional(),
         sort: z.enum(["date_desc", "date_asc", "amount_desc", "amount_asc", "updated_desc"]).optional(),
+        counts: z
+          .boolean()
+          .optional()
+          .describe(
+            "true = also return counts (all/income/expense/needs_review/needs_receipt) under the other filters",
+          ),
         limit: z.number().int().max(1000).optional(),
         offset: z.number().int().optional(),
       },

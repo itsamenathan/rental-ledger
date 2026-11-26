@@ -99,10 +99,14 @@ const whenInMonth = (day: number) => (day >= 28 ? "at month end" : `around the $
 export const seriesKey = (propertyId: number, categoryId: number, vendor: string, subcategory: string) =>
   `${propertyId}:${categoryId}:${norm(vendor)}:${norm(subcategory)}`;
 
+/**
+ * A series is named the way its entries are (`txParts` in src/month-view.ts): vendor, then subcategory, without saying
+ * the same thing twice ("Example Fiber · Internet", "Acme PM"); the category only when there's nothing else.
+ */
 function labelOf(category: string, vendor: string, subcategory: string) {
-  const what = subcategory ? `${category}: ${subcategory}` : category;
-  // "Management Fee: Acme" for a vendor named Acme too would read "(Acme)" twice
-  return vendor && norm(vendor) !== norm(subcategory) ? `${what} (${vendor})` : what;
+  const parts = [vendor.trim(), subcategory.trim()].filter(Boolean);
+  if (parts.length === 2 && norm(parts[0]!) === norm(parts[1]!)) parts.pop();
+  return parts.length ? parts.join(" · ") : category;
 }
 
 /** Grace period after a due date before a payment counts as missing. */

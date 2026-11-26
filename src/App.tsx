@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { api, DEFAULT_SETTINGS, type User, type UserSettings } from "./api.ts";
-import { useApi, useOutbox, useProperty, useSession } from "./hooks.ts";
-import { Modal, SessionProvider, ToastProvider } from "./lib.tsx";
+import { useApi, useOutbox, useProperty, useSession, useConfirm } from "./hooks.ts";
+import { ConfirmProvider, Modal, SessionProvider, ToastProvider } from "./lib.tsx";
 import { OutboxProvider, SyncBanner } from "./components/Outbox.tsx";
 import Overview from "./pages/Overview.tsx";
 import MonthPage from "./pages/Month.tsx";
@@ -44,24 +44,26 @@ export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
-        {me.user ? (
-          <SessionProvider
-            user={me.user}
-            canWrite={me.can_write}
-            settings={{ ...DEFAULT_SETTINGS, ...me.settings }}
-            onLogout={() => setMe({ user: null, can_write: false })}
-          >
-            <OutboxProvider>
-              <PropertyProvider>
-                <Shell />
-              </PropertyProvider>
-            </OutboxProvider>
-          </SessionProvider>
-        ) : (
-          <Routes>
-            <Route path="*" element={<Login onDone={refresh} />} />
-          </Routes>
-        )}
+        <ConfirmProvider>
+          {me.user ? (
+            <SessionProvider
+              user={me.user}
+              canWrite={me.can_write}
+              settings={{ ...DEFAULT_SETTINGS, ...me.settings }}
+              onLogout={() => setMe({ user: null, can_write: false })}
+            >
+              <OutboxProvider>
+                <PropertyProvider>
+                  <Shell />
+                </PropertyProvider>
+              </OutboxProvider>
+            </SessionProvider>
+          ) : (
+            <Routes>
+              <Route path="*" element={<Login onDone={refresh} />} />
+            </Routes>
+          )}
+        </ConfirmProvider>
       </ToastProvider>
     </BrowserRouter>
   );
@@ -160,13 +162,16 @@ function BuildVersion() {
 function Shell() {
   const { user, logout: signOut, canWrite } = useSession();
   const outbox = useOutbox();
+  const confirm = useConfirm();
   const logout = async () => {
     const n = outbox.entries.length;
     if (
       n &&
-      !confirm(
-        `${n} saved-offline ${n === 1 ? "entry hasn't" : "entries haven't"} synced yet. They stay on this device and send when you sign in again. Sign out anyway?`,
-      )
+      !(await confirm({
+        title: "Sign out?",
+        message: `${n} saved-offline ${n === 1 ? "entry hasn't" : "entries haven't"} synced yet. They stay on this device and send when you sign in again.`,
+        confirm: "Sign out",
+      }))
     )
       return;
     await signOut();
