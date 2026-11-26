@@ -146,13 +146,14 @@ TS_AUTHKEY=tskey-auth-...
 
 Start it with `docker compose -f compose.tailscale.yaml up -d --build`. Open `https://rental-ledger.<your-tailnet>.ts.net`
 from a device on your tailnet. Sign in with the app's local username and password accounts; password login is enabled
-and OIDC is not configured. App data and Tailscale identity persist in Docker volumes. If you later enable OIDC, set
+and OIDC is not configured. App data and Tailscale identity persist in `./rental-data` and `./tailscale-state` beside the Compose file. If you later enable OIDC, set
 `PUBLIC_URL` to that full HTTPS URL in the `rental-ledger` service so the callback is correct.
 
 | Variable                                              | Default                         | Purpose                                                                                                                                 |
 | ----------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `PORT`                                                | `3000`                          | HTTP port                                                                                                                               |
 | `DATA_DIR`                                            | `/data` (image), `./data` (dev) | Database and uploads                                                                                                                    |
+| `PUID` / `PGID`                                       | `65534`                         | Docker image: user and group the app runs as; the data folder is handed to them at start (useful to match a bind-mount owner)           |
 | `PUBLIC_URL`                                          | –                               | External URL; used for OIDC callbacks                                                                                                   |
 | `COOKIE_SECURE`                                       | `true` in production            | Set `false` only when serving plain HTTP                                                                                                |
 | `SESSION_DAYS`                                        | `30`                            | Session lifetime                                                                                                                        |
