@@ -1,0 +1,29 @@
+# Private HTTPS access through Tailscale Serve. No app port is published on the host.
+version: "3.2"
+
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    hostname: rental-ledger
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?Set TS_AUTHKEY in .env}
+      TS_AUTH_ONCE: "true"
+      TS_HOSTNAME: rental-ledger
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - ./tailscale-state:/var/lib/tailscale
+      - ./tailscale-config:/config:ro
+
+  rental-ledger:
+    image: ghcr.io/itsamenathan/rental-ledger:latest
+    restart: unless-stopped
+    depends_on:
+      - tailscale
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+      DISABLE_PASSWORD_LOGIN: "false"
+    volumes:
+      - ./rental-data:/data
