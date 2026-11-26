@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { instrumentSqlite, log } from "./telemetry.ts";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { mkdirSync } from "node:fs";
+import { accessSync, constants, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.ts";
@@ -15,7 +15,20 @@ export type DB = BetterSQLite3Database<typeof schema> & { $client: Database.Data
 export const migrationsFolder = fileURLToPath(new URL("./db/migrations", import.meta.url));
 
 export function openDb(path: string): DB {
-  if (path !== ":memory:") mkdirSync(dirname(resolve(path)), { recursive: true });
+  if (path !== ":memory:") {
+    const dir = dirname(resolve(path));
+    mkdirSync(dir, { recursive: true });
+    try {
+      accessSync(dir, constants.W_OK);
+    } catch {
+      // Usually a Docker bind mount that Docker created as root while the app runs as another user.
+      const uid = process.getuid?.();
+      throw new Error(
+        `Database folder ${dir} is not writable${uid === undefined ? "" : ` by uid ${uid}`}. ` +
+          `Give that user ownership of the folder. The Docker image does this itself unless it is started with --user.`,
+      );
+    }
+  }
   const sqlite = instrumentSqlite(new Database(path));
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");

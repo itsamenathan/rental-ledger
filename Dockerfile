@@ -31,10 +31,12 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
 COPY --from=build /app/package.json ./
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint
 RUN rm -f server/*.test.ts && mkdir -p /data && chown 65534:65534 /data
-USER 65534:65534
+# The entrypoint starts as root, fixes /data ownership, then drops to PUID:PGID (default 65534) before Node starts.
 VOLUME ["/data"]
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+ENTRYPOINT ["docker-entrypoint"]
 CMD ["node", "server/main.ts"]
