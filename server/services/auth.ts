@@ -5,7 +5,18 @@ import { and, asc, count, desc, eq, isNotNull, isNull, lt, sql } from "drizzle-o
 import type { DB } from "../db.ts";
 import { apiKeys, sessions, users } from "../db/schema.ts";
 import { config } from "../config.ts";
-import { AppError, audit, badRequest, notFound, requireAdmin, type Actor, type Role, type User } from "../context.ts";
+import { currentPortfolioId, currentPortfolioIdOrNull, onlyPortfolioId } from "../portfolio.ts";
+import { addMember } from "./portfolios.ts";
+import {
+  AppError,
+  audit,
+  badRequest,
+  notFound,
+  requireInstanceAdmin,
+  type Actor,
+  type Role,
+  type User,
+} from "../context.ts";
 
 const scrypt = promisify(scryptCb) as (
   pw: string,
@@ -46,7 +57,15 @@ export async function verifyPassword(password: string, stored: string | null): P
 export const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 const token = (bytes = 32) => randomBytes(bytes).toString("base64url");
 
-const userCols = { id: users.id, email: users.email, name: users.name, role: users.role };
+const userCols = {
+  id: users.id,
+  email: users.email,
+  name: users.name,
+  // A login has no role of its own: it's the membership's, set per request (http/middleware.ts). Until then a login
+  // counts as a viewer; users.role is an unused leftover from before portfolios.
+  role: sql<Role>`'viewer'`,
+  instance_admin: users.isInstanceAdmin,
+};
 export interface UserRow extends User {
   password_hash: string | null;
   disabled: boolean;
@@ -121,17 +140,21 @@ export function deleteSession(db: DB, t: string) {
 
 export const API_KEY_PREFIX = "rk_";
 
-export function userForApiKey(db: DB, key: string): { user: User; keyId: number; scope: "read" | "write" } | null {
+/** The key's owner and the portfolio the key works in (whether they may still use it is up to the caller). */
+export function userForApiKey(
+  db: DB,
+  key: string,
+): { user: User; keyId: number; scope: "read" | "write"; portfolioId: number } | null {
   const row = db
-    .select({ ...userCols, keyId: apiKeys.id, scope: apiKeys.scope })
+    .select({ ...userCols, keyId: apiKeys.id, scope: apiKeys.scope, portfolioId: apiKeys.portfolioId })
     .from(apiKeys)
     .innerJoin(users, eq(users.id, apiKeys.userId))
     .where(and(eq(apiKeys.keyHash, sha256(key)), isNull(apiKeys.revokedAt), eq(users.disabled, false)))
     .get();
   if (!row) return null;
   db.update(apiKeys).set({ lastUsedAt: new Date().toISOString() }).where(eq(apiKeys.id, row.keyId)).run();
-  const { keyId, scope, ...user } = row;
-  return { user, keyId, scope };
+  const { keyId, scope, portfolioId, ...user } = row;
+  return { user, keyId, scope, portfolioId };
 }
 
 export const apiKeyInput = z.object({
@@ -145,7 +168,14 @@ export function createApiKey(db: DB, actor: Actor, input: z.infer<typeof apiKeyI
   const key = `${API_KEY_PREFIX}${prefix}_${token(24)}`;
   const { id } = db
     .insert(apiKeys)
-    .values({ userId: actor.user.id, name: input.name, prefix, keyHash: sha256(key), scope: input.scope })
+    .values({
+      userId: actor.user.id,
+      portfolioId: currentPortfolioId(db),
+      name: input.name,
+      prefix,
+      keyHash: sha256(key),
+      scope: input.scope,
+    })
     .returning({ id: apiKeys.id })
     .get();
   audit(db, actor, "create", "api_key", id, { name: input.name, scope: input.scope });
@@ -164,7 +194,7 @@ export function listApiKeys(db: DB, actor: Actor) {
       revoked_at: apiKeys.revokedAt,
     })
     .from(apiKeys)
-    .where(eq(apiKeys.userId, actor.user.id))
+    .where(and(eq(apiKeys.userId, actor.user.id), eq(apiKeys.portfolioId, currentPortfolioId(db))))
     .orderBy(asc(isNotNull(apiKeys.revokedAt)), desc(apiKeys.createdAt))
     .all();
 }
@@ -173,7 +203,14 @@ export function revokeApiKey(db: DB, actor: Actor, id: number) {
   const r = db
     .update(apiKeys)
     .set({ revokedAt: new Date().toISOString() })
-    .where(and(eq(apiKeys.id, id), eq(apiKeys.userId, actor.user.id), isNull(apiKeys.revokedAt)))
+    .where(
+      and(
+        eq(apiKeys.id, id),
+        eq(apiKeys.userId, actor.user.id),
+        eq(apiKeys.portfolioId, currentPortfolioId(db)),
+        isNull(apiKeys.revokedAt),
+      ),
+    )
     .run();
   if (!r.changes) throw notFound("API key");
   audit(db, actor, "revoke", "api_key", id);
@@ -188,64 +225,39 @@ export const userCreateInput = z.object({
   password: password.optional(),
   role: z.enum(["admin", "member", "viewer"]).default("member"),
 });
-export const userUpdateInput = z.object({
-  name: z.string().trim().max(100).optional(),
-  role: z.enum(["admin", "member", "viewer"]).optional(),
-  disabled: z.boolean().optional(),
-  password: password.optional(),
-});
 
+/**
+ * Create a login. It joins the current portfolio at its role. The very first login (setup, or the first OIDC sign-in)
+ * runs the server and joins the only portfolio; a login created with no portfolio in scope (an uninvited OIDC
+ * sign-in) joins none.
+ */
 export async function createUser(db: DB, actor: Actor | null, input: z.infer<typeof userCreateInput>) {
-  if (actor) requireAdmin(actor);
+  // Portfolio admins add people with invite links; making a login with a password is for the server's administrator.
+  if (actor) {
+    requireInstanceAdmin(actor);
+    // Looking into a portfolio read-only (or a read-only key) doesn't add people to it.
+    if (!actor.canWrite) throw new AppError(403, "You can't add people to a portfolio you're only looking at");
+  }
   if (findUserByEmail(db, input.email)) throw badRequest("A user with that email already exists");
   const hash = input.password ? await hashPassword(input.password) : null;
+  const first = userCount(db) === 0;
+  const portfolioId = first ? onlyPortfolioId(db) : actor ? currentPortfolioId(db) : currentPortfolioIdOrNull(db);
   const { id } = db
     .insert(users)
-    .values({ email: input.email, name: input.name, passwordHash: hash, role: input.role })
+    .values({ email: input.email, name: input.name, passwordHash: hash, isInstanceAdmin: first })
     .returning({ id: users.id })
     .get();
-  audit(db, actor, "create", "user", id, { email: input.email, role: input.role });
-  return getUser(db, id);
+  if (portfolioId != null) addMember(db, actor, portfolioId, id, input.role);
+  // The role belongs to the membership (recorded in that portfolio's history), not the login.
+  audit(db, actor, "create", "user", id, { email: input.email });
+  // with the role it got in the portfolio it joined (a login has none of its own)
+  return { ...getUser(db, id), role: portfolioId != null ? input.role : ("viewer" as const) };
 }
 
 export function getUser(db: DB, id: number): User {
   const u = db.select(userCols).from(users).where(eq(users.id, id)).get();
   if (!u) throw notFound("User");
   return u;
-}
-
-export function listUsers(db: DB, actor: Actor) {
-  requireAdmin(actor);
-  return db
-    .select({
-      ...userCols,
-      disabled: users.disabled,
-      created_at: users.createdAt,
-      has_password: sql<boolean>`${users.passwordHash} IS NOT NULL`.mapWith(Boolean),
-      has_sso: sql<boolean>`${users.oidcSub} IS NOT NULL`.mapWith(Boolean),
-    })
-    .from(users)
-    .orderBy(users.id)
-    .all();
-}
-
-export async function updateUser(db: DB, actor: Actor, id: number, input: z.infer<typeof userUpdateInput>) {
-  requireAdmin(actor);
-  const before = getUser(db, id);
-  if (id === actor.user.id && ((input.role && input.role !== "admin") || input.disabled)) {
-    throw badRequest("You cannot demote or disable your own account");
-  }
-  const passwordHash = input.password ? await hashPassword(input.password) : undefined;
-  const changes = Object.fromEntries(
-    Object.entries({ name: input.name, role: input.role, disabled: input.disabled, passwordHash }).filter(
-      ([, v]) => v !== undefined,
-    ),
-  );
-  if (Object.keys(changes).length) db.update(users).set(changes).where(eq(users.id, id)).run();
-  if (input.disabled) db.delete(sessions).where(eq(sessions.userId, id)).run();
-  const { password: _p, ...logged } = input;
-  audit(db, actor, "update", "user", id, { ...logged, password_changed: !!input.password, email: before.email });
-  return getUser(db, id);
 }
 
 export async function changeOwnPassword(db: DB, actor: Actor, current: string, next: string) {

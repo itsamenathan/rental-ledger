@@ -7,6 +7,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "./config.ts";
 import * as schema from "./db/schema.ts";
+import { RESERVED_PROPERTY_SLUGS, uniqueSlug } from "./slugs.ts";
 
 export { schema };
 export type DB = BetterSQLite3Database<typeof schema> & { $client: Database.Database };
@@ -51,11 +52,54 @@ function runMigrations(db: DB, path: string) {
     return exists ? (db.$client.prepare("SELECT count(*) AS n FROM __drizzle_migrations").get() as { n: number }).n : 0;
   };
   const before = applied();
-  migrate(db, { migrationsFolder });
+  // Drizzle runs every pending migration inside one BEGIN…COMMIT, where the `PRAGMA foreign_keys=OFF` that
+  // drizzle-kit writes around a table rebuild does nothing. With keys on, `DROP TABLE transactions` would cascade and
+  // delete every attachment. So keys are off for the whole run, and checked after a migration ran. Drizzle has
+  // committed by then, so a broken reference is reported loudly rather than stopping the server (a restart would
+  // start anyway, and the reference may be older than the migration).
+  db.$client.pragma("foreign_keys = OFF");
+  try {
+    migrate(db, { migrationsFolder });
+    if (applied() > before) {
+      const broken = db.$client.pragma("foreign_key_check") as { table: string; parent: string }[];
+      if (broken.length)
+        log.error(
+          { db: path, broken: broken.length, where: [...new Set(broken.map((b) => `${b.table} → ${b.parent}`))] },
+          "database has foreign key references to missing rows after migrating",
+        );
+    }
+  } finally {
+    db.$client.pragma("foreign_keys = ON");
+  }
+  fillSlugs(db);
   const after = applied();
   if (after > before && path !== ":memory:") {
     log.info({ db: path, applied: after - before, total: after }, "database migrations applied");
   }
+}
+
+/**
+ * Give properties without a web address one from their name (the portfolios migration leaves existing ones empty; a
+ * restored older backup migrates through it too). New properties get theirs when created, so this usually finds
+ * nothing.
+ */
+export function fillSlugs(db: DB) {
+  const c = db.$client;
+  const rows = c.prepare("SELECT id, portfolio_id AS p, name FROM properties WHERE slug = '' ORDER BY id").all() as {
+    id: number;
+    p: number;
+    name: string;
+  }[];
+  if (!rows.length) return;
+  const taken = c.prepare("SELECT 1 FROM properties WHERE portfolio_id = ? AND slug = ?");
+  const set = c.prepare("UPDATE properties SET slug = ? WHERE id = ?");
+  c.transaction(() => {
+    for (const r of rows)
+      set.run(
+        uniqueSlug(r.name, RESERVED_PROPERTY_SLUGS, (s) => !!taken.get(r.p, s), "property"),
+        r.id,
+      );
+  })();
 }
 
 // Survive Vite dev-server module reloads by caching on globalThis.

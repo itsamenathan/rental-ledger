@@ -14,6 +14,7 @@ import { and, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { auditLog, categories, importProfiles, transactions as t } from "../db/schema.ts";
+import { currentPortfolioId } from "../portfolio.ts";
 import { audit, badRequest, cents, notFound, requireWrite, type Actor } from "../context.ts";
 import { parseCsv } from "./csv.ts";
 import * as ledger from "./ledger.ts";
@@ -379,6 +380,7 @@ export const profileInput = z.object({
 });
 
 type ProfileRow = typeof importProfiles.$inferSelect;
+const profilesInPortfolio = (db: DB) => eq(importProfiles.portfolioId, currentPortfolioId(db));
 const toProfile = (r: ProfileRow) => ({
   id: r.id,
   name: r.name,
@@ -389,11 +391,21 @@ const toProfile = (r: ProfileRow) => ({
 export type ImportProfile = ReturnType<typeof toProfile>;
 
 export function listProfiles(db: DB): ImportProfile[] {
-  return db.select().from(importProfiles).orderBy(importProfiles.name).all().map(toProfile);
+  return db
+    .select()
+    .from(importProfiles)
+    .where(profilesInPortfolio(db))
+    .orderBy(importProfiles.name)
+    .all()
+    .map(toProfile);
 }
 
 function getProfile(db: DB, id: number) {
-  const r = db.select().from(importProfiles).where(eq(importProfiles.id, id)).get();
+  const r = db
+    .select()
+    .from(importProfiles)
+    .where(and(eq(importProfiles.id, id), profilesInPortfolio(db)))
+    .get();
   if (!r) throw notFound("Import profile");
   return toProfile(r);
 }
@@ -407,7 +419,7 @@ export function saveProfile(db: DB, actor: Actor, raw: unknown): ImportProfile {
     const existing = db
       .select({ id: importProfiles.id })
       .from(importProfiles)
-      .where(eq(sql`lower(${importProfiles.name})`, p.name.toLowerCase()))
+      .where(and(eq(sql`lower(${importProfiles.name})`, p.name.toLowerCase()), profilesInPortfolio(db)))
       .get();
     let id: number;
     if (existing) {
@@ -418,7 +430,11 @@ export function saveProfile(db: DB, actor: Actor, raw: unknown): ImportProfile {
         .run();
       audit(db, actor, "update", "import_profile", id, p);
     } else {
-      id = db.insert(importProfiles).values(values).returning({ id: importProfiles.id }).get().id;
+      id = db
+        .insert(importProfiles)
+        .values({ ...values, portfolioId: currentPortfolioId(db) })
+        .returning({ id: importProfiles.id })
+        .get().id;
       audit(db, actor, "create", "import_profile", id, p);
     }
     return getProfile(db, id);
@@ -781,7 +797,7 @@ function findMatches(db: DB, rows: PreviewRow[], windowDays: number) {
         .select(cols)
         .from(t)
         .innerJoin(categories, eq(categories.id, t.categoryId))
-        .where(inArray(t.externalId, ids.slice(i, i + 500)))
+        .where(and(inArray(t.externalId, ids.slice(i, i + 500)), eq(t.portfolioId, currentPortfolioId(db))))
         .all())
         byId.set(c.external_id!, c);
     for (const r of live) {
@@ -803,6 +819,7 @@ function findMatches(db: DB, rows: PreviewRow[], windowDays: number) {
     .where(
       and(
         isNull(t.deletedAt),
+        eq(t.portfolioId, currentPortfolioId(db)),
         inArray(t.propertyId, props),
         gte(t.date, shift(dates[0]!, -windowDays)),
         lte(t.date, shift(dates.at(-1)!, windowDays)),
@@ -877,7 +894,13 @@ export function commitImport(db: DB, actor: Actor, raw: unknown) {
     ? db
         .select({ id: auditLog.id })
         .from(auditLog)
-        .where(and(eq(auditLog.action, "bulk_create"), eq(auditLog.entity, "transaction")))
+        .where(
+          and(
+            eq(auditLog.action, "bulk_create"),
+            eq(auditLog.entity, "transaction"),
+            eq(auditLog.portfolioId, currentPortfolioId(db)),
+          ),
+        )
         .orderBy(desc(auditLog.id))
         .get()
     : undefined;

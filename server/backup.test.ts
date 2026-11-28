@@ -131,7 +131,7 @@ describe("restore", () => {
     expect(file.buf.toString()).toBe("receipt bytes");
     expect((await call("GET", `/api/manager/documents/${doc.id}/file`)).buf.toString()).toBe(statement);
 
-    const auditRows = (await call("GET", "/api/audit?entity=backup")).json;
+    const auditRows = (await call("GET", "/api/admin/audit?entity=backup")).json;
     const restored = (auditRows.items ?? auditRows).find((a: any) => a.action === "restore");
     expect(restored.changes.source).toBe("test backup.zip");
 
@@ -189,6 +189,7 @@ describe("restore", () => {
         "INSERT INTO users (id, email, name, password_hash, role) VALUES (?, 'carol@example.com', 'Carol', ?, 'admin')",
       )
       .run(bob.id, "x");
+    doctored.prepare("INSERT INTO memberships (user_id, portfolio_id, role) VALUES (?, 1, 'admin')").run(bob.id);
     doctored.close();
     const zipped = zip(restoredEntries.map((e) => (e.name === "rental.db" ? { ...e, data: readFileSync(dbFile) } : e)));
 
@@ -269,7 +270,7 @@ describe("restore", () => {
   it("lets go of the gate when a download is cancelled part way", async () => {
     const { createBackup } = await import("./services/backup.ts");
     const actor = {
-      user: { id: 1, email: "owner@example.com", name: "Owner", role: "admin" as const },
+      user: { id: 1, email: "owner@example.com", name: "Owner", role: "admin" as const, instance_admin: true },
       apiKeyId: null,
       canWrite: true,
       via: "web" as const,
@@ -303,5 +304,17 @@ describe("restore", () => {
     const r = await call("POST", "/api/backup/restore", new Uint8Array([1]), { authorization: `Bearer ${key}` });
     cookie = saved;
     expect(r.status).toBe(403);
+  });
+
+  it("lets the server's administrator restore while only looking into someone's portfolio", async () => {
+    const { restoreBackup } = await import("./services/backup.ts");
+    const viewing = {
+      user: { id: 1, email: "owner@example.com", name: "Owner", role: "viewer" as const, instance_admin: true },
+      apiKeyId: null,
+      canWrite: false,
+      via: "web" as const,
+    };
+    // past the permission checks: refused only because these bytes aren't a backup
+    await expect(restoreBackup(getDb(), viewing, Buffer.from([1]))).rejects.not.toMatchObject({ status: 403 });
   });
 });

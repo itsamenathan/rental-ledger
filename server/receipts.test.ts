@@ -7,6 +7,7 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "rental-test-"));
 
 const { openDb } = await import("./db.ts");
 const { seedDefaults } = await import("./seed.ts");
+const { TEST_CATEGORIES } = await import("./test-categories.ts");
 const { users } = await import("./db/schema.ts");
 const ledger = await import("./services/ledger.ts");
 const files = await import("./services/attachments.ts");
@@ -19,7 +20,7 @@ const { undoAudit } = await import("./services/undo.ts");
 
 function setup() {
   const db = openDb(":memory:");
-  seedDefaults(db);
+  seedDefaults(db, TEST_CATEGORIES);
   const user = db.insert(users).values({ email: "t@example.com", role: "admin" }).returning().get();
   const actor = { user: { ...user, role: "admin" as const }, apiKeyId: null, canWrite: true, via: "web" as const };
   const add = (category: string, amount: number, extra: Record<string, unknown> = {}) =>

@@ -11,7 +11,6 @@ import {
   type SyncResult,
 } from "../calendar.ts";
 import { fmtDate, monthTitle, shiftMonth, thisMonth, today } from "../format.ts";
-import { propertySettingsPath } from "../scope.ts";
 import { useApi, usePersistentState, useScopedPath, useSession, useToast, useProperty } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 import { KindToggle } from "../components/OwnerStays.tsx";
@@ -79,7 +78,7 @@ const historyText = (h: HistorySummary) =>
 export default function Calendar() {
   const { canWrite, settings } = useSession();
   const toast = useToast();
-  const propertyId = useProperty().single;
+  const { single: propertyId, settingsPath } = useProperty();
   // The month is in the address (?month=), so links can open one and Back steps through them; without one, the
   // month last looked at on this device.
   const linked = useSearchParams()[0].get("month");
@@ -329,7 +328,7 @@ export default function Calendar() {
             {" · "}
           </>
         )}
-        <Link className="link small" to={propertySettingsPath(propertyId)}>
+        <Link className="link small" to={settingsPath}>
           {data && !data.feeds.length ? "Add one in this property's settings" : "Manage calendars"}
         </Link>
       </p>

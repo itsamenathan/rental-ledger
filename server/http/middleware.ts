@@ -5,40 +5,75 @@ import { z } from "zod";
 import { config } from "../config.ts";
 import { getDb } from "../db.ts";
 import { log } from "../telemetry.ts";
-import { AppError, type Actor, type Via } from "../context.ts";
+import { AppError, type Actor, type Role, type Via } from "../context.ts";
+import { inRequest } from "../portfolio.ts";
+import { keyRole, portfolioForUser, recordInstanceAdminView } from "../services/portfolios.ts";
 import { API_KEY_PREFIX, roleCanWrite, userForApiKey, userForSession } from "../services/auth.ts";
 
 export const SESSION_COOKIE = "rental_session";
 
-export type Env = { Variables: { actor: Actor | null } };
+/** The portfolio this request works in, as /auth/me reports it. */
+export interface RequestPortfolioInfo {
+  slug: string;
+  role: Role;
+  /** the instance admin, looking at a portfolio they don't belong to (read-only) */
+  viewing: boolean;
+}
 
-/** Resolve the caller from a Bearer API key or the session cookie. Does not reject. */
+export type Env = { Variables: { actor: Actor | null; portfolio: RequestPortfolioInfo | null; portfolioWhy?: string } };
+
+/**
+ * Resolve the caller from a Bearer API key or the session cookie, and the portfolio the request works in: the key's,
+ * or `?portfolio=<slug>` (else the login's only portfolio). The caller's role is their role in that portfolio. Does
+ * not reject a request without a portfolio: only touching a portfolio's data does (server/portfolio.ts).
+ */
 export function resolveActor(via: Via = "api"): MiddlewareHandler<Env> {
   return async (c, next) => {
     const db = getDb();
     const header = c.req.header("authorization");
+    const slug = c.req.query("portfolio") || null;
     let actor: Actor | null = null;
+    let portfolio: (RequestPortfolioInfo & { id: number }) | null = null;
+    let why: string | undefined;
     if (header?.startsWith("Bearer ")) {
       const key = header.slice(7).trim();
       const found = key.startsWith(API_KEY_PREFIX) ? userForApiKey(db, key) : null;
       if (!found) throw new AppError(401, "Invalid API key");
+      const k = keyRole(db, found.user.id, found.portfolioId);
+      if (k && slug && slug !== k.slug) throw new AppError(403, "This API key works in another portfolio");
+      if (k) portfolio = { id: found.portfolioId, slug: k.slug, role: k.role, viewing: false };
+      else why = "This API key's owner no longer has access to its portfolio, or it was archived";
+      const role = k?.role ?? "viewer";
       actor = {
-        user: found.user,
+        user: { ...found.user, role },
         apiKeyId: found.keyId,
-        canWrite: found.scope === "write" && roleCanWrite(found.user.role),
+        canWrite: !!k && found.scope === "write" && roleCanWrite(role),
         via,
       };
     } else {
       const token = getCookie(c, SESSION_COOKIE);
       const user = token ? userForSession(db, token) : null;
       if (user) {
-        actor = { user, apiKeyId: null, canWrite: roleCanWrite(user.role), via: "web" };
         // CSRF: cookie-authenticated writes must come from our own origin.
         if (!["GET", "HEAD", "OPTIONS"].includes(c.req.method)) assertSameOrigin(c);
+        const p = portfolioForUser(db, user, slug);
+        if (p.id != null) portfolio = { id: p.id, slug: p.slug, role: p.role, viewing: p.viewing };
+        else why = p.why;
+        const role = portfolio?.role ?? "viewer";
+        actor = {
+          user: { ...user, role },
+          apiKeyId: null,
+          canWrite: !!portfolio && !portfolio.viewing && roleCanWrite(role),
+          via: "web",
+        };
+        if (portfolio?.viewing) recordInstanceAdminView(db, actor, portfolio.id);
       }
     }
     c.set("actor", actor);
-    await next();
+    c.set("portfolio", portfolio && { slug: portfolio.slug, role: portfolio.role, viewing: portfolio.viewing });
+    c.set("portfolioWhy", why);
+    // Everything after sign-in runs in the caller's portfolio (server/portfolio.ts); none = no portfolio to see.
+    await inRequest(portfolio?.id ?? null, () => next(), why);
   };
 }
 

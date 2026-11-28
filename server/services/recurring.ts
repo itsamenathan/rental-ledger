@@ -8,6 +8,7 @@ import { and, eq, gte, isNull } from "drizzle-orm";
 import { z } from "zod";
 import type { DB } from "../db.ts";
 import { categories, recurringDismissals, transactions } from "../db/schema.ts";
+import { currentPortfolioId, propertyScope } from "../portfolio.ts";
 import { audit, badRequest, notFound, requireWrite, type Actor } from "../context.ts";
 
 const CADENCES = [1, 2, 3, 4, 6, 12] as const;
@@ -325,9 +326,11 @@ function alertsFor(s: Series, today: string, skip: Set<string>): RecurringAlert[
   return out;
 }
 
+const dismissalsInPortfolio = (db: DB) => eq(recurringDismissals.portfolioId, currentPortfolioId(db));
+
 function loadDismissals(db: DB) {
   const map = new Map<string, Set<string>>();
-  for (const d of db.select().from(recurringDismissals).all()) {
+  for (const d of db.select().from(recurringDismissals).where(dismissalsInPortfolio(db)).all()) {
     if (!map.has(d.seriesKey)) map.set(d.seriesKey, new Set());
     map.get(d.seriesKey)!.add(d.month);
   }
@@ -360,9 +363,7 @@ export function recurring(db: DB, opts: RecurringOptions = {}) {
     })
     .from(t)
     .innerJoin(categories, eq(categories.id, t.categoryId))
-    .where(
-      and(isNull(t.deletedAt), gte(t.date, since), opts.propertyId ? eq(t.propertyId, opts.propertyId) : undefined),
-    )
+    .where(and(isNull(t.deletedAt), gte(t.date, since), propertyScope(db, t.propertyId, opts.propertyId)))
     .orderBy(t.date, t.id)
     .all();
 
@@ -388,6 +389,7 @@ export function recurring(db: DB, opts: RecurringOptions = {}) {
       created_at: recurringDismissals.createdAt,
     })
     .from(recurringDismissals)
+    .where(dismissalsInPortfolio(db))
     .all();
   return { today, series, alerts, dismissals };
 }
@@ -452,12 +454,24 @@ export function dismiss(db: DB, actor: Actor, raw: unknown) {
   const existing = db
     .select({ id: recurringDismissals.id })
     .from(recurringDismissals)
-    .where(and(eq(recurringDismissals.seriesKey, d.series_key), eq(recurringDismissals.month, month)))
+    .where(
+      and(
+        eq(recurringDismissals.seriesKey, d.series_key),
+        eq(recurringDismissals.month, month),
+        dismissalsInPortfolio(db),
+      ),
+    )
     .get();
   if (existing) return { id: existing.id };
   const { id } = db
     .insert(recurringDismissals)
-    .values({ seriesKey: d.series_key, month, note: d.note, createdBy: actor.user.id })
+    .values({
+      portfolioId: currentPortfolioId(db),
+      seriesKey: d.series_key,
+      month,
+      note: d.note,
+      createdBy: actor.user.id,
+    })
     .returning({ id: recurringDismissals.id })
     .get();
   audit(db, actor, "create", "recurring_dismissal", id, d);
@@ -466,7 +480,11 @@ export function dismiss(db: DB, actor: Actor, raw: unknown) {
 
 export function undismiss(db: DB, actor: Actor, id: number) {
   requireWrite(actor);
-  const row = db.select().from(recurringDismissals).where(eq(recurringDismissals.id, id)).get();
+  const row = db
+    .select()
+    .from(recurringDismissals)
+    .where(and(eq(recurringDismissals.id, id), dismissalsInPortfolio(db)))
+    .get();
   if (!row) throw notFound("Dismissal");
   db.delete(recurringDismissals).where(eq(recurringDismissals.id, id)).run();
   audit(db, actor, "delete", "recurring_dismissal", id, { series_key: row.seriesKey, month: row.month || null });

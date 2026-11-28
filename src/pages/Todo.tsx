@@ -15,11 +15,10 @@ import TxEditModal from "../components/TxEditModal.tsx";
 import { CandidateList, GuestNightList } from "../components/OwnerStays.tsx";
 import type { MonthCompare, StayCandidate } from "../owner-stays.ts";
 import { dateInMonth, fmtDate, money, monthTitle } from "../format.ts";
-import { useApi, useSession, useToast, useProperty } from "../hooks.ts";
+import { useApi, usePropertyPath, useProperty, useScopedPath, useSession, useToast } from "../hooks.ts";
 import { txParts } from "../month-view.ts";
 import { useDismissAlert } from "../recurring-dismiss.ts";
 import { Amount } from "../lib.tsx";
-import { scopePath } from "../scope.ts";
 
 export interface TodoSummary {
   total: number;
@@ -47,8 +46,6 @@ const SHOWN = 10;
 const MARK_ALL_FROM = 3;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-/** A link into one property's pages, whichever scope the To do page is showing. */
-const at = (propertyId: number, to: string) => scopePath(String(propertyId), to);
 
 /** What's wrong with a recurring bill, without repeating its name (the row's title). */
 function alertNote(a: RecurringAlert) {
@@ -69,6 +66,7 @@ type Act = (run: () => Promise<unknown>, text: string, undo?: () => Promise<unkn
  */
 export default function Todo() {
   const { key, qs: pq, path: scoped } = useProperty();
+  const at = usePropertyPath();
   const { overview, canWrite } = useSession();
   const flagged = useApi<TxList>(`transactions?needs_review=true&sort=date_asc&limit=500&${pq}`);
   const unallocated = useApi<TxList>(`transactions?kind=expense&allocation=none&sort=date_asc&limit=500&${pq}`);
@@ -352,7 +350,9 @@ function BillRow({
   const { canWrite } = useSession();
   const here = useLocation().pathname;
   const dismiss = useDismissAlert(onChanged);
-  const link = (to: string) => (s ? at(s.property_id, to) : to);
+  const at = usePropertyPath();
+  const scoped = useScopedPath();
+  const link = (to: string) => (s ? at(s.property_id, to) : scoped(to));
   const date = s ? dateInMonth(a.month, s.expected_day) : "";
 
   const quickAdd = (s: RecurringSeries) => {

@@ -9,12 +9,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { config } from "../config.ts";
 import { closeDb, getDb, migrationsFolder, openDb, setDb, tx, type DB } from "../db.ts";
 import { enter, exclusive } from "../maintenance.ts";
-import { apiKeys, sessions, users } from "../db/schema.ts";
-import { AppError, audit, badRequest, requireAdmin, requireWrite, type Actor } from "../context.ts";
+import { apiKeys, memberships, portfolios, sessions, users } from "../db/schema.ts";
+import { AppError, audit, badRequest, requireInstanceAdmin, type Actor } from "../context.ts";
 import { log } from "../telemetry.ts";
 import { allStorageKeys } from "./storage.ts";
 import { readZip, zipStream, type ZipEntry, type ZipSource } from "./zip.ts";
@@ -26,7 +26,7 @@ Contents
   uploads/    receipt files referenced by the database
 
 Restore
-  In the app: Settings → Backup → Restore from backup (admins). The current data is saved to
+  In the app: Settings → Server → Backup & restore (the server's administrator). The current data is saved to
   backups/ in the data directory first. Sign-ins stay as they are on the server: current passwords,
   sessions and API keys are kept, and users who exist only in the backup come back disabled.
 
@@ -50,7 +50,7 @@ const maxRestoredBytes = () => Math.max(config.maxRestoreBytes * 4, 1024 * 1024 
  * safety copy, taken while the maintenance gate is closed.
  */
 export function createBackup(db: DB, actor: Actor | null, opts: { gated?: boolean } = {}) {
-  if (actor) requireAdmin(actor);
+  if (actor) requireInstanceAdmin(actor);
   const now = new Date();
   const root = resolve(config.uploadsDir);
   let dir = "";
@@ -151,13 +151,19 @@ function checkDatabase(path: string) {
 }
 
 type UserRow = typeof users.$inferSelect;
-type Logins = { users: UserRow[]; sessions: (typeof sessions.$inferSelect)[]; keys: (typeof apiKeys.$inferSelect)[] };
+type Logins = {
+  users: UserRow[];
+  sessions: (typeof sessions.$inferSelect)[];
+  keys: (typeof apiKeys.$inferSelect)[];
+  memberships: (typeof memberships.$inferSelect)[];
+};
 
 function readLogins(db: DB): Logins {
   return {
     users: db.select().from(users).all(),
     sessions: db.select().from(sessions).all(),
     keys: db.select().from(apiKeys).all(),
+    memberships: db.select().from(memberships).all(),
   };
 }
 
@@ -165,6 +171,7 @@ function readLogins(db: DB): Logins {
  * Sign-in state belongs to this server, not to the backup: restoring old data must not bring back a revoked API
  * key or an old password, or lock out whoever is restoring. User rows stay (history references their ids), but:
  *  - sessions and API keys are the current ones; the backup's are dropped;
+ *  - who belongs to which portfolio is current too, for portfolios the backup has (keys for others are dropped);
  *  - a user in both (matched by email) keeps the backup's id, with the current password, role, SSO link and status;
  *  - a user only in the backup is restored disabled, for an admin to re-enable;
  *  - a user only on this server is kept, under a new id if theirs is taken.
@@ -191,6 +198,7 @@ function mergeLogins(target: DB, current: Logins) {
         name: c.name,
         passwordHash: c.passwordHash,
         role: c.role,
+        isInstanceAdmin: c.isInstanceAdmin,
         oidcSub: c.oidcSub,
         disabled: c.disabled,
       };
@@ -225,9 +233,29 @@ function mergeLogins(target: DB, current: Logins) {
           .values({ ...s, userId })
           .run();
     }
+    const portfolioIds = new Set(
+      target
+        .select({ id: portfolios.id })
+        .from(portfolios)
+        .all()
+        .map((p) => p.id),
+    );
+    const currentIds = new Set(idMap.values());
+    target
+      .delete(memberships)
+      .where(inArray(memberships.userId, [...currentIds]))
+      .run();
+    for (const m of current.memberships) {
+      const userId = idMap.get(m.userId);
+      if (userId && portfolioIds.has(m.portfolioId))
+        target
+          .insert(memberships)
+          .values({ ...m, userId })
+          .run();
+    }
     for (const k of current.keys) {
       const userId = idMap.get(k.userId);
-      if (userId)
+      if (userId && portfolioIds.has(k.portfolioId))
         target
           .insert(apiKeys)
           .values({ ...k, userId })
@@ -248,8 +276,10 @@ let restoring = false;
  */
 export async function restoreBackup(db: DB, actor: Actor | null, data: Buffer, source = "upload") {
   if (actor) {
-    requireAdmin(actor);
-    requireWrite(actor);
+    requireInstanceAdmin(actor);
+    // A read-only key can't restore. A browser session can, whatever its role in the portfolio the page is open in
+    // (restoring is about the whole server, and the admin may be only looking into someone else's portfolio).
+    if (actor.apiKeyId && !actor.canWrite) throw new AppError(403, "This API key is read-only");
   }
   if (restoring) throw new AppError(409, "A restore is already running");
   restoring = true;

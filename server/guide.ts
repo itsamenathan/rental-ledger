@@ -68,7 +68,7 @@ manager paperwork belong to one property. Users, API keys, categories, receipt r
 - Reads that total things up (transactions, files, occupancy, calendar feeds, reports/summary, reports/month,
   reports/years, reports/categories, todo, recurring) also take \`property=all\` to add up every property. The tax
   report, tax package, calendar, tax years and manager paperwork are always for one property.
-- In the web app the property is in the URL: \`/p/<id>/transactions\`, and \`/p/all/\` for the totals view.
+- In the web app the portfolio and property are in the URL: \`/<portfolio>/<property>/transactions\` (readable slugs, e.g. \`/alexs-portfolio/harbor-view/transactions\`), and \`/<portfolio>/all/\` for the totals view.
 
 ## REST endpoints (JSON)
 

@@ -2,7 +2,8 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { DB } from "../db.ts";
 import { occupancy, properties, taxYears } from "../db/schema.ts";
-import { audit, cents, diff, dollars, requireWrite, type Actor } from "../context.ts";
+import { propertyScope } from "../portfolio.ts";
+import { audit, cents, diff, dollars, notFound, requireWrite, type Actor } from "../context.ts";
 import { resolvePropertyId } from "./ledger.ts";
 import { monthHasStays, occupancyRows } from "./owner-stays.ts";
 
@@ -51,7 +52,7 @@ export function listOccupancy(db: DB, opts: { year?: number; property_id?: numbe
 
 function findOccupancy(db: DB, propertyId: number, month: string) {
   return selectOccupancy(db)
-    .where(and(eq(occupancy.propertyId, propertyId), eq(occupancy.month, month)))
+    .where(and(propertyScope(db, occupancy.propertyId, propertyId), eq(occupancy.month, month)))
     .get();
 }
 
@@ -86,7 +87,10 @@ export function upsertOccupancy(db: DB, actor: Actor | null, raw: unknown) {
 
 export function deleteOccupancy(db: DB, actor: Actor, id: number) {
   requireWrite(actor);
-  const before = selectOccupancy(db).where(eq(occupancy.id, id)).get();
+  const before = selectOccupancy(db)
+    .where(and(eq(occupancy.id, id), propertyScope(db, occupancy.propertyId)))
+    .get();
+  if (!before) throw notFound("Occupancy month");
   db.delete(occupancy).where(eq(occupancy.id, id)).run();
   audit(db, actor, "delete", "occupancy", id, before);
 }
@@ -121,7 +125,7 @@ export function getTaxYear(db: DB, propertyId: number, year: number): TaxYear {
   const r = db
     .select()
     .from(taxYears)
-    .where(and(eq(taxYears.propertyId, propertyId), eq(taxYears.year, year)))
+    .where(and(propertyScope(db, taxYears.propertyId, propertyId), eq(taxYears.year, year)))
     .get();
   return {
     property_id: propertyId,

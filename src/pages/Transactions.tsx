@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { apiUrl } from "../portfolio.ts";
 import { Link, useSearchParams } from "react-router";
 import { qs, type Transaction, type TxCounts, type TxList } from "../api.ts";
 import TxEditModal from "../components/TxEditModal.tsx";
@@ -148,7 +149,7 @@ export default function Transactions() {
       <header className="page-head">
         <h1>Transactions</h1>
         <div className="head-actions">
-          <a className="btn" href={`/api/export/transactions.csv${qs({ ...filters, sort })}`}>
+          <a className="btn" href={apiUrl(`/api/export/transactions.csv${qs({ ...filters, sort })}`)}>
             Export CSV
           </a>
           {canWrite && (

@@ -1,48 +1,132 @@
-import { useState, type FormEvent } from "react";
-import { Link, NavLink, Navigate, Route, Routes } from "react-router";
+import { useState, type FormEvent, type ReactNode } from "react";
+import { apiUrl, BASENAME } from "../portfolio.ts";
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import { api, type Property, type UserSettings } from "../api.ts";
 import { useApi, useProperty, useSession, useToast, useConfirm } from "../hooks.ts";
 import { Modal } from "../lib.tsx";
 import CategorySettings from "./CategorySettings.tsx";
 import { PropertyCalendars } from "../components/CalendarFeeds.tsx";
 import { propertySettingsPath } from "../scope.ts";
+import { slugTyping } from "../../server/slugs.ts";
 import { fmtDate } from "../format.ts";
+import {
+  DownloadPortfolio,
+  People,
+  PortfolioGeneral,
+  ServerLogins,
+  ServerNote,
+  ServerPortfolios,
+} from "./Portfolios.tsx";
 
+type NavItem = { to: string; label: string; show?: boolean };
+
+/**
+ * Settings, grouped by whom a setting affects: you (your login, everywhere), this portfolio, and the whole
+ * server (its administrator only). Each group says so in its heading.
+ */
 export default function Settings() {
-  const { user } = useSession();
+  const { user, portfolio } = useSession();
+  const admin = user.role === "admin" && !portfolio.viewing;
+  const groups: { title: string; note?: string; items: NavItem[]; server?: boolean }[] = [
+    {
+      title: "Your account",
+      note: user.email,
+      items: [
+        { to: "account", label: "Account" },
+        { to: "preferences", label: "Preferences" },
+      ],
+    },
+    {
+      title: "Portfolio",
+      note: `${portfolio.name}${portfolio.viewing ? " · read-only" : ""}`,
+      items: [
+        { to: "portfolio", label: "General" },
+        { to: "properties", label: "Properties" },
+        { to: "categories", label: "Categories" },
+        { to: "people", label: "Who has access", show: admin },
+        { to: "api-keys", label: "API keys & agents", show: !portfolio.viewing },
+        { to: "audit", label: "Change history" },
+        { to: "download", label: "Download everything" },
+      ],
+    },
+    ...(user.instance_admin
+      ? [
+          {
+            title: "Server",
+            note: "only you",
+            server: true,
+            items: [
+              { to: "server/portfolios", label: "All portfolios" },
+              { to: "server/logins", label: "Logins" },
+              { to: "server/backup", label: "Backup & restore" },
+              { to: "server/activity", label: "Server activity" },
+            ],
+          },
+        ]
+      : []),
+  ];
+  const server = (el: ReactNode) =>
+    user.instance_admin ? (
+      <>
+        {<ServerNote />}
+        {el}
+      </>
+    ) : (
+      <Navigate to="/settings" replace />
+    );
   return (
-    <div className="page">
+    <div className="page settings-page">
       <header className="page-head">
         <h1>Settings</h1>
       </header>
-      <nav className="tabs">
-        <NavLink to="/settings/account">Account</NavLink>
-        <NavLink to="/settings/preferences">Preferences</NavLink>
-        <NavLink to="/settings/api-keys">API keys &amp; agents</NavLink>
-        <NavLink to="/settings/properties">Properties</NavLink>
-        <NavLink to="/settings/categories">Categories</NavLink>
-        {user.role === "admin" && <NavLink to="/settings/users">Users</NavLink>}
-        {user.role === "admin" && <NavLink to="/settings/backup">Backup</NavLink>}
-        <NavLink to="/settings/audit">Audit log</NavLink>
-      </nav>
-      <Routes>
-        <Route path="account" element={<Account />} />
-        <Route path="preferences" element={<Preferences />} />
-        <Route path="api-keys" element={<ApiKeys />} />
-        <Route path="properties" element={<Properties />} />
-        <Route path="categories" element={<CategorySettings />} />
-        <Route path="users" element={<Users />} />
-        <Route path="backup" element={<Backup />} />
-        <Route path="audit" element={<AuditLog />} />
-        <Route path="activity" element={<Navigate to="../audit" replace />} />
-        <Route path="*" element={<Navigate to="account" replace />} />
-      </Routes>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings">
+          {groups.map((g) => (
+            <div key={g.title} className={`settings-group ${g.server ? "server" : ""}`}>
+              <div className="settings-group-head">
+                <span className="settings-group-title">{g.title}</span>
+                {g.note && <span className="settings-group-note">{g.note}</span>}
+              </div>
+              {g.items
+                .filter((i) => i.show !== false)
+                .map((i) => (
+                  <NavLink key={i.to} to={`/settings/${i.to}`}>
+                    {i.label}
+                  </NavLink>
+                ))}
+            </div>
+          ))}
+        </nav>
+        <div className="settings-body">
+          <Routes>
+            <Route path="account" element={<Account />} />
+            <Route path="preferences" element={<Preferences />} />
+            <Route path="portfolio" element={<PortfolioGeneral />} />
+            <Route path="properties" element={<Properties />} />
+            <Route path="categories" element={<CategorySettings />} />
+            <Route path="people" element={<People />} />
+            <Route path="api-keys" element={<ApiKeys />} />
+            <Route path="audit" element={<AuditLog />} />
+            <Route path="download" element={<DownloadPortfolio />} />
+            <Route path="server/portfolios" element={server(<ServerPortfolios />)} />
+            <Route path="server/logins" element={server(<ServerLogins />)} />
+            <Route path="server/backup" element={server(<Backup />)} />
+            <Route path="server/activity" element={server(<AuditLog server />)} />
+            {/* earlier addresses */}
+            <Route path="users" element={<Navigate to="../people" replace />} />
+            <Route path="server" element={<Navigate to="../server/portfolios" replace />} />
+            <Route path="backup" element={<Navigate to="../server/backup" replace />} />
+            <Route path="activity" element={<Navigate to="../audit" replace />} />
+            <Route path="*" element={<Navigate to="account" replace />} />
+          </Routes>
+        </div>
+      </div>
     </div>
   );
 }
 
 function Account() {
-  const { user, logout } = useSession();
+  const { user, logout, portfolio } = useSession();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const toast = useToast();
@@ -66,8 +150,8 @@ function Account() {
           <dd>{user.email}</dd>
           <dt>Name</dt>
           <dd>{user.name || "—"}</dd>
-          <dt>Role</dt>
-          <dd>{user.role}</dd>
+          <dt>{`Role in ${portfolio.name}`}</dt>
+          <dd>{portfolio.viewing ? "looking in (read-only)" : user.role}</dd>
         </dl>
         <button className="btn" onClick={() => void logout()}>
           Sign out
@@ -193,6 +277,7 @@ interface Key {
 }
 
 function ApiKeys() {
+  const { portfolio } = useSession();
   const { data, reload } = useApi<Key[]>("api-keys");
   const [name, setName] = useState("");
   const [scope, setScope] = useState("write");
@@ -241,7 +326,8 @@ function ApiKeys() {
         <h2>Create an API key</h2>
         <p className="muted">
           Keys act as you. Use a <strong>read</strong> key for agents that only analyze, and <strong>write</strong> for
-          agents that add or fix entries. Every change is logged with the key's name.
+          agents that add or fix entries. Every change is logged with the key's name. A key works only in{" "}
+          <strong>{portfolio.name}</strong>.
         </p>
         <form className="inline-form" onSubmit={create}>
           <input
@@ -327,7 +413,7 @@ function ApiKeys() {
   );
 }
 
-/** App settings → Properties: the list, and adding one. Each property's own settings are at /p/<id>/settings. */
+/** App settings → Properties: the list, and adding one. Each property's own settings are at /<property slug>/settings. */
 function Properties() {
   const { overview, canWrite } = useSession();
   const [editing, setEditing] = useState<Partial<Property> | null>(null);
@@ -360,7 +446,7 @@ function Properties() {
           {overview.properties.map((p) => (
             <tr key={p.id} className={p.archived ? "excluded" : ""}>
               <td>
-                <Link to={propertySettingsPath(p.id)}>{p.name}</Link>
+                <Link to={propertySettingsPath(p.slug)}>{p.name}</Link>
                 {p.archived && <small className="muted"> archived</small>}
               </td>
               <td className="hide-sm">{p.address}</td>
@@ -444,13 +530,18 @@ function PropertyModal({
   editing: Partial<Property>;
   setEditing: (p: Partial<Property> | null) => void;
 }) {
-  const { reloadOverview } = useSession();
+  const { reloadOverview, overview } = useSession();
   const toast = useToast();
+  const navigate = useNavigate();
+  const loc = useLocation();
+  const before = overview.properties.find((x) => x.id === editing.id);
   const save = async (e: FormEvent) => {
     e.preventDefault();
     const p = editing;
+    const slugChanged = !!before && !!p.slug && p.slug !== before.slug;
     const json = {
       name: p.name,
+      ...(slugChanged ? { slug: p.slug } : {}),
       address: p.address ?? "",
       placed_in_service: p.placed_in_service || null,
       building_basis:
@@ -464,7 +555,10 @@ function PropertyModal({
     try {
       if (p.id) await api(`properties/${p.id}`, { method: "PATCH", json });
       else await api("properties", { method: "POST", json });
-      await reloadOverview();
+      // On one of this property's pages: follow it to its new address.
+      const [, seg, ...rest] = loc.pathname.split("/");
+      const follow = slugChanged && seg === before.slug ? `/${[p.slug, ...rest].join("/")}${loc.search}` : null;
+      await reloadOverview(follow ? () => void navigate(follow, { replace: true }) : undefined);
       setEditing(null);
     } catch (err) {
       toast({ text: (err as Error).message, kind: "error" });
@@ -485,6 +579,28 @@ function PropertyModal({
           Address
           <input value={editing.address ?? ""} onChange={(e) => setEditing({ ...editing, address: e.target.value })} />
         </label>
+        {before && (
+          <label>
+            Web address
+            <span className="slug-input">
+              <span className="muted">
+                {location.host}
+                {BASENAME}/
+              </span>
+              <input
+                required
+                value={editing.slug ?? ""}
+                pattern="[a-z0-9]+(-[a-z0-9]+)*"
+                title="Lowercase letters, numbers and dashes"
+                maxLength={40}
+                onChange={(e) => setEditing({ ...editing, slug: slugTyping(e.target.value) })}
+              />
+            </span>
+            <span className="muted small">
+              Renaming keeps it. Links to the old address stop working when it changes.
+            </span>
+          </label>
+        )}
         <div className="row-3">
           <label>
             Placed in service
@@ -552,7 +668,7 @@ function Backup() {
         Downloads everything in one <code>.zip</code>: the whole database (transactions, categories, occupancy, users,
         settings, change history) and all receipt files. It's safe to run while the app is in use.
       </p>
-      <a className="btn primary" href="/api/backup" download>
+      <a className="btn primary" href={apiUrl("/api/backup")} download>
         Download backup
       </a>
       <p className="muted small">
@@ -562,7 +678,7 @@ function Backup() {
       <RestoreBackup />
       <h3>Spreadsheet copy</h3>
       <p className="muted small">Every transaction as a CSV, for Excel, Google Sheets or your tax preparer.</p>
-      <a className="btn" href="/api/export/transactions.csv?property=all">
+      <a className="btn" href={apiUrl("/api/export/transactions.csv?property=all")}>
         Download all transactions (CSV)
       </a>
     </section>
@@ -649,127 +765,6 @@ function RestoreBackup() {
   );
 }
 
-interface UserRow {
-  id: number;
-  email: string;
-  name: string;
-  role: string;
-  disabled: number;
-  has_password: number;
-  has_sso: number;
-}
-
-function Users() {
-  const { user } = useSession();
-  const { data, reload } = useApi<UserRow[]>(user.role === "admin" ? "users" : null);
-  const [form, setForm] = useState({ email: "", name: "", password: "", role: "member" });
-  const toast = useToast();
-  if (user.role !== "admin") return <Navigate to="/settings" />;
-  const create = async (e: FormEvent) => {
-    e.preventDefault();
-    try {
-      await api("users", { method: "POST", json: { ...form, password: form.password || undefined } });
-      setForm({ email: "", name: "", password: "", role: "member" });
-      void reload();
-      toast({ text: "User added", kind: "ok" });
-    } catch (err) {
-      toast({ text: (err as Error).message, kind: "error" });
-    }
-  };
-  const patch = async (id: number, json: Record<string, unknown>) => {
-    try {
-      await api(`users/${id}`, { method: "PATCH", json });
-      void reload();
-    } catch (err) {
-      toast({ text: (err as Error).message, kind: "error" });
-    }
-  };
-  return (
-    <>
-      <section className="card table-card">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Email</th>
-              <th>Name</th>
-              <th>Role</th>
-              <th>Sign-in</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {data?.map((u) => (
-              <tr key={u.id} className={u.disabled ? "excluded" : ""}>
-                <td>{u.email}</td>
-                <td>{u.name}</td>
-                <td>
-                  <select
-                    value={u.role}
-                    onChange={(e) => void patch(u.id, { role: e.target.value })}
-                    disabled={u.id === user.id}
-                    aria-label="Role"
-                  >
-                    <option value="admin">admin</option>
-                    <option value="member">member</option>
-                    <option value="viewer">viewer (read-only)</option>
-                  </select>
-                </td>
-                <td>
-                  {[u.has_password ? "password" : null, u.has_sso ? "SSO" : null].filter(Boolean).join(", ") || "—"}
-                </td>
-                <td>
-                  {u.id !== user.id && (
-                    <button className="link" onClick={() => void patch(u.id, { disabled: !u.disabled })}>
-                      {u.disabled ? "Enable" : "Disable"}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-      <form className="card" onSubmit={create}>
-        <h2>Add user</h2>
-        <div className="row-3">
-          <label>
-            Email
-            <input
-              type="email"
-              required
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-            />
-          </label>
-          <label>
-            Name
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </label>
-          <label>
-            Role
-            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-              <option value="member">member</option>
-              <option value="viewer">viewer (read-only, e.g. your accountant)</option>
-              <option value="admin">admin</option>
-            </select>
-          </label>
-        </div>
-        <label>
-          Initial password (optional if they'll use SSO)
-          <input
-            type="password"
-            minLength={10}
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            autoComplete="new-password"
-          />
-        </label>
-        <button className="btn primary">Add user</button>
-      </form>
-    </>
-  );
-}
-
 interface AuditRow {
   id: number;
   at: string;
@@ -815,8 +810,52 @@ const NOUN: Record<string, string> = {
   audit: "change",
 };
 
+/** Entries about the portfolio, access and logins, in plain words (never "membership"). */
+function describeAccess(r: AuditRow): string | null {
+  const c = (r.changes ?? {}) as Record<string, unknown>;
+  const who = typeof c.email === "string" ? c.email : "someone";
+  switch (`${r.entity}:${r.action}`) {
+    case "portfolio:view":
+      return "Server administrator looked in (read-only)";
+    case "portfolio:create":
+      return "Created this portfolio";
+    case "portfolio:update":
+      return "archived" in c
+        ? Array.isArray(c.archived) && c.archived[1]
+          ? "Archived this portfolio"
+          : "Unarchived this portfolio"
+        : "name" in c
+          ? "Renamed this portfolio"
+          : "slug" in c
+            ? "Changed the portfolio's web address"
+            : "Changed this portfolio";
+    case "membership:create":
+      return `Gave ${who} access${c.role ? ` (${show(c.role)})` : ""}`;
+    case "membership:update":
+      return `Changed ${who}'s role`;
+    case "membership:delete":
+      return c.left ? `${who} left` : `Removed ${who}'s access`;
+    case "invite:create":
+      return `Made an invite link${c.role ? ` (${show(c.role)})` : ""}`;
+    case "invite:revoke":
+      return "Cancelled an invite link";
+    case "download:export":
+      return "Downloaded everything";
+    case "user:create":
+      return `Added the login ${who}`;
+    case "user:update":
+      return `Changed the login ${who}`;
+    case "user_settings:update":
+      return "Changed preferences";
+    default:
+      return null;
+  }
+}
+
 /** One readable line for an audit entry. */
 function describe(r: AuditRow) {
+  const access = describeAccess(r);
+  if (access) return access;
   const verb = VERB[r.action] ?? r.action;
   if (r.action === "login" || r.action === "logout" || r.action === "change_password") return verb;
   const noun = (NOUN[r.entity] ?? r.entity.replace(/_/g, " ")) + (r.action === "bulk_create" ? "s" : "");
@@ -826,6 +865,10 @@ function describe(r: AuditRow) {
 
 function details(r: AuditRow) {
   const c = (r.changes ?? {}) as Record<string, unknown>;
+  if (r.entity === "portfolio" && r.action === "view") return "";
+  if (r.entity === "membership" && Array.isArray(c.role)) return `${show(c.role[0])} → ${show(c.role[1])}`;
+  if (r.entity === "invite" || r.entity === "membership") return c.note ? show(c.note) : "";
+  if (r.entity === "download") return `${show(c.transactions)} transactions, ${show(c.receipts)} receipts`;
   // field diffs look like { field: [before, after] }
   if (r.action === "update" && Object.values(c).every((v) => Array.isArray(v) && v.length === 2))
     return Object.entries(c as Record<string, [unknown, unknown]>)
@@ -856,13 +899,17 @@ function details(r: AuditRow) {
 }
 
 /** Settings → Audit log: every change, who made it, and a one-click undo where possible. */
-function AuditLog() {
-  const { canWrite } = useSession();
+/** This portfolio's audit log, or (`server`) the server's own activity: backups, logins, portfolios. */
+function AuditLog({ server = false }: { server?: boolean }) {
+  const { canWrite: writable } = useSession();
+  const canWrite = writable && !server;
   const toast = useToast();
   const confirm = useConfirm();
   const [offset, setOffset] = useState(0);
   const [logins, setLogins] = useState(false);
-  const { data, reload } = useApi<AuditRow[]>(`audit?limit=100&offset=${offset}${logins ? "" : "&hide_logins=true"}`);
+  const { data, reload } = useApi<AuditRow[]>(
+    `${server ? "/api/admin/audit" : "audit"}?limit=100&offset=${offset}${logins ? "" : "&hide_logins=true"}`,
+  );
   const undo = async (r: AuditRow) => {
     if (!(await confirm({ title: "Undo this change?", message: r.undo ?? "", confirm: "Undo" }))) return;
     try {
@@ -877,7 +924,9 @@ function AuditLog() {
     <section className="card table-card">
       <div className="section-head card-pad">
         <p className="muted small">
-          Every change, who made it and from where (web, API or AI agent). Use Undo to reverse one.
+          {server
+            ? "Backups and restores, logins being added or changed, and portfolios being created, archived or looked into. Each portfolio keeps its own change history."
+            : "Every change, who made it and from where (web, API or AI agent). Use Undo to reverse one."}
         </p>
         <label className="check small">
           <input type="checkbox" checked={logins} onChange={(e) => setLogins(e.target.checked)} /> Show sign-ins

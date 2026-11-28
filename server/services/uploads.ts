@@ -8,6 +8,7 @@ import { and, eq, inArray, lt } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { pendingUploads } from "../db/schema.ts";
+import { currentPortfolioId, inPortfolio } from "../portfolio.ts";
 import { audit, badRequest, requireWrite, type Actor } from "../context.ts";
 import { attachStored } from "./attachments.ts";
 import { checkPreview, checkUpload, cleanFilename, releaseFile, savePreview, sha256, storeBytes } from "./storage.ts";
@@ -29,6 +30,10 @@ const cols = {
   size: pendingUploads.size,
   created_at: pendingUploads.createdAt,
 };
+
+/** The caller's own uploads, in the current portfolio. */
+const mine = (db: DB, actor: Actor) =>
+  and(eq(pendingUploads.createdBy, actor.user.id), eq(pendingUploads.portfolioId, currentPortfolioId(db)));
 
 export const uploadIds = z.array(z.number().int().positive()).max(50);
 
@@ -56,6 +61,7 @@ export async function stageUpload(
         const row = db
           .insert(pendingUploads)
           .values({
+            portfolioId: currentPortfolioId(db),
             filename,
             contentType,
             size: file.data.byteLength,
@@ -81,7 +87,7 @@ export async function discardUploads(db: DB, actor: Actor, raw: unknown) {
   const rows = db
     .select({ id: pendingUploads.id, key: pendingUploads.storageKey, filename: pendingUploads.filename })
     .from(pendingUploads)
-    .where(and(inArray(pendingUploads.id, ids), eq(pendingUploads.createdBy, actor.user.id)))
+    .where(and(inArray(pendingUploads.id, ids), mine(db, actor)))
     .all();
   for (const r of rows) {
     db.delete(pendingUploads).where(eq(pendingUploads.id, r.id)).run();
@@ -101,7 +107,7 @@ export function claimUploads(db: DB, actor: Actor, transactionId: number, raw: u
   const rows = db
     .select()
     .from(pendingUploads)
-    .where(and(inArray(pendingUploads.id, ids), eq(pendingUploads.createdBy, actor.user.id)))
+    .where(and(inArray(pendingUploads.id, ids), mine(db, actor)))
     .all();
   if (rows.length !== ids.length)
     throw badRequest("A receipt upload has expired or was removed. Add the receipt again, then save.");
@@ -118,17 +124,20 @@ export function claimUploads(db: DB, actor: Actor, transactionId: number, raw: u
   }
 }
 
-/** Remove uploads from forms that were abandoned without a discard (closed tab, lost connection). */
+/**
+ * Remove uploads from forms that were abandoned without a discard (closed tab, lost connection). Housekeeping across
+ * every portfolio; each removal is audited in the upload's own portfolio.
+ */
 export async function pruneStaleUploads(db: DB, hours = STALE_HOURS) {
   const cutoff = new Date(Date.now() - hours * 3_600_000).toISOString();
   const stale = db
-    .select({ id: pendingUploads.id, key: pendingUploads.storageKey })
+    .select({ id: pendingUploads.id, key: pendingUploads.storageKey, portfolioId: pendingUploads.portfolioId })
     .from(pendingUploads)
     .where(lt(pendingUploads.createdAt, cutoff))
     .all();
   for (const r of stale) {
     db.delete(pendingUploads).where(eq(pendingUploads.id, r.id)).run();
-    audit(db, null, "delete", "pending_upload", r.id, { pruned: true });
+    inPortfolio(r.portfolioId, () => audit(db, null, "delete", "pending_upload", r.id, { pruned: true }));
     await releaseFile(db, r.key);
   }
   return stale.length;

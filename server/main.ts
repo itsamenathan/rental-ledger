@@ -6,13 +6,13 @@ import { createApp } from "./app.ts";
 import { config } from "./config.ts";
 import { closeDb, getDb } from "./db.ts";
 import { startScheduler } from "./scheduler.ts";
-import { seedDefaults } from "./seed.ts";
+import { seedFirstRun } from "./seed.ts";
 import { initTelemetry, log, shutdownTelemetry } from "./telemetry.ts";
 
 initTelemetry();
 
 const db = getDb();
-seedDefaults(db);
+seedFirstRun(db);
 
 const app = createApp();
 const dist = resolve(import.meta.dirname, "../dist");

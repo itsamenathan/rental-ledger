@@ -29,7 +29,7 @@ describe("test harness data", () => {
     for (const r of subcategoryRules)
       expect(rows.some((x) => x.category === r.category && x.subcategory === r.name)).toBe(true);
     expect(rows.some((r) => r.vendor === "Stripe" && r.amount <= -75)).toBe(true);
-    expect(rows.some((r) => r.refund && r.amount > 0 && r.category === "Maintenance")).toBe(true);
+    expect(rows.some((r) => r.refund && r.amount > 0 && r.category === "Repairs")).toBe(true);
   });
 
   it("puts every stay on the booking calendar, matching occupancy", () => {
@@ -94,5 +94,19 @@ describe("test harness data", () => {
     expect(p).toBe(harnessPort());
     expect(p).toBeGreaterThanOrEqual(5200);
     expect(p).toBeLessThan(5900);
+  });
+});
+
+describe("starter categories", () => {
+  it("are the preparer's worksheet lines, each with a Schedule E line and a direct/indirect default", async () => {
+    const { DEFAULT_CATEGORIES } = await import("./seed.ts");
+    const { SCHEDULE_E_LINES } = await import("./services/ledger.ts");
+    const names = DEFAULT_CATEGORIES.map((c) => c.name);
+    expect(new Set(names).size).toBe(names.length);
+    for (const c of DEFAULT_CATEGORIES) {
+      expect(SCHEDULE_E_LINES[c.schedule_e_line]).toBeDefined();
+      expect(c.default_allocation === null).toBe(c.kind === "income");
+    }
+    expect(names).toEqual(expect.arrayContaining(["Supplies", "Repairs", "Utilities", "Management fees"]));
   });
 });

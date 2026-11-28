@@ -13,7 +13,7 @@ import TxEditModal from "../components/TxEditModal.tsx";
 import { TxRow, type RowCtx } from "../components/TxRows.tsx";
 import type { TodoSummary } from "./Todo.tsx";
 import { money, money0, monthLabel, percent, thisMonth, THIS_YEAR } from "../format.ts";
-import { useApi, usePendingByEntry, useSession, useWorkingYear, useProperty } from "../hooks.ts";
+import { useApi, usePendingByEntry, usePropertyPath, useSession, useWorkingYear, useProperty } from "../hooks.ts";
 import { YearSelect } from "../lib.tsx";
 
 interface Summary {
@@ -81,6 +81,7 @@ export default function Overview() {
   const years = useApi<(Totals & { year: number; nights_booked: number })[]>(`reports/years?${pq}`);
   const navigate = useNavigate();
   const { canWrite } = useSession();
+  const inProperty = usePropertyPath();
   const recentCtx: RowCtx = {
     canWrite,
     showProperty: scope.key === "all",
@@ -209,7 +210,7 @@ export default function Overview() {
                   {s.by_property.map((p) => (
                     <tr key={p.property_id} className={p.archived ? "excluded" : ""}>
                       <td>
-                        <Link to={`/p/${p.property_id}`}>{p.property}</Link>
+                        <Link to={inProperty(p.property_id, "/")}>{p.property}</Link>
                       </td>
                       <td className="num">{money0(p.income)}</td>
                       <td className="num">{money0(p.expense)}</td>

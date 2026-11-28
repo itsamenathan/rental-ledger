@@ -20,6 +20,10 @@ import {
   verifyPassword,
 } from "../services/auth.ts";
 import { getUserSettings, updateUserSettings } from "../services/user-settings.ts";
+import { acceptInviteAs, acceptInviteWithSignup, inviteInfo, useInvite, validInvite } from "../services/invites.ts";
+import { getPortfolio, myPortfolios } from "../services/portfolios.ts";
+import { currentPortfolioId as inRequestPortfolioId, inRequest } from "../portfolio.ts";
+import { tx } from "../db.ts";
 import { actorOf, clearRateLimit, clientIp, rateLimit, SESSION_COOKIE, type Env } from "./middleware.ts";
 
 export const authRoutes = new Hono<Env>();
@@ -88,7 +92,7 @@ authRoutes.post("/login", async (c) => {
   clearRateLimit(`login:${email}:${ip}`);
   startSession(c, user.id);
   audit(db, webActor(user), "login", "user", user.id);
-  return c.json({ user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+  return c.json({ user: { id: user.id, email: user.email, name: user.name } });
 });
 
 authRoutes.post("/logout", (c) => {
@@ -100,12 +104,41 @@ authRoutes.post("/logout", (c) => {
 
 authRoutes.get("/me", (c) => {
   const a = c.get("actor");
+  const db = getDb();
+  const p = c.get("portfolio");
   return c.json({
+    /** role = the role in this request's portfolio */
     user: a?.user ?? null,
     can_write: a?.canWrite ?? false,
     via: a?.via ?? null,
-    settings: a ? getUserSettings(getDb(), a.user.id) : null,
+    settings: a ? getUserSettings(db, a.user.id) : null,
+    /** the portfolio this request is in (`?portfolio=<slug>`, else the only one); null with why */
+    portfolio: p ? { ...p, name: getPortfolio(db, inRequestPortfolioId(db)).name } : null,
+    portfolio_error: p ? null : (c.get("portfolioWhy") ?? null),
+    /** every portfolio this login belongs to */
+    portfolios: a ? myPortfolios(db, a.user.id).filter((x) => !x.archived) : [],
   });
+});
+
+// ---------------- invite links (services/invites.ts) ----------------
+
+/** What an invite link is for, before signing in. */
+authRoutes.get("/invites/:token", (c) => c.json(inviteInfo(getDb(), c.req.param("token"))));
+
+/** Join: signed in, with that login; otherwise with a new login (email, name, password). */
+authRoutes.post("/invites/:token/accept", async (c) => {
+  const db = getDb();
+  const token = c.req.param("token");
+  const actor = c.get("actor");
+  if (actor) {
+    if (actor.apiKeyId) throw new AppError(403, "Accept invites from a browser session");
+    return c.json(acceptInviteAs(db, token, actor.user.id));
+  }
+  if (config.disablePasswordLogin) throw new AppError(403, "Password sign-up is disabled; use SSO");
+  rateLimit(`invite:${clientIp(c)}`, 20, 15 * 60_000);
+  const r = await acceptInviteWithSignup(db, token, await c.req.json());
+  startSession(c, r.userId);
+  return c.json({ slug: r.slug, portfolio: r.portfolio });
 });
 
 /** The caller's own preferences (read-only accounts included: they change nothing in the ledger). */
@@ -152,7 +185,9 @@ authRoutes.get("/oidc/start", async (c) => {
   const verifier = oidc.randomPKCECodeVerifier();
   const state = oidc.randomState();
   const nonce = oidc.randomNonce();
-  setCookie(c, OIDC_COOKIE, JSON.stringify({ verifier, state, nonce }), {
+  // An invite link's token rides along, so a new person can sign up with SSO (see the callback).
+  const invite = c.req.query("invite")?.slice(0, 100) || undefined;
+  setCookie(c, OIDC_COOKIE, JSON.stringify({ verifier, state, nonce, invite }), {
     httpOnly: true,
     sameSite: "Lax",
     secure: config.cookieSecure,
@@ -175,7 +210,12 @@ authRoutes.get("/oidc/callback", async (c) => {
   const raw = getCookie(c, OIDC_COOKIE);
   deleteCookie(c, OIDC_COOKIE, { path: "/api/auth/oidc" });
   if (!raw) return c.redirect("/login?error=" + encodeURIComponent("SSO session expired; try again"));
-  const { verifier, state, nonce } = JSON.parse(raw) as { verifier: string; state: string; nonce: string };
+  const { verifier, state, nonce, invite } = JSON.parse(raw) as {
+    verifier: string;
+    state: string;
+    nonce: string;
+    invite?: string;
+  };
   const current = new URL(c.req.url);
   const callbackUrl = new URL(`${baseUrl(c)}/api/auth/oidc/callback${current.search}`);
   try {
@@ -195,12 +235,18 @@ authRoutes.get("/oidc/callback", async (c) => {
       if (byEmail) {
         linkOidcSubject(db, byEmail.id, claims.sub);
         user = byEmail;
-      } else if (config.oidc!.autoCreate) {
-        const created = await createUser(db, null, {
-          email,
-          name: typeof claims.name === "string" ? claims.name : "",
-          role: userCount(db) === 0 ? "admin" : "member",
-        });
+      } else if (config.oidc!.autoCreate || (invite && validInvite(db, invite))) {
+        // An invite lets a new person sign up with SSO even without OIDC_AUTO_CREATE. Without one, an auto-created
+        // login joins no portfolio and sees the "not in a portfolio yet" page.
+        // With no portfolio in scope: the request's are those of whatever session this browser still has, and a new
+        // login must join only what its invite says.
+        const created = await inRequest(null, () =>
+          createUser(db, null, {
+            email,
+            name: typeof claims.name === "string" ? claims.name : "",
+            role: userCount(db) === 0 ? "admin" : "member",
+          }),
+        );
         linkOidcSubject(db, created.id, claims.sub);
         user = { ...created, disabled: false };
       }
@@ -213,6 +259,18 @@ authRoutes.get("/oidc/callback", async (c) => {
     }
     startSession(c, user.id);
     audit(db, webActor(user), "login_sso", "user", user.id);
+    const joined = invite ? validInvite(db, invite) : null;
+    if (joined) {
+      try {
+        tx(db, () => useInvite(db, joined, user.id));
+      } catch (e) {
+        // Already in that portfolio, or the link was used meanwhile: the invite page says which.
+        if (e instanceof AppError) return c.redirect(`/invite/${encodeURIComponent(invite!)}`);
+        throw e;
+      }
+      return c.redirect(`/${joined.slug}`);
+    }
+    if (invite) return c.redirect(`/invite/${encodeURIComponent(invite)}`);
     return c.redirect("/");
   } catch (e) {
     log.error({ err: e }, "OIDC callback failed");

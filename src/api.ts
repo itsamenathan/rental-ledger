@@ -1,10 +1,17 @@
+import { apiUrl, PORTFOLIO_LOST_EVENT } from "./portfolio.ts";
+
 export type Allocation = "direct" | "indirect" | null;
+
+export type Role = "admin" | "member" | "viewer";
 
 export interface User {
   id: number;
   email: string;
   name: string;
-  role: "admin" | "member" | "viewer";
+  /** the role in this page's portfolio */
+  role: Role;
+  /** Runs the server: backups and restores (they hold every portfolio) */
+  instance_admin?: boolean;
 }
 
 /** A person's own preferences (GET auth/me, PATCH auth/settings); see server/services/user-settings.ts. */
@@ -14,6 +21,26 @@ export interface UserSettings {
 }
 
 export const DEFAULT_SETTINGS: UserSettings = { week_start: 0 };
+
+/** A portfolio (several properties together) a login belongs to. */
+export interface PortfolioRef {
+  id: number;
+  slug: string;
+  name: string;
+  archived: boolean;
+  role: Role;
+}
+
+/** GET auth/me */
+export interface Me {
+  user: User | null;
+  can_write: boolean;
+  settings?: UserSettings | null;
+  /** this page's portfolio; `viewing` = the server's administrator looking in read-only */
+  portfolio?: { slug: string; name: string; role: Role; viewing: boolean } | null;
+  portfolio_error?: string | null;
+  portfolios?: PortfolioRef[];
+}
 
 export interface Category {
   id: number;
@@ -41,6 +68,8 @@ export interface ReceiptExclusion {
 export interface Property {
   id: number;
   name: string;
+  /** Web address within the portfolio: /<portfolio>/<slug>/… */
+  slug: string;
   address: string;
   placed_in_service: string | null;
   building_basis: number | null;
@@ -127,11 +156,14 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T = unknown>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
-  const { json, ...rest } = init;
+export async function api<T = unknown>(
+  path: string,
+  init: RequestInit & { json?: unknown; portfolio?: string | null } = {},
+): Promise<T> {
+  const { json, portfolio, ...rest } = init;
   const headers = new Headers(rest.headers);
   if (json !== undefined) headers.set("content-type", "application/json");
-  const res = await fetch(path.startsWith("/") ? path : `/api/${path}`, {
+  const res = await fetch(portfolio === undefined ? apiUrl(path) : apiUrl(path, portfolio), {
     credentials: "same-origin",
     ...rest,
     headers,
@@ -143,6 +175,9 @@ export async function api<T = unknown>(path: string, init: RequestInit & { json?
     const body = data as { error?: string; details?: unknown } | null;
     const msg = body?.error ?? `${res.status} ${res.statusText}`;
     if (res.status === 401 && !path.includes("/auth/")) window.dispatchEvent(new Event("auth:expired"));
+    // Removed from this portfolio (or it was archived) while the page was open.
+    if (res.status === 403 && (body?.details as { code?: string } | undefined)?.code === "no_access")
+      window.dispatchEvent(new Event(PORTFOLIO_LOST_EVENT));
     throw new ApiError(res.status, msg, body?.details);
   }
   return data as T;

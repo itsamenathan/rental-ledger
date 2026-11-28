@@ -17,6 +17,7 @@ import { and, asc, eq, gt, isNull, lt } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { calendarEvents, calendarFeeds, properties } from "../db/schema.ts";
+import { currentPortfolioId, propertyScope } from "../portfolio.ts";
 import { AppError, audit, badRequest, diff, notFound, requireWrite, type Actor } from "../context.ts";
 import { config } from "../config.ts";
 import { log, withSpan } from "../telemetry.ts";
@@ -140,7 +141,11 @@ export interface Feed {
 }
 
 function feedRow(db: DB, id: number) {
-  const f = db.select().from(calendarFeeds).where(eq(calendarFeeds.id, id)).get();
+  const f = db
+    .select()
+    .from(calendarFeeds)
+    .where(and(eq(calendarFeeds.id, id), propertyScope(db, calendarFeeds.propertyId)))
+    .get();
   if (!f) throw notFound("Calendar");
   return f;
 }
@@ -152,7 +157,7 @@ export function listFeeds(db: DB, actor: Actor | null, opts: { property_id?: num
   return db
     .select()
     .from(calendarFeeds)
-    .where(opts.property_id ? eq(calendarFeeds.propertyId, opts.property_id) : undefined)
+    .where(propertyScope(db, calendarFeeds.propertyId, opts.property_id))
     .orderBy(asc(calendarFeeds.id))
     .all()
     .map((f) => ({
@@ -604,13 +609,7 @@ function storedEvents(db: DB, opts: { from: string; to: string; property_id?: nu
     })
     .from(e)
     .leftJoin(calendarFeeds, eq(calendarFeeds.id, e.feedId))
-    .where(
-      and(
-        lt(e.startDate, opts.to),
-        gt(e.endDate, opts.from),
-        opts.property_id ? eq(e.propertyId, opts.property_id) : undefined,
-      ),
-    )
+    .where(and(lt(e.startDate, opts.to), gt(e.endDate, opts.from), propertyScope(db, e.propertyId, opts.property_id)))
     .orderBy(asc(e.startDate), asc(e.id))
     .all()
     .map((r) => ({ ...r, feed: r.feed ?? "Reservation history", nights: nightsBetween(r.start_date, r.end_date) }));
@@ -654,6 +653,7 @@ export function listEvents(db: DB, opts: { from: string; to: string; property_id
     : db
         .select({ id: properties.id })
         .from(properties)
+        .where(eq(properties.portfolioId, currentPortfolioId(db)))
         .all()
         .map((p) => p.id);
   let next = -1;

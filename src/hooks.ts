@@ -1,19 +1,34 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { api, type Category, type Overview, type Property, type User, type UserSettings } from "./api.ts";
+import {
+  api,
+  type Category,
+  type Overview,
+  type PortfolioRef,
+  type Property,
+  type Role,
+  type User,
+  type UserSettings,
+} from "./api.ts";
 import type { OutboxEntry } from "./outbox.ts";
 import { THIS_YEAR } from "./format.ts";
+import { scopePath } from "./scope.ts";
 
 // ---------------- session + reference data ----------------
 
 export interface Session {
   user: User;
   canWrite: boolean;
+  /** This page's portfolio (`viewing`: the server's administrator looking in, read-only) */
+  portfolio: { slug: string; name: string; role: Role; viewing: boolean };
+  /** Every portfolio this login belongs to */
+  portfolios: PortfolioRef[];
   /** The signed-in person's own preferences (every key has a value) */
   settings: UserSettings;
   /** Save some preferences; rejects (message for a toast) when the server can't be reached or refuses */
   updateSettings: (patch: Partial<UserSettings>) => Promise<void>;
   overview: Overview;
-  reloadOverview: () => Promise<void>;
+  /** Fetch the overview again; `then` runs in the same render (e.g. a navigation that needs the new list) */
+  reloadOverview: (then?: () => void) => Promise<void>;
   category: (id: number) => Category | undefined;
   logout: () => Promise<void>;
 }
@@ -114,21 +129,25 @@ export const OutboxCtx = createContext<OutboxState>({
 });
 export const useOutbox = () => useContext(OutboxCtx);
 
-// ---------------- property scope (from the URL: /p/<id>/… or /p/all/…) ----------------
+// ---------------- property scope (from the URL: /<property slug>/… or /all/…) ----------------
 
 export interface PropertyScope {
-  /** What's in the URL and sent as property_id: a property id, or "all" */
+  /** Sent as property_id and remembered: a property id, or "all" */
   key: string;
+  /** In the URL: the property's slug, or "all" */
+  segment: string;
   /** The property id, or null in the all-properties view */
   id: number | null;
   property: Property | null;
   /** A single property for things that need one: the current one, else the one used last */
   single: number;
+  /** That property's own settings page */
+  settingsPath: string;
   /** More than one active property (otherwise the app hides the switcher) */
   many: boolean;
   /** Query parameter for API calls: `property_id=<key>` */
   qs: string;
-  /** App path → the same page for this property ("/transactions?x" → "/p/3/transactions?x"); /settings stays */
+  /** App path → the same page for this property ("/transactions?x" → "/harbor-view/transactions?x"); /settings stays */
   path: (to: string) => string;
 }
 
@@ -140,6 +159,16 @@ export const useProperty = () => {
 };
 /** Link helper: `to={scoped("/months/2026-10")}`. */
 export const useScopedPath = () => useProperty().path;
+
+/** Link helper for one property's pages whatever scope is showing: `at(tx.property_id, "/months/2026-10")`. */
+export function usePropertyPath() {
+  const { properties } = useSession().overview;
+  return useCallback(
+    (propertyId: number, to: string) =>
+      scopePath(properties.find((p) => p.id === propertyId)?.slug ?? String(propertyId), to),
+    [properties],
+  );
+}
 
 /** Edits, deletes and receipts saved offline and not yet synced, by entry id (new entries have no row yet). */
 export function usePendingByEntry(): Map<number, string> {

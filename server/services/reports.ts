@@ -4,7 +4,8 @@ import { categories, occupancy as occupancyTable, ownerStays, properties, transa
 import { listOwnerStays, occupancyRows, type OccupancyRow } from "./owner-stays.ts";
 import { compareOccupancyCalendar } from "./occupancy-calendar.ts";
 import { needsReceipt } from "./receipts.ts";
-import { getProperty, resolvePropertyId, SCHEDULE_E_LINES } from "./ledger.ts";
+import { categoriesInPortfolio, getProperty, resolvePropertyId, SCHEDULE_E_LINES, txInPortfolio } from "./ledger.ts";
+import { currentPortfolioId, propertyScope } from "../portfolio.ts";
 import { getTaxYear } from "./rental.ts";
 import { monthChecklist } from "./recurring.ts";
 import { toCsv } from "./csv.ts";
@@ -27,22 +28,29 @@ const sumWhen = (cond: SQL | undefined, negate = false) =>
   );
 
 /** Live (not deleted) transactions in [from, to], optionally for one property. */
-const liveBetween = (from: string, to: string, propertyId?: number) =>
-  and(isNull(t.deletedAt), between(t.date, from, to), propertyId ? eq(t.propertyId, propertyId) : undefined);
+const liveBetween = (db: DB, from: string, to: string, propertyId?: number) =>
+  and(
+    isNull(t.deletedAt),
+    between(t.date, from, to),
+    txInPortfolio(db),
+    propertyId ? eq(t.propertyId, propertyId) : undefined,
+  );
 
 export function availableYears(db: DB): number[] {
   const txYears = db
     .selectDistinct({ y: sql<number>`CAST(substr(${t.date}, 1, 4) AS INTEGER)`.mapWith(Number) })
     .from(t)
-    .where(isNull(t.deletedAt))
+    .where(and(isNull(t.deletedAt), txInPortfolio(db)))
     .all();
   const occYears = db
     .selectDistinct({ y: sql<number>`CAST(substr(${o.month}, 1, 4) AS INTEGER)`.mapWith(Number) })
     .from(o)
+    .where(propertyScope(db, o.propertyId))
     .all();
   const stayYears = db
     .selectDistinct({ y: sql<number>`CAST(substr(${ownerStays.startDate}, 1, 4) AS INTEGER)`.mapWith(Number) })
     .from(ownerStays)
+    .where(propertyScope(db, ownerStays.propertyId))
     .all();
   return [...new Set([...txYears, ...occYears, ...stayYears].map((r) => r.y))].sort((a, b) => b - a);
 }
@@ -59,7 +67,7 @@ function totalsBetween(db: DB, from: string, to: string, propertyId?: number) {
     })
     .from(t)
     .innerJoin(c, eq(c.id, t.categoryId))
-    .where(liveBetween(from, to, propertyId))
+    .where(liveBetween(db, from, to, propertyId))
     .get()!;
   return {
     income: r.income / 100,
@@ -116,7 +124,7 @@ function monthOccupancy(rows: OccupancyRow[]) {
 export function summary(db: DB, year: number, propertyId?: number) {
   const from = `${year}-01-01`;
   const to = `${year}-12-31`;
-  const live = liveBetween(from, to, propertyId);
+  const live = liveBetween(db, from, to, propertyId);
   const totals = totalsBetween(db, from, to, propertyId);
 
   const monthExpr = sql<string>`substr(${t.date}, 1, 7)`;
@@ -184,7 +192,14 @@ export function summary(db: DB, year: number, propertyId?: number) {
   const review = db
     .select({ n: count() })
     .from(t)
-    .where(and(isNull(t.deletedAt), eq(t.needsReview, true), propertyId ? eq(t.propertyId, propertyId) : undefined))
+    .where(
+      and(
+        isNull(t.deletedAt),
+        eq(t.needsReview, true),
+        txInPortfolio(db),
+        propertyId ? eq(t.propertyId, propertyId) : undefined,
+      ),
+    )
     .get()!;
 
   return {
@@ -210,6 +225,7 @@ function propertyBreakdown(db: DB, year: number) {
   return db
     .select({ id: properties.id, name: properties.name, archived: properties.archived })
     .from(properties)
+    .where(eq(properties.portfolioId, currentPortfolioId(db)))
     .orderBy(properties.archived, properties.name)
     .all()
     .map((p) => {
@@ -262,10 +278,14 @@ export function monthDetail(db: DB, ym: string, propertyId?: number) {
     })
     .from(t)
     .innerJoin(c, eq(c.id, t.categoryId))
-    .where(liveBetween(...range(shiftMonth(ym, -12), ym), propertyId))
+    .where(liveBetween(db, ...range(shiftMonth(ym, -12), ym), propertyId))
     .groupBy(c.id, monthExpr)
     .all();
-  const cats = db.select({ id: c.id, name: c.name, kind: c.kind, sort: c.sortOrder }).from(c).all();
+  const cats = db
+    .select({ id: c.id, name: c.name, kind: c.kind, sort: c.sortOrder })
+    .from(c)
+    .where(categoriesInPortfolio(db))
+    .all();
   const by_category = cats
     .map((cat) => {
       const rows = perCat.filter((r) => r.category_id === cat.id);
@@ -325,7 +345,7 @@ export function categoryMonths(db: DB, year: number, propertyId?: number) {
       })
       .from(t)
       .innerJoin(c, eq(c.id, t.categoryId))
-      .where(liveBetween(`${y}-01-01`, `${y}-12-31`, propertyId))
+      .where(liveBetween(db, `${y}-01-01`, `${y}-12-31`, propertyId))
       .groupBy(c.id, t.subcategory, monthExpr)
       .all();
   const rows = new Map<
@@ -409,7 +429,7 @@ export function taxReport(db: DB, year: number, propertyRef?: number | string) {
   const from = `${year}-01-01`;
   const to = `${year}-12-31`;
 
-  const live = liveBetween(from, to, propertyId);
+  const live = liveBetween(db, from, to, propertyId);
   const grouped = (where: SQL | undefined, negate = false) =>
     db
       .select({

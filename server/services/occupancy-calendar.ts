@@ -16,6 +16,7 @@ import {
   ownerStayDismissals,
   properties,
 } from "../db/schema.ts";
+import { currentPortfolioId, propertyScope } from "../portfolio.ts";
 import { audit, badRequest, notFound, requireWrite, type Actor } from "../context.ts";
 import { addDays, calendarMonths, nightsBetween, type CalendarEvent } from "./calendar.ts";
 import { resolvePropertyId } from "./ledger.ts";
@@ -288,7 +289,11 @@ export function keepOccupancyNumbers(db: DB, actor: Actor, raw: unknown, today =
 export function unkeepOccupancyNumbers(db: DB, actor: Actor, id: number) {
   requireWrite(actor);
   return tx(db, () => {
-    const before = db.select().from(occupancyCalendarKeeps).where(eq(occupancyCalendarKeeps.id, id)).get();
+    const before = db
+      .select()
+      .from(occupancyCalendarKeeps)
+      .where(and(eq(occupancyCalendarKeeps.id, id), propertyScope(db, occupancyCalendarKeeps.propertyId)))
+      .get();
     if (!before) throw notFound("Kept month");
     db.delete(occupancyCalendarKeeps).where(eq(occupancyCalendarKeeps.id, id)).run();
     audit(db, actor, "delete", "occupancy_calendar_keep", id, {
@@ -482,7 +487,11 @@ export function dismissCandidate(db: DB, actor: Actor, raw: unknown) {
 export function undismissCandidate(db: DB, actor: Actor, id: number) {
   requireWrite(actor);
   return tx(db, () => {
-    const before = db.select().from(ownerStayDismissals).where(eq(ownerStayDismissals.id, id)).get();
+    const before = db
+      .select()
+      .from(ownerStayDismissals)
+      .where(and(eq(ownerStayDismissals.id, id), propertyScope(db, ownerStayDismissals.propertyId)))
+      .get();
     if (!before) throw notFound("Dismissed range");
     db.delete(ownerStayDismissals).where(eq(ownerStayDismissals.id, id)).run();
     audit(db, actor, "delete", "owner_stay_dismissal", id, {
@@ -515,7 +524,12 @@ export function occupancyAttention(db: DB, opts: { propertyId?: number; today?: 
   const props = db
     .select({ id: properties.id, name: properties.name })
     .from(properties)
-    .where(opts.propertyId ? eq(properties.id, opts.propertyId) : eq(properties.archived, false))
+    .where(
+      and(
+        opts.propertyId ? eq(properties.id, opts.propertyId) : eq(properties.archived, false),
+        eq(properties.portfolioId, currentPortfolioId(db)),
+      ),
+    )
     .orderBy(asc(properties.name))
     .all();
   const out: OccupancyAttention[] = [];

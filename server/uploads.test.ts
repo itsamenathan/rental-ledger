@@ -8,6 +8,7 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "rental-test-"));
 
 const { openDb } = await import("./db.ts");
 const { seedDefaults } = await import("./seed.ts");
+const { TEST_CATEGORIES } = await import("./test-categories.ts");
 const { filePreviews, pendingUploads, users } = await import("./db/schema.ts");
 const ledger = await import("./services/ledger.ts");
 const files = await import("./services/attachments.ts");
@@ -17,7 +18,7 @@ const { pathFor } = await import("./services/storage.ts");
 
 function setup() {
   const db = openDb(":memory:");
-  seedDefaults(db);
+  seedDefaults(db, TEST_CATEGORIES);
   const mk = (email: string) => {
     const user = db.insert(users).values({ email, role: "admin" }).returning().get();
     return { user: { ...user, role: "admin" as const }, apiKeyId: null, canWrite: true, via: "web" as const };

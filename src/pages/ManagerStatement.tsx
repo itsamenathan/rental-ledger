@@ -1,4 +1,5 @@
 import { useEffect, useState, type DragEvent } from "react";
+import { apiUrl } from "../portfolio.ts";
 import { Link, useNavigate, useParams } from "react-router";
 import { api } from "../api.ts";
 import { fmtDate, money, monthTitle } from "../format.ts";
@@ -89,7 +90,7 @@ interface Applied {
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const channelName = (c: string) =>
   /vrbo|homeaway/i.test(c) ? "VRBO" : /booking ?engine/i.test(c) ? "Direct booking" : /airbnb/i.test(c) ? "Airbnb" : c;
-const fileUrl = (d: Doc) => `/api/manager/documents/${d.id}/file`;
+const fileUrl = (d: Doc) => apiUrl(`/api/manager/documents/${d.id}/file`);
 const docLabel = (d: Doc) =>
   d.kind === "statement" ? "Owner statement" : `Invoice${d.reference ? ` #${d.reference}` : ""}`;
 

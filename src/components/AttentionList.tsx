@@ -2,9 +2,8 @@ import { useState } from "react";
 import { Link, useLocation } from "react-router";
 import { addLinkFor, qs, type RecurringAlert, type RecurringSeries } from "../api.ts";
 import { dateInMonth, monthShort } from "../format.ts";
-import { useSession, useScopedPath } from "../hooks.ts";
+import { usePropertyPath, useSession, useScopedPath } from "../hooks.ts";
 import { useDismissAlert } from "../recurring-dismiss.ts";
-import { scopePath } from "../scope.ts";
 
 const ICON: Record<RecurringAlert["type"], string> = {
   missing: "?",
@@ -67,7 +66,8 @@ export function RecurringActions({
   onChanged: () => void;
 }) {
   const scoped = useScopedPath();
-  const at = (to: string) => (s ? scopePath(String(s.property_id), to) : scoped(to));
+  const inProperty = usePropertyPath();
+  const at = (to: string) => (s ? inProperty(s.property_id, to) : scoped(to));
   const { canWrite } = useSession();
   const here = useLocation().pathname;
   const dismiss = useDismissAlert(onChanged);

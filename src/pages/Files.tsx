@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { apiUrl } from "../portfolio.ts";
 import { Link, useSearchParams } from "react-router";
 import { api, qs, type FileLibrary, type LibraryFile, type Transaction, type TxList } from "../api.ts";
 import { MonthNav } from "../components/MonthPicker.tsx";
@@ -140,7 +141,7 @@ export default function Files() {
   const d = lib.data;
   const groups = new Map<string, LibraryFile[]>();
   for (const f of d?.files ?? []) groups.set(f.month, [...(groups.get(f.month) ?? []), f]);
-  const zipHref = `/api/files.zip${qs(filters)}`;
+  const zipHref = apiUrl(`/api/files.zip${qs(filters)}`);
   const y = year ?? month!.slice(0, 4);
 
   return (
@@ -282,7 +283,7 @@ export default function Files() {
                       key={f.key}
                       file={f}
                       canWrite={canWrite}
-                      onView={() => (isImage(f) ? setViewing(f) : window.open(f.url, "_blank", "noopener"))}
+                      onView={() => (isImage(f) ? setViewing(f) : window.open(apiUrl(f.url), "_blank", "noopener"))}
                       onOpenEntry={setEditing}
                       onRename={(name) => rename(f, name)}
                       onLink={() => setLinking(f)}
@@ -298,12 +299,12 @@ export default function Files() {
 
       {viewing && (
         <Modal title={viewing.filename} onClose={() => setViewing(null)} wide>
-          <img className="file-preview" src={viewing.url} alt={viewing.filename} />
+          <img className="file-preview" src={apiUrl(viewing.url)} alt={viewing.filename} />
           <div className="form-actions">
-            <a className="btn" href={viewing.url} target="_blank" rel="noreferrer">
+            <a className="btn" href={apiUrl(viewing.url)} target="_blank" rel="noreferrer">
               Open in new tab
             </a>
-            <a className="btn" href={`${viewing.url}?download`}>
+            <a className="btn" href={apiUrl(`${viewing.url}?download`)}>
               Download
             </a>
           </div>
@@ -358,7 +359,7 @@ function FileRow({
     <li className="file-row">
       <button className="file-thumb" onClick={onView} aria-label={`View ${f.filename}`}>
         {isImage(f) || f.preview_url ? (
-          <img src={isImage(f) ? f.url : f.preview_url!} alt="" loading="lazy" />
+          <img src={apiUrl(isImage(f) ? f.url : f.preview_url!)} alt="" loading="lazy" />
         ) : (
           <span>{typeLabel(f)}</span>
         )}
@@ -432,7 +433,7 @@ function FileRow({
         )}
       </div>
       <div className="file-actions">
-        <a className="btn small" href={`${f.url}?download`}>
+        <a className="btn small" href={apiUrl(`${f.url}?download`)}>
           Download
         </a>
         {f.manager && (

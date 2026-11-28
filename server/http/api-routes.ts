@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { getDb } from "../db.ts";
-import { AppError, badRequest, requireAdmin } from "../context.ts";
+import { AppError, badRequest, requireInstanceAdmin } from "../context.ts";
 import * as auth from "../services/auth.ts";
 import * as ledger from "../services/ledger.ts";
 import * as rental from "../services/rental.ts";
@@ -15,6 +15,7 @@ import * as receipts from "../services/receipts.ts";
 import { todoSummary } from "../services/todo.ts";
 import { createBackup, restoreBackup } from "../services/backup.ts";
 import { preparerPackage } from "../services/preparer.ts";
+import { portfolioExport } from "../services/portfolio-export.ts";
 import { annotate, undoAudit } from "../services/undo.ts";
 import * as files from "../services/attachments.ts";
 import * as uploads from "../services/uploads.ts";
@@ -23,7 +24,9 @@ import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
 import { transactionsCsv } from "../services/csv.ts";
 import * as csvImport from "../services/csv-import.ts";
-import { listAudit } from "../services/audit.ts";
+import { listAudit, listServerAudit } from "../services/audit.ts";
+import * as portfolios from "../services/portfolios.ts";
+import * as invites from "../services/invites.ts";
 import { actorOf, requireAuth, type Env } from "./middleware.ts";
 
 export const api = new Hono<Env>();
@@ -448,6 +451,16 @@ api.get("/reports/tax-package.zip", (c) => {
   });
 });
 
+/** Everything in this portfolio as one zip, for its own people (a full backup is the server administrator's). */
+api.get("/export/portfolio.zip", (c) => {
+  const z = portfolioExport(getDb(), actorOf(c));
+  return c.body(z.stream, 200, {
+    "Content-Type": "application/zip",
+    "Content-Disposition": disposition("attachment", z.filename),
+    "Cache-Control": "no-store",
+  });
+});
+
 api.get("/export/transactions.csv", (c) => {
   const q = { ...c.req.query(), property_id: queryScope(c), limit: "5000" };
   const { items } = ledger.listTransactions(getDb(), q);
@@ -471,7 +484,7 @@ api.get("/backup", (c) => {
 // Restore (admin): replace all data with a backup zip sent as the raw request body.
 api.post("/backup/restore", async (c) => {
   const actor = actorOf(c);
-  requireAdmin(actor); // before reading a large body
+  requireInstanceAdmin(actor); // before reading a large body
   const data = Buffer.from(await c.req.arrayBuffer());
   if (!data.length) throw badRequest("Send the backup .zip as the request body");
   return c.json(await restoreBackup(getDb(), actor, data, sourceName(c.req.header("x-filename"))));
@@ -494,18 +507,16 @@ function csvResponse(c: Context, csv: string, filename: string) {
 
 // ---------------- audit ----------------
 
+const auditQuery = z.object({
+  entity: z.string().optional(),
+  entity_id: z.coerce.number().int().optional(),
+  limit: z.coerce.number().int().min(1).max(1000).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+  hide_logins: z.preprocess((v) => v === "true", z.boolean()).optional(),
+});
 api.get("/audit", (c) => {
-  const q = z
-    .object({
-      entity: z.string().optional(),
-      entity_id: z.coerce.number().int().optional(),
-      limit: z.coerce.number().int().min(1).max(1000).default(100),
-      offset: z.coerce.number().int().min(0).default(0),
-      hide_logins: z.preprocess((v) => v === "true", z.boolean()).optional(),
-    })
-    .parse(c.req.query());
   const db = getDb();
-  return c.json(annotate(db, listAudit(db, q)));
+  return c.json(annotate(db, listAudit(db, auditQuery.parse(c.req.query()))));
 });
 api.post("/audit/:id/undo", (c) => c.json(undoAudit(getDb(), actorOf(c), id(c))));
 
@@ -520,15 +531,63 @@ api.delete("/api-keys/:id", (c) => {
   return c.json({ ok: true });
 });
 
-api.get("/users", (c) => c.json(auth.listUsers(getDb(), actorOf(c))));
-api.post("/users", async (c) => {
+// ---------------- this portfolio: its name, members and invite links ----------------
+
+const browserOnly = (c: Context<Env>) => {
   const actor = actorOf(c);
-  requireAdmin(actor);
-  if (actor.apiKeyId) throw new AppError(403, "Manage users from a browser session");
-  return c.json(await auth.createUser(getDb(), actor, auth.userCreateInput.parse(await body(c))), 201);
-});
-api.patch("/users/:id", async (c) => {
-  const actor = actorOf(c);
-  if (actor.apiKeyId) throw new AppError(403, "Manage users from a browser session");
-  return c.json(await auth.updateUser(getDb(), actor, id(c), auth.userUpdateInput.parse(await body(c))));
-});
+  if (actor.apiKeyId) throw new AppError(403, "Manage people from a browser session");
+  return actor;
+};
+
+api.get("/portfolio", (c) => c.json(portfolios.currentPortfolio(getDb())));
+/** Leave this portfolio yourself. */
+api.delete("/portfolio/membership", (c) => c.json(portfolios.leaveCurrentPortfolio(getDb(), actorOf(c))));
+api.patch("/portfolio", async (c) => c.json(portfolios.renameCurrentPortfolio(getDb(), browserOnly(c), await body(c))));
+
+/** Members of this portfolio (its admins). */
+api.get("/users", (c) => c.json(portfolios.listMembers(getDb(), actorOf(c))));
+/** A new login with a password, in this portfolio (the server's administrator; portfolio admins send invites). */
+api.post("/users", async (c) =>
+  c.json(await auth.createUser(getDb(), browserOnly(c), auth.userCreateInput.parse(await body(c))), 201),
+);
+/** `role` is this portfolio's membership (its admins); name, password and disabled change the login (server admin). */
+api.patch("/users/:id", async (c) =>
+  c.json(await portfolios.updateMember(getDb(), browserOnly(c), id(c), await body(c))),
+);
+api.delete("/users/:id", (c) => c.json(portfolios.removeMember(getDb(), browserOnly(c), id(c))));
+
+api.get("/invites", (c) => c.json(invites.listInvites(getDb(), actorOf(c))));
+api.post("/invites", async (c) => c.json(invites.createInvite(getDb(), browserOnly(c), await body(c)), 201));
+api.delete("/invites/:id", (c) => c.json(invites.revokeInvite(getDb(), browserOnly(c), id(c))));
+
+// ---------------- the whole server (its administrator) ----------------
+
+api.get("/admin/portfolios", (c) => c.json(portfolios.listAllPortfolios(getDb(), actorOf(c))));
+api.post("/admin/portfolios", async (c) =>
+  c.json(portfolios.createPortfolio(getDb(), browserOnly(c), await body(c)), 201),
+);
+api.patch("/admin/portfolios/:id", async (c) =>
+  c.json(portfolios.updatePortfolio(getDb(), browserOnly(c), id(c), await body(c))),
+);
+/** An invite link to any portfolio: how a new one gets its first admin. */
+api.post("/admin/portfolios/:id/invites", async (c) =>
+  c.json(invites.createInviteFor(getDb(), browserOnly(c), id(c), await body(c)), 201),
+);
+api.get("/admin/users", (c) => c.json(portfolios.listLogins(getDb(), actorOf(c))));
+/** A new login with a password, joining the portfolio named by `portfolio_id`. */
+api.post("/admin/users", async (c) =>
+  c.json(await portfolios.createLogin(getDb(), browserOnly(c), await body(c)), 201),
+);
+/** The server's own activity: backups, logins, portfolios (not what's in any portfolio). */
+api.get("/admin/audit", (c) =>
+  c.json(
+    listServerAudit(getDb(), actorOf(c), auditQuery.parse(c.req.query())).map((r) => ({
+      ...r,
+      undo: null,
+      undone: false,
+    })),
+  ),
+);
+api.patch("/admin/users/:id", async (c) =>
+  c.json(await portfolios.updateLogin(getDb(), browserOnly(c), id(c), await body(c))),
+);

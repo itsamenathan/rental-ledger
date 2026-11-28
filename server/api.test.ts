@@ -7,12 +7,13 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "rental-test-"));
 
 const { openDb, setDb } = await import("./db.ts");
 const { seedDefaults } = await import("./seed.ts");
+const { TEST_CATEGORIES } = await import("./test-categories.ts");
 const { createApp } = await import("./app.ts");
 const { depreciationForYear } = await import("./services/reports.ts");
 
 const db = openDb(":memory:");
 setDb(db);
-seedDefaults(db);
+seedDefaults(db, TEST_CATEGORIES);
 const app = createApp();
 
 let cookie = "";
