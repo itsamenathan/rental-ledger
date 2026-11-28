@@ -10,7 +10,7 @@ import { and, desc, eq, gte, isNull, lte, like, sql } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
-import { categories, managerAcknowledgements, managerDocuments, transactions } from "../db/schema.ts";
+import { auditLog, categories, managerAcknowledgements, managerDocuments, transactions } from "../db/schema.ts";
 import { propertyScope } from "../portfolio.ts";
 import { audit, badRequest, cents, requireWrite, type Actor } from "../context.ts";
 import { parseCsv } from "./csv.ts";
@@ -487,6 +487,40 @@ export const applyInput = baseInput
 
 type PreviewInput = z.infer<typeof previewInput>;
 
+/** "$200.00 less" / "$50.00 more": the deposit against the statement. */
+function differenceAmount(i: IncomeRowView) {
+  const d = cents(i.difference!);
+  return `${usd(Math.abs(d))} ${d < 0 ? "less" : "more"}`;
+}
+
+/** The management fee's share of a shortfall, at the stay's own fee rate: what a fee on the full amount overcharged. */
+function feeOnShortfall(i: IncomeRowView) {
+  const payout = cents(i.payout);
+  const fee = Math.abs(cents(i.management_fee));
+  const d = cents(i.difference!);
+  return d < 0 && fee && payout > 0 ? Math.round((fee * -d) / payout) : 0;
+}
+
+/** The wording before the difference and fee were spelled out. Its hash stays the warning's key, so warnings marked as
+ * explained stay explained; the amounts and dates are in it, so a changed payout or deposit still asks again. */
+function legacyDifferenceText(i: IncomeRowView) {
+  return `The ${shortDate(i.check_in)} stay (#${i.reservation_id}) is ${usd(cents(i.payout))} on the statement but ${usd(cents(i.payout) + cents(i.difference!))} was deposited (${shortDate(i.transaction_date!)}). Ask your manager about the difference (a refund, resolution or adjustment); the management fee may have been charged on the full amount`;
+}
+
+function differenceText(i: IncomeRowView) {
+  const fee = feeOnShortfall(i);
+  const shortfall = cents(i.difference!) < 0;
+  return (
+    `The ${shortDate(i.check_in)} stay (#${i.reservation_id}) is ${usd(cents(i.payout))} on the statement but ${usd(cents(i.payout) + cents(i.difference!))} was deposited (${shortDate(i.transaction_date!)}), ${differenceAmount(i)}. ` +
+    `Ask your manager about the ${usd(Math.abs(cents(i.difference!)))} (a refund, resolution or adjustment)` +
+    (fee
+      ? `; the management fee (${usd(Math.abs(cents(i.management_fee)))}) may have been charged on the full amount, about ${usd(fee)} of it on the missing ${usd(-cents(i.difference!))}`
+      : shortfall
+        ? "; the management fee may have been charged on the full amount"
+        : "")
+  );
+}
+
 interface LedgerRow {
   id: number;
   date: string;
@@ -835,6 +869,8 @@ function analyze(db: DB, input: PreviewInput, ctx?: ManagerContext): Analysis {
   for (const inv of invoices)
     warnings.push(...(inv.warnings ?? []).map((w) => (invoices.length > 1 ? `Invoice ${inv.number}: ${w}` : w)));
   const checks: Check[] = [];
+  /** Warning text -> the text its "explained" key is hashed from, when the wording changed after people explained it. */
+  const keyTextOf = new Map<string, string>();
 
   // ---------- income ----------
   const income: IncomeRowView[] = [];
@@ -905,10 +941,11 @@ function analyze(db: DB, input: PreviewInput, ctx?: ManagerContext): Analysis {
         : `${matched} of ${income.length} payouts tied to deposits; none missing`,
     });
     // One warning per stay, so each can be marked as explained on its own.
-    for (const i of income.filter((x) => x.status === "differs"))
-      warnings.push(
-        `The ${shortDate(i.check_in)} stay (#${i.reservation_id}) is ${usd(cents(i.payout))} on the statement but ${usd(cents(i.payout) + cents(i.difference!))} was deposited (${shortDate(i.transaction_date!)}). Ask your manager about the difference (a refund, resolution or adjustment); the management fee may have been charged on the full amount`,
-      );
+    for (const i of income.filter((x) => x.status === "differs")) {
+      const text = differenceText(i);
+      warnings.push(text);
+      keyTextOf.set(text, legacyDifferenceText(i));
+    }
     const batched = income.filter((i) => i.status === "batched");
     if (batched.length)
       checks.push({
@@ -1086,7 +1123,10 @@ function analyze(db: DB, input: PreviewInput, ctx?: ManagerContext): Analysis {
   );
   for (const c of checks) {
     if (c.level !== "warn" || c.code) continue;
-    c.key = `w:${createHash("sha1").update(c.text).digest("hex").slice(0, 12)}`;
+    c.key = `w:${createHash("sha1")
+      .update(keyTextOf.get(c.text) ?? c.text)
+      .digest("hex")
+      .slice(0, 12)}`;
     const ack = acks.get(c.key);
     if (ack) {
       c.level = "info";
@@ -1205,6 +1245,14 @@ export function managerYear(db: DB, raw: { year: number; property?: number | str
 
 // ======================= apply =======================
 
+/** Whether an earlier save already flagged this deposit (recorded as `flagged` on its manager_statement audit row). */
+function flaggedBefore(db: DB, transactionId: number) {
+  return !!db.get<{ one: number }>(
+    sql`SELECT 1 AS one FROM ${auditLog}, json_each(${auditLog.changes}, '$.flagged') j
+        WHERE ${auditLog.entity} = 'manager_statement' AND j.value = ${transactionId} LIMIT 1`,
+  );
+}
+
 export function applyManagerMonth(db: DB, actor: Actor, raw: unknown) {
   requireWrite(actor);
   const input = applyInput.parse(raw);
@@ -1213,6 +1261,8 @@ export function applyManagerMonth(db: DB, actor: Actor, raw: unknown) {
     const result = {
       month: a.month,
       tagged: [] as number[],
+      /** Deposits flagged for review because they differ from the statement. */
+      flagged: [] as number[],
       created_income: [] as number[],
       created_expenses: [] as number[],
       skipped: [] as string[],
@@ -1246,6 +1296,28 @@ export function applyManagerMonth(db: DB, actor: Actor, raw: unknown) {
           }
         }
       }
+
+    // A deposit that differs from the statement is flagged for review once (the audit log remembers it), so clearing
+    // the flag by hand sticks on the next save.
+    for (const r of a.income) {
+      if (r.status !== "differs") continue;
+      for (const t of r.transactions ?? []) {
+        const row = db
+          .select({ flagged: transactions.needsReview })
+          .from(transactions)
+          .where(eq(transactions.id, t.id))
+          .get();
+        if (!row || row.flagged || flaggedBefore(db, t.id)) continue;
+        const fee = feeOnShortfall(r);
+        updateTransaction(db, actor, t.id, {
+          needs_review: true,
+          review_note:
+            `The owner statement shows ${usd(cents(r.payout))} for reservation ${r.reservation_id} (check-in ${r.check_in}); this deposit is ${differenceAmount(r)}. Ask the manager about the difference` +
+            (fee ? ` (about ${usd(fee)} of the management fee may be on it).` : "."),
+        });
+        result.flagged.push(t.id);
+      }
+    }
 
     for (const id of input.create_income) {
       const r = a.income.find((i) => i.reservation_id === id);
@@ -1313,6 +1385,7 @@ export function applyManagerMonth(db: DB, actor: Actor, raw: unknown) {
     audit(db, actor, "import", "manager_statement", null, {
       month: a.month,
       tagged: result.tagged.length,
+      flagged: result.flagged,
       created_income: result.created_income,
       created_expenses: result.created_expenses,
     });

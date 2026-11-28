@@ -950,7 +950,7 @@ export function buildMcpServer(actor: Actor) {
     "apply_manager_month",
     {
       description:
-        "Write what preview_manager_month proposed. Takes the same inputs plus which missing income rows (create_income: reservation ids) and invoice lines (create_lines: line keys from the preview) to create; overrides sets a category for a line the preview couldn't categorize. Matched income rows get the reservation id noted in an empty description. Already-recorded items are never duplicated. With only `month`, the saved documents are used and attached to the entries. Ask the user before creating income rows.",
+        "Write what preview_manager_month proposed. Takes the same inputs plus which missing income rows (create_income: reservation ids) and invoice lines (create_lines: line keys from the preview) to create; overrides sets a category for a line the preview couldn't categorize. Matched income rows get the reservation id noted in an empty description; a deposit that differs from the statement is flagged for review (once). Already-recorded items are never duplicated. With only `month`, the saved documents are used and attached to the entries. Ask the user before creating income rows.",
       inputSchema: {
         statement_csv: z.string().optional(),
         invoice_text: z.string().optional(),

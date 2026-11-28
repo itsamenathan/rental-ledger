@@ -82,6 +82,7 @@ interface Review {
 }
 interface Applied {
   tagged: number[];
+  flagged: number[];
   created_income: number[];
   created_expenses: number[];
   attachments: number;
@@ -519,6 +520,9 @@ function MonthView({ month }: { month: string }) {
               <p>
                 Added {plural(done.created_income.length + done.created_expenses.length, "entry", "entries")}, noted the
                 reservation on {plural(done.tagged.length, "payout")}
+                {done.flagged.length
+                  ? `, flagged ${plural(done.flagged.length, "deposit")} that ${done.flagged.length === 1 ? "differs" : "differ"} from the statement`
+                  : ""}
                 {attach ? `, and linked the files to ${plural(done.attachments, "entry", "entries")}` : ""}.
               </p>
             </div>
