@@ -16,7 +16,8 @@ import { attachments, categories, filePreviews, managerDocuments, properties, tr
 import { audit, badRequest, type Actor } from "../context.ts";
 import { RECEIPT_MIN_DOLLARS } from "./receipts.ts";
 import { gatedZipStream, type ZipSource } from "./zip.ts";
-import { listTransactions, type Transaction } from "./ledger.ts";
+import { listTransactions, txInPortfolio, type Transaction } from "./ledger.ts";
+import { propertyScope } from "../portfolio.ts";
 
 export const fileQuery = z
   .object({
@@ -103,7 +104,7 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
   const byKey = new Map<string, LibraryFile>();
 
   if (q.source !== "manager") {
-    const where: (SQL | undefined)[] = [isNull(t.deletedAt), like(t.date, `${p.prefix}-%`)];
+    const where: (SQL | undefined)[] = [isNull(t.deletedAt), like(t.date, `${p.prefix}-%`), txInPortfolio(db)];
     if (q.property_id) where.push(eq(t.propertyId, q.property_id));
     const rows = db
       .select({
@@ -167,8 +168,7 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
   }
 
   // Manager paperwork: listed under the month it covers, and used to label receipts that are the same file.
-  const docWhere: (SQL | undefined)[] = [];
-  if (q.property_id) docWhere.push(eq(managerDocuments.propertyId, q.property_id));
+  const docWhere: (SQL | undefined)[] = [propertyScope(db, managerDocuments.propertyId, q.property_id)];
   const docs = db
     .select({
       id: managerDocuments.id,
@@ -214,7 +214,8 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
     });
   }
 
-  // How many attachments each file has in total, to tell whether unlinking the last listed entry deletes it.
+  // How many attachments each file has in this portfolio, to tell whether unlinking the last listed entry deletes it
+  // here. (Uses in another portfolio are never counted or shown; the stored file is shared and reference-counted.)
   const shas = [...byKey.keys()];
   const totals = new Map<string, number>();
   for (let i = 0; i < shas.length; i += 500) {
@@ -222,7 +223,8 @@ export function listFiles(db: DB, raw: unknown): FileLibrary {
     for (const r of db
       .select({ sha: attachments.sha256, n: count() })
       .from(attachments)
-      .where(inArray(attachments.sha256, part))
+      .innerJoin(transactions, eq(transactions.id, attachments.transactionId))
+      .where(and(inArray(attachments.sha256, part), txInPortfolio(db)))
       .groupBy(attachments.sha256)
       .all())
       totals.set(r.sha, r.n);
@@ -298,6 +300,8 @@ export function filesZip(db: DB, actor: Actor | null, raw: unknown) {
   const lib = listFiles(db, raw);
   if (!lib.files.length) throw badRequest("No files in this period");
   const root = resolve(config.uploadsDir);
+  // sha256 → stored file, whichever row (any portfolio) uses it: only files listed above are looked up, and the same
+  // bytes are the same stored file wherever they're used.
   const keys = new Map(
     [
       ...db.select({ sha: attachments.sha256, key: attachments.storageKey }).from(attachments).all(),

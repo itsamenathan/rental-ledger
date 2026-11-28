@@ -20,6 +20,7 @@ import { alias } from "drizzle-orm/sqlite-core";
 import type { AnyColumn } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
+import { RESERVED_PROPERTY_SLUGS, slugProblem, uniqueSlug } from "../slugs.ts";
 import {
   attachments,
   categories,
@@ -47,6 +48,7 @@ import {
   RECEIPT_POLICIES,
   type ReceiptPolicy,
 } from "./receipts.ts";
+import { currentPortfolioId } from "../portfolio.ts";
 import { claimUploads, uploadIds } from "./uploads.ts";
 
 // ======================= shared schema bits =======================
@@ -81,6 +83,8 @@ export const propertyInput = z.object({
     .max(100)
     // "all" means every property in API/MCP filters, and a bare number would be read as an id
     .refine((n) => n.toLowerCase() !== "all" && !/^\d+$/.test(n), 'Pick another name (not "all" or a number)'),
+  /** Web address within the portfolio (/<portfolio>/<slug>/…); made from the name when left out, kept on rename */
+  slug: z.string().trim().toLowerCase().max(64).optional(),
   address: z.string().trim().max(300).default(""),
   placed_in_service: isoDate.nullable().default(null),
   building_basis: money.nullable().default(null),
@@ -94,6 +98,7 @@ type PropertyRow = typeof properties.$inferSelect;
 const toProperty = (r: PropertyRow) => ({
   id: r.id,
   name: r.name,
+  slug: r.slug,
   address: r.address,
   placed_in_service: r.placedInService,
   building_basis: dollars(r.buildingBasisCents),
@@ -105,6 +110,7 @@ export type Property = ReturnType<typeof toProperty>;
 
 const propertyValues = (p: Partial<z.infer<typeof propertyInput>>) => ({
   name: p.name,
+  slug: p.slug,
   address: p.address,
   placedInService: p.placed_in_service,
   buildingBasisCents:
@@ -117,12 +123,40 @@ const propertyValues = (p: Partial<z.infer<typeof propertyInput>>) => ({
 const byName = (col: typeof properties.name | typeof categories.name, name: string) =>
   eq(sql`lower(${col})`, name.trim().toLowerCase());
 
+/** Properties of the current portfolio. */
+const inPortfolio = (db: DB) => eq(properties.portfolioId, currentPortfolioId(db));
+
+const propertyBySlug = (db: DB, slug: string) =>
+  db
+    .select({ id: properties.id })
+    .from(properties)
+    .where(and(eq(properties.slug, slug), inPortfolio(db)))
+    .get();
+
+/** A typed web address for property `id` (null = new): well formed, not a portfolio page, not another property's. */
+function checkPropertySlug(db: DB, id: number | null, slug: string) {
+  const why = slugProblem(slug, RESERVED_PROPERTY_SLUGS);
+  if (why) throw badRequest(why);
+  const other = propertyBySlug(db, slug);
+  if (other && other.id !== id) throw badRequest("Another property already uses that web address");
+}
+
 export function listProperties(db: DB) {
-  return db.select().from(properties).orderBy(properties.archived, properties.name).all().map(toProperty);
+  return db
+    .select()
+    .from(properties)
+    .where(inPortfolio(db))
+    .orderBy(properties.archived, properties.name)
+    .all()
+    .map(toProperty);
 }
 
 export function getProperty(db: DB, id: number) {
-  const r = db.select().from(properties).where(eq(properties.id, id)).get();
+  const r = db
+    .select()
+    .from(properties)
+    .where(and(eq(properties.id, id), inPortfolio(db)))
+    .get();
   if (!r) throw notFound("Property");
   return toProperty(r);
 }
@@ -130,11 +164,19 @@ export function getProperty(db: DB, id: number) {
 export function createProperty(db: DB, actor: Actor | null, raw: unknown) {
   if (actor) requireWrite(actor);
   const p = propertyInput.parse(raw);
-  if (db.select({ id: properties.id }).from(properties).where(byName(properties.name, p.name)).get())
+  if (
+    db
+      .select({ id: properties.id })
+      .from(properties)
+      .where(and(byName(properties.name, p.name), inPortfolio(db)))
+      .get()
+  )
     throw badRequest("A property with that name already exists");
+  if (p.slug != null) checkPropertySlug(db, null, p.slug);
+  const slug = p.slug ?? uniqueSlug(p.name, RESERVED_PROPERTY_SLUGS, (s) => !!propertyBySlug(db, s), "property");
   const { id } = db
     .insert(properties)
-    .values({ ...propertyValues(p), name: p.name })
+    .values({ ...propertyValues(p), name: p.name, slug, portfolioId: currentPortfolioId(db) })
     .returning({ id: properties.id })
     .get();
   audit(db, actor, "create", "property", id, p);
@@ -145,6 +187,7 @@ export function updateProperty(db: DB, actor: Actor, id: number, raw: unknown) {
   requireWrite(actor);
   const before = getProperty(db, id);
   const p = parsePatch(propertyInput, raw);
+  if (p.slug != null) checkPropertySlug(db, id, p.slug);
   if (Object.keys(p).length) db.update(properties).set(propertyValues(p)).where(eq(properties.id, id)).run();
   const after = getProperty(db, id);
   audit(db, actor, "update", "property", id, diff(before, after));
@@ -166,7 +209,7 @@ export function resolvePropertyId(db: DB, ref: number | string | null | undefine
     const rows = db
       .select({ id: properties.id })
       .from(properties)
-      .where(eq(properties.archived, false))
+      .where(and(eq(properties.archived, false), inPortfolio(db)))
       .orderBy(properties.id)
       .all();
     if (rows.length === 1) return rows[0]!.id;
@@ -177,7 +220,12 @@ export function resolvePropertyId(db: DB, ref: number | string | null | undefine
   const row = db
     .select({ id: properties.id })
     .from(properties)
-    .where(typeof ref === "number" || /^\d+$/.test(ref) ? eq(properties.id, Number(ref)) : byName(properties.name, ref))
+    .where(
+      and(
+        typeof ref === "number" || /^\d+$/.test(ref) ? eq(properties.id, Number(ref)) : byName(properties.name, ref),
+        inPortfolio(db),
+      ),
+    )
     .get();
   if (!row) throw badRequest(`Unknown property: ${ref}`);
   return row.id;
@@ -277,17 +325,24 @@ const categoryValues = (c: Partial<z.infer<typeof categoryInput>>) => ({
   receiptMinCents: c.receipt_min === undefined ? undefined : c.receipt_min == null ? null : cents(c.receipt_min),
 });
 
+/** Categories of the current portfolio. */
+export const categoriesInPortfolio = (db: DB) => eq(categories.portfolioId, currentPortfolioId(db));
+
 export function listCategories(db: DB, includeArchived = true): Category[] {
   return db
     .select(categoryCols)
     .from(categories)
-    .where(includeArchived ? undefined : eq(categories.archived, false))
+    .where(and(categoriesInPortfolio(db), includeArchived ? undefined : eq(categories.archived, false)))
     .orderBy(desc(categories.kind), categories.sortOrder, categories.name)
     .all();
 }
 
 export function getCategory(db: DB, id: number): Category {
-  const r = db.select(categoryCols).from(categories).where(eq(categories.id, id)).get();
+  const r = db
+    .select(categoryCols)
+    .from(categories)
+    .where(and(eq(categories.id, id), categoriesInPortfolio(db)))
+    .get();
   if (!r) throw notFound("Category");
   return r;
 }
@@ -295,12 +350,19 @@ export function getCategory(db: DB, id: number): Category {
 export function createCategory(db: DB, actor: Actor | null, raw: unknown) {
   if (actor) requireWrite(actor);
   const c = categoryInput.parse(raw);
-  if (db.select({ id: categories.id }).from(categories).where(byName(categories.name, c.name)).get())
+  if (
+    db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(and(byName(categories.name, c.name), categoriesInPortfolio(db)))
+      .get()
+  )
     throw badRequest("Category already exists");
   const { id } = db
     .insert(categories)
     .values({
       ...categoryValues(c),
+      portfolioId: currentPortfolioId(db),
       name: c.name,
       kind: c.kind,
       receiptPolicy: c.receipt_policy ?? defaultReceiptPolicy(c.schedule_e_line),
@@ -334,8 +396,8 @@ export function updateCategory(db: DB, actor: Actor, id: number, raw: unknown) {
 
 export function deleteCategory(db: DB, actor: Actor, id: number) {
   requireAdmin(actor);
-  if (usageCount(db, id, true)) throw badRequest("Category has transactions; archive it instead");
   const before = getCategory(db, id);
+  if (usageCount(db, id, true)) throw badRequest("Category has transactions; archive it instead");
   db.delete(categories).where(eq(categories.id, id)).run();
   audit(db, actor, "delete", "category", id, before);
 }
@@ -344,7 +406,12 @@ export function resolveCategory(db: DB, ref: number | string): Category {
   const row = db
     .select(categoryCols)
     .from(categories)
-    .where(typeof ref === "number" || /^\d+$/.test(ref) ? eq(categories.id, Number(ref)) : byName(categories.name, ref))
+    .where(
+      and(
+        typeof ref === "number" || /^\d+$/.test(ref) ? eq(categories.id, Number(ref)) : byName(categories.name, ref),
+        categoriesInPortfolio(db),
+      ),
+    )
     .get();
   if (!row) {
     const names = listCategories(db, false)
@@ -470,9 +537,12 @@ function selectTx(db: DB) {
 }
 export type Transaction = NonNullable<ReturnType<ReturnType<typeof selectTx>["get"]>>;
 
+/** Entries of the current portfolio. */
+export const txInPortfolio = (db: DB) => eq(transactions.portfolioId, currentPortfolioId(db));
+
 export function getTransaction(db: DB, id: number): Transaction {
   const r = selectTx(db)
-    .where(and(eq(transactions.id, id), isNull(transactions.deletedAt)))
+    .where(and(eq(transactions.id, id), isNull(transactions.deletedAt), txInPortfolio(db)))
     .get();
   if (!r) throw notFound(`Transaction ${id}`);
   return r;
@@ -560,7 +630,7 @@ const absAmountIn = (r: { min?: number; max?: number }) =>
   );
 
 function transactionFilters(db: DB, q: TransactionQuery): SQL | undefined {
-  const where: (SQL | undefined)[] = [isNull(t.deletedAt)];
+  const where: (SQL | undefined)[] = [isNull(t.deletedAt), txInPortfolio(db)];
   if (q.year) where.push(gte(t.date, `${q.year}-01-01`), lte(t.date, `${q.year}-12-31`));
   if (q.month) where.push(eq(sql`substr(${t.date}, 1, 7)`, q.month));
   if (q.from) where.push(gte(t.date, q.from));
@@ -707,6 +777,7 @@ function prepareRow(db: DB, raw: unknown, opts: CreateOptions) {
   const alloc =
     v.allocation !== undefined ? v.allocation : category.kind === "expense" ? category.default_allocation : null;
   return {
+    portfolioId: currentPortfolioId(db),
     propertyId: resolvePropertyId(db, v.property_id ?? v.property),
     date: v.date,
     amountCents,
@@ -736,6 +807,14 @@ function insertRow(db: DB, actor: Actor | null, row: PreparedRow, source: string
 
 const nowIso = sql`strftime('%Y-%m-%dT%H:%M:%fZ','now')`;
 
+/** The entry with this external_id in the current portfolio (unique per portfolio, deleted ones included). */
+const withExternalId = (db: DB, externalId: string) =>
+  db
+    .select({ id: t.id })
+    .from(t)
+    .where(and(eq(t.externalId, externalId), txInPortfolio(db)))
+    .get();
+
 /**
  * Receipts uploaded from the entry form before saving (`upload_ids`), attached in the same database transaction as the
  * save. Read from the raw body like `client_id`, so bulk imports and other schemas don't take it.
@@ -751,14 +830,18 @@ export function createTransaction(db: DB, actor: Actor | null, raw: unknown, opt
   // validation so a replay still succeeds if, say, the category was archived in between.
   const clientId = (raw as { client_id?: unknown } | null)?.client_id;
   if (typeof clientId === "string" && clientId.trim()) {
-    const prior = db.select({ id: t.id }).from(t).where(eq(t.clientId, clientId.trim())).get();
+    const prior = db
+      .select({ id: t.id })
+      .from(t)
+      .where(and(eq(t.clientId, clientId.trim()), txInPortfolio(db)))
+      .get();
     if (prior) {
       const row = selectTx(db).where(eq(transactions.id, prior.id)).get();
       if (row) return row;
     }
   }
   const row = prepareRow(db, raw, opts);
-  if (row.externalId && db.select({ id: t.id }).from(t).where(eq(t.externalId, row.externalId)).get()) {
+  if (row.externalId && withExternalId(db, row.externalId)) {
     throw badRequest(`A transaction with external_id ${row.externalId} already exists`);
   }
   const uploads = uploadsOf(raw);
@@ -836,7 +919,7 @@ export function restoreTransaction(db: DB, actor: Actor, id: number) {
   const r = db
     .update(t)
     .set({ deletedAt: null, updatedBy: actor.user.id })
-    .where(and(eq(t.id, id), isNotNull(t.deletedAt)))
+    .where(and(eq(t.id, id), isNotNull(t.deletedAt), txInPortfolio(db)))
     .run();
   if (!r.changes) throw notFound(`Deleted transaction ${id}`);
   audit(db, actor, "restore", "transaction", id);
@@ -863,7 +946,7 @@ export interface BulkRowResult {
 /** Find likely duplicates: same external_id, or same property+date+amount (and same reference when both have one). */
 function findDuplicates(db: DB, row: PreparedRow): number[] {
   if (row.externalId) {
-    const r = db.select({ id: t.id }).from(t).where(eq(t.externalId, row.externalId)).get();
+    const r = withExternalId(db, row.externalId);
     if (r) return [r.id];
   }
   return db
@@ -906,8 +989,7 @@ export function bulkCreate(db: DB, actor: Actor | null, raw: unknown, opts: Crea
         // A repeated external_id is always refused (it's unique); look-alikes only when skipping duplicates.
         const sameId =
           row.externalId != null &&
-          (seen.some((s) => s.externalId === row.externalId) ||
-            db.select({ id: t.id }).from(t).where(eq(t.externalId, row.externalId)).get() != null);
+          (seen.some((s) => s.externalId === row.externalId) || withExternalId(db, row.externalId) != null);
         if (sameId || (dupes.length && input.skip_duplicates)) {
           results.push({ index, status: "duplicate", duplicate_of: dupes });
           return;
@@ -972,7 +1054,8 @@ export function bulkDelete(db: DB, actor: Actor, ids: number[]) {
 
 /** Vendors with their most recent categorization, to auto-fill quick entry. */
 export function suggestions(db: DB) {
-  const live = and(isNull(t.deletedAt), ne(t.vendor, ""));
+  const mine = txInPortfolio(db);
+  const live = and(isNull(t.deletedAt), ne(t.vendor, ""), mine);
   const latest = db
     .select({
       vendor: t.vendor,
@@ -1005,21 +1088,21 @@ export function suggestions(db: DB) {
     .select({ category: categories.name, subcategory: t.subcategory, uses: count() })
     .from(t)
     .innerJoin(categories, eq(categories.id, t.categoryId))
-    .where(and(isNull(t.deletedAt), ne(t.subcategory, "")))
+    .where(and(isNull(t.deletedAt), ne(t.subcategory, ""), mine))
     .groupBy(categories.name, t.subcategory)
     .orderBy(desc(count()))
     .all();
   const accounts = db
     .select({ account: t.account, uses: count() })
     .from(t)
-    .where(and(isNull(t.deletedAt), ne(t.account, "")))
+    .where(and(isNull(t.deletedAt), ne(t.account, ""), mine))
     .groupBy(t.account)
     .orderBy(desc(count()))
     .all();
   const categoryUse = db
     .select({ category_id: t.categoryId, uses: count() })
     .from(t)
-    .where(and(isNull(t.deletedAt), gte(t.date, sql`date('now', '-365 days')`)))
+    .where(and(isNull(t.deletedAt), gte(t.date, sql`date('now', '-365 days')`), mine))
     .groupBy(t.categoryId)
     .orderBy(desc(count()))
     .all();
@@ -1028,6 +1111,7 @@ export function suggestions(db: DB) {
     .select({ category: categories.name, subcategory: subcategoriesTable.name })
     .from(subcategoriesTable)
     .innerJoin(categories, eq(categories.id, subcategoriesTable.categoryId))
+    .where(categoriesInPortfolio(db))
     .all()
     .filter(
       (s) =>

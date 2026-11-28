@@ -6,6 +6,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { managerDocuments } from "../db/schema.ts";
+import { propertyScope } from "../portfolio.ts";
 import { audit, badRequest, notFound, requireWrite, type Actor } from "../context.ts";
 import { log } from "../telemetry.ts";
 import { attachStored } from "./attachments.ts";
@@ -73,7 +74,11 @@ async function prepare(f: UploadFile): Promise<Prepared> {
 }
 
 const docSelect = (db: DB, id: number) => {
-  const d = db.select().from(managerDocuments).where(eq(managerDocuments.id, id)).get();
+  const d = db
+    .select()
+    .from(managerDocuments)
+    .where(and(eq(managerDocuments.id, id), propertyScope(db, managerDocuments.propertyId)))
+    .get();
   if (!d) throw notFound("Document");
   return d;
 };

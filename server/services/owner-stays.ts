@@ -14,6 +14,7 @@ import { and, asc, eq, gt, inArray, like, lt, ne } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { occupancy, ownerStays, properties } from "../db/schema.ts";
+import { currentPortfolioId } from "../portfolio.ts";
 import { audit, badRequest, diff, notFound, requireWrite, type Actor } from "../context.ts";
 import { addDays, listEvents, nightsBetween } from "./calendar.ts";
 import { resolvePropertyId } from "./ledger.ts";
@@ -105,6 +106,9 @@ const cols = {
   updated_at: ownerStays.updatedAt,
 };
 
+/** Rows joined to properties: in the current portfolio. */
+const mine = (db: DB) => eq(properties.portfolioId, currentPortfolioId(db));
+
 function selectStays(db: DB) {
   return db.select(cols).from(ownerStays).innerJoin(properties, eq(properties.id, ownerStays.propertyId));
 }
@@ -122,6 +126,7 @@ function staysBetween(db: DB, opts: { from?: string; to?: string; property_id?: 
         opts.to ? lt(ownerStays.startDate, opts.to) : undefined,
         opts.from ? gt(ownerStays.endDate, opts.from) : undefined,
         opts.property_id ? eq(ownerStays.propertyId, opts.property_id) : undefined,
+        mine(db),
       ),
     )
     .orderBy(asc(ownerStays.startDate), asc(ownerStays.id))
@@ -139,7 +144,9 @@ export function listOwnerStays(db: DB, opts: { year?: number; property_id?: numb
 }
 
 export function getOwnerStay(db: DB, id: number): OwnerStay {
-  const r = selectStays(db).where(eq(ownerStays.id, id)).get();
+  const r = selectStays(db)
+    .where(and(eq(ownerStays.id, id), mine(db)))
+    .get();
   if (!r) throw notFound("Owner stay");
   return withNights(r);
 }
@@ -307,6 +314,7 @@ export function occupancyRows(db: DB, opts: { year?: number; month?: string; pro
       and(
         prefix ? like(o.month, opts.month ? prefix : `${prefix}%`) : undefined,
         opts.propertyId ? eq(o.propertyId, opts.propertyId) : undefined,
+        mine(db),
       ),
     )
     .all();

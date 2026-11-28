@@ -28,6 +28,8 @@ const USERS = [
   { email: "member@example.com", name: "Morgan Member", role: "member" },
   { email: "viewer@example.com", name: "Val Viewer", role: "viewer" },
 ] as const;
+/** Admin of the second portfolio ("Jordan's rentals"); member@ is in both. */
+const OTHER_ADMIN = { email: "jordan@example.com", name: "Jordan Lee" };
 
 /** A stable port per worktree, so several worktrees can run `vp dev` side by side. */
 export function harnessPort(dir = process.cwd()): number {
@@ -140,7 +142,7 @@ export function generate(today: Date) {
       });
       add(day + nights, {
         amount: -between(110, 145),
-        category: "Cleaning",
+        category: "Cleaning and maintenance",
         vendor: "Sparkle Clean Co",
         description: "Turnover clean",
         receipt: y < ty,
@@ -167,20 +169,25 @@ export function generate(today: Date) {
 
     add(last, {
       amount: -Math.round(income * 0.2 * 100) / 100,
-      category: "Management Fee",
+      category: "Management fees",
       subcategory: "Seabreeze Stays",
       vendor: "Seabreeze Stays",
       description: "20% management fee",
     });
 
     // Fixed monthly bills.
-    add(1, { amount: -1482.37, category: "Mortgage", vendor: "Example Home Loans", description: "Monthly payment" });
+    add(1, {
+      amount: -1482.37,
+      category: "Mortgage interest",
+      vendor: "Example Home Loans",
+      description: "Monthly payment",
+    });
     if (!isPrev) {
       // Internet is missing last month, so it shows up as a missed recurring bill.
       add(5, { amount: -79.99, category: "Utilities", subcategory: "Internet", vendor: "Example Fiber" });
     }
     const streaming = isPrev ? -17.99 : -15.49; // price change last month
-    add(9, { amount: streaming, category: "Services", subcategory: "Streaming", vendor: "StreamFlix" });
+    add(9, { amount: streaming, category: "Miscellaneous", subcategory: "Streaming", vendor: "StreamFlix" });
 
     // Variable utilities.
     const electric = -between(summer ? 160 : 90, summer ? 240 : 150);
@@ -197,26 +204,32 @@ export function generate(today: Date) {
     });
     if (m % 3 === 1) {
       add(20, { amount: -between(60, 95), category: "Utilities", subcategory: "Water", vendor: "Springfield Water" });
-      add(15, { amount: -95, category: "Services", subcategory: "Pest control", vendor: "BugAway Pest Control" });
+      add(15, { amount: -95, category: "Pest control", vendor: "BugAway Pest Control" });
     }
     if (m >= 4 && m <= 10)
-      add(22, { amount: -120, category: "Services", subcategory: "Lawn", vendor: "GreenCut Lawn" });
+      add(22, { amount: -120, category: "Gardening", subcategory: "Lawn", vendor: "GreenCut Lawn" });
 
     // Receipt rules (fixed amounts, so the random sequence for everything below stays the same):
     // a quarterly sewer bill whose subcategory never asks, and Stripe fees whose vendor isn't on the never-ask list
     // yet (try adding it).
     if (m % 3 === 2)
       add(24, { amount: -168.5, category: "Utilities", subcategory: "Sewer", vendor: "Springfield Sewer District" });
-    if (m % 2 === 0) add(26, { amount: -86.4, category: "Platform Fees", vendor: "Stripe", description: "Card fees" });
+    if (m % 2 === 0) add(26, { amount: -86.4, category: "Commissions", vendor: "Stripe", description: "Card fees" });
 
     // Yearly and twice-yearly bills.
     if (m === 3) add(10, { amount: -1864, category: "Insurance", vendor: "Example Mutual", receipt: true });
     if (m === 4 || m === 10) {
-      add(28, { amount: -2153.5, category: "Property Tax", vendor: "Springfield County Treasurer", receipt: true });
+      add(28, {
+        amount: -2153.5,
+        category: "Taxes - real estate",
+        vendor: "Springfield County Treasurer",
+        receipt: true,
+      });
     }
-    if (m === 2) add(14, { amount: -650, category: "Professional Fees", vendor: "Ledger & Co CPAs", receipt: true });
+    if (m === 2)
+      add(14, { amount: -650, category: "Legal and professional fees", vendor: "Ledger & Co CPAs", receipt: true });
     if (m === 1)
-      add(15, { amount: -1240, category: "Taxes", subcategory: "Lodging tax", vendor: "State Revenue Dept" });
+      add(15, { amount: -1240, category: "Taxes - other", subcategory: "Lodging tax", vendor: "State Revenue Dept" });
 
     // Supplies and the occasional repair or purchase.
     for (let i = 0, n = 1 + Math.floor(rand() * 2); i < n; i++) {
@@ -232,7 +245,7 @@ export function generate(today: Date) {
     if (rand() < 0.35) {
       add(6 + Math.floor(rand() * 20), {
         amount: -between(140, 820),
-        category: "Maintenance",
+        category: "Repairs",
         vendor: pick(["Handy Helpers", "Coastal Plumbing", "Bright Spark Electric"]),
         description: pick(["Fix dripping faucet", "Replace disposal", "Repair deck boards", "HVAC service"]),
         receipt: rand() < 0.5,
@@ -241,7 +254,8 @@ export function generate(today: Date) {
     if (rand() < 0.1) {
       add(11, {
         amount: -between(300, 1400),
-        category: "Furnishings",
+        category: "Supplies",
+        subcategory: "Furnishings",
         vendor: "Home Furnishings Outlet",
         description: pick(["Sofa", "Patio set", "Mattress", "Smart TV"]),
         receipt: true,
@@ -265,7 +279,7 @@ export function generate(today: Date) {
     {
       date: `${py}-${pad(pm)}-19`,
       amount: -48,
-      category: "Travel",
+      category: "Auto and travel",
       vendor: "Highway Tolls",
       description: "Trip to meet the plumber",
       allocation: null,
@@ -283,7 +297,7 @@ export function generate(today: Date) {
     {
       date: `${py}-${pad(pm)}-23`,
       amount: 140,
-      category: "Maintenance",
+      category: "Repairs",
       vendor: "Coastal Plumbing",
       description: "Refund for cancelled visit",
       refund: true,
@@ -322,7 +336,7 @@ export function generate(today: Date) {
     /** category receipt rules: Supplies asks at any amount, Cleaning only from $200 */
     receiptRules: [
       { category: "Supplies", receipt_policy: "always" as const },
-      { category: "Cleaning", receipt_policy: "threshold" as const, receipt_min: 200 },
+      { category: "Cleaning and maintenance", receipt_policy: "threshold" as const, receipt_min: 200 },
     ],
     /** subcategory rules: Sewer never asks, Electric only from $200 */
     subcategoryRules: [
@@ -372,7 +386,12 @@ function generateSecond(today: Date) {
         vendor: "Airbnb",
         description: `${n}-night stay`,
       });
-      add(day + n, { amount: -95, category: "Cleaning", vendor: "Pine Ridge Cleaning", description: "Turnover" });
+      add(day + n, {
+        amount: -95,
+        category: "Cleaning and maintenance",
+        vendor: "Pine Ridge Cleaning",
+        description: "Turnover",
+      });
       day += nights + 3 + Math.floor(rand() * 4);
     }
     if (y < ty || m < tm)
@@ -390,7 +409,7 @@ function generateSecond(today: Date) {
   rows.push({
     date: `${py}-${pad(pm)}-20`,
     amount: -310,
-    category: "Maintenance",
+    category: "Repairs",
     vendor: "Snowline Plowing",
     description: "Driveway plowing",
     needs_review: true,
@@ -574,13 +593,14 @@ async function reset() {
 
   const property = ledger.createProperty(db, null, {
     name: "Harbor View Cottage",
+    slug: "harbor-view",
     address: "12 Example Lane, Springfield",
     placed_in_service: "2021-05-01",
     building_basis: 310000,
   });
   seedDefaults(db);
 
-  const users = [];
+  const users: Awaited<ReturnType<typeof auth.createUser>>[] = [];
   for (const u of USERS) users.push(await auth.createUser(db, null, { ...u, password: PASSWORD }));
   const admin = { user: users[0]!, apiKeyId: null, canWrite: true, via: "cli" as const };
   const writeKey = auth.createApiKey(db, admin, { name: "harness (write)", scope: "write" });
@@ -644,6 +664,54 @@ async function reset() {
     });
   }
 
+  // A second portfolio (someone else's): its own admin, property, categories and a few months of entries.
+  // member@example.com belongs to both, so the portfolio switcher shows; admin@ runs the server and can look in.
+  const { portfolios: portfoliosTable } = await import("./db/schema.ts");
+  const { inPortfolio } = await import("./portfolio.ts");
+  const { addMember, newSlug } = await import("./services/portfolios.ts");
+  const { eq } = await import("drizzle-orm");
+  db.update(portfoliosTable)
+    .set({ name: "Alex's portfolio", slug: "alexs-portfolio" })
+    .where(eq(portfoliosTable.id, 1))
+    .run();
+  const other = db
+    .insert(portfoliosTable)
+    .values({ name: "Jordan's rentals", slug: newSlug(db, "Jordan's rentals") })
+    .returning({ id: portfoliosTable.id })
+    .get();
+  await inPortfolio(other.id, async () => {
+    seedDefaults(db);
+    const jordan = await auth.createUser(db, null, {
+      email: OTHER_ADMIN.email,
+      name: OTHER_ADMIN.name,
+      password: PASSWORD,
+      role: "admin",
+    });
+    const jordanActor = { user: jordan, apiKeyId: null, canWrite: true, via: "cli" as const };
+    // The new portfolio's starter property, renamed (as its owner would).
+    const duplex = ledger.updateProperty(db, jordanActor, ledger.listProperties(db)[0]!.id, {
+      name: "Lakeside Duplex",
+      slug: "lakeside-duplex",
+      address: "7 Shore Drive, Lakeview",
+    });
+    tx(db, () => {
+      for (let back = 5; back >= 0; back--) {
+        const m = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - back, 1));
+        const ym = m.toISOString().slice(0, 7);
+        const day = (d: number) => `${ym}-${String(d).padStart(2, "0")}`;
+        if (day(3) > todayIso) continue;
+        const add = (d: number, amount: number, category: string, vendor: string) =>
+          ledger.createTransaction(db, jordanActor, { property_id: duplex.id, date: day(d), amount, category, vendor });
+        add(3, 1850, "Rental Income", "Unit A tenant");
+        add(3, 1725, "Rental Income", "Unit B tenant");
+        add(12, -1210.4, "Mortgage interest", "Lakeview Credit Union");
+        add(18, -96.25, "Utilities", "Lakeview Water");
+        if (back % 2 === 0) add(22, -240, "Plumbing and electrical", "Shoreline Plumbing");
+      }
+    });
+    addMember(db, null, other.id, users[1]!.id, "member");
+  });
+
   // A small bank export for trying CSV import: two new rows and one that's already in the ledger.
   const existing = data.rows.find((r) => r.vendor === "Springfield Power")!;
   const csv = [
@@ -677,7 +745,11 @@ async function reset() {
     url: `http://localhost:${port}`,
     port,
     password: PASSWORD,
-    users: USERS.map((u) => ({ email: u.email, role: u.role })),
+    users: [
+      ...USERS.map((u) => ({ email: u.email, role: u.role, portfolios: u.role === "member" ? 2 : 1 })),
+      { email: OTHER_ADMIN.email, role: "admin", portfolios: 1 },
+    ],
+    portfolios: ["Alex's portfolio (Harbor View, Pine Ridge)", "Jordan's rentals (Lakeside Duplex)"],
     api_keys: { write: writeKey.key, read: readKey.key },
     admin_session_cookie: `rental_session=${session.token}`,
     property: property.name,
@@ -700,6 +772,7 @@ function printInfo(info: Awaited<ReturnType<typeof reset>>) {
       `Test harness ready in ${config.dataDir}`,
       `  URL        ${info.url}   (start it with: scripts/harness dev)`,
       `  Login      admin@example.com / member@example.com / viewer@example.com, password ${info.password}`,
+      `             ${OTHER_ADMIN.email} has a second portfolio; member@ is in both, admin@ runs the server`,
       `  API key    ${info.api_keys.write}   (Authorization: Bearer …)`,
       `  Details    ${join(config.dataDir, MARKER)}`,
     ].join("\n"),

@@ -59,7 +59,9 @@ self.addEventListener("fetch", (event) => {
   const path = url.pathname;
 
   if (path.startsWith("/api/")) {
-    if (CACHED_API.has(path) && !url.search) event.respondWith(networkThenCache(req, API));
+    // Each portfolio's copy is its own cache entry (?portfolio=<slug>); no other query parameters.
+    const onlyPortfolio = [...url.searchParams.keys()].every((k) => k === "portfolio");
+    if (CACHED_API.has(path) && onlyPortfolio) event.respondWith(networkThenCache(req, API));
     else if (TX_API.test(path)) event.respondWith(networkThenCache(req, API, undefined, 8000, trimApiCache));
     return;
   }

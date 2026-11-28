@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { apiUrl } from "../portfolio.ts";
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   addLinkFor,
@@ -110,7 +111,7 @@ function Month({ ym }: { ym: string }) {
           </Link>
           <a
             className="btn"
-            href={`/api/export/transactions.csv${exportQuery}&${pq}`}
+            href={apiUrl(`/api/export/transactions.csv${exportQuery}&${pq}`)}
             title={narrowed ? "Downloads the entries the filters show" : "Downloads every entry this month"}
           >
             {narrowed ? "Export CSV (filtered)" : "Export CSV"}

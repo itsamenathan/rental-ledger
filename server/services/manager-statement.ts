@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { categories, managerAcknowledgements, managerDocuments, transactions } from "../db/schema.ts";
+import { propertyScope } from "../portfolio.ts";
 import { audit, badRequest, cents, requireWrite, type Actor } from "../context.ts";
 import { parseCsv } from "./csv.ts";
 import { createTransaction, listCategories, resolvePropertyId, updateTransaction, type Category } from "./ledger.ts";
@@ -385,7 +386,7 @@ export function listDocuments(db: DB, propertyId: number, opts: { month?: string
     .from(managerDocuments)
     .where(
       and(
-        eq(managerDocuments.propertyId, propertyId),
+        propertyScope(db, managerDocuments.propertyId, propertyId),
         opts.month ? eq(managerDocuments.month, opts.month) : undefined,
         opts.year ? like(managerDocuments.month, `${opts.year}-%`) : undefined,
       ),
@@ -403,7 +404,7 @@ function docTexts(db: DB, propertyId: number) {
       text: managerDocuments.text,
     })
     .from(managerDocuments)
-    .where(eq(managerDocuments.propertyId, propertyId))
+    .where(propertyScope(db, managerDocuments.propertyId, propertyId))
     .orderBy(managerDocuments.month, managerDocuments.id)
     .all();
 }
@@ -545,15 +546,19 @@ const norm = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-/** Item → category when history has nothing to say. Matches on well-known words only. */
-const CATEGORY_RULES: [RegExp, string][] = [
-  [/manage/, "Management Fee"],
-  [/clean|hot ?tub|laundry|linen/, "Cleaning"],
-  [/minut|noise|software|subscription|monitor/, "Services"],
-  [/propane|supplies|restock|consumable|toiletr/, "Supplies"],
-  [/repair|maint|handyman|dump|install|plumb|electric|plow/, "Maintenance"],
-  [/furnish|mattress|appliance/, "Furnishings"],
-  [/commission|insurance waiver/, "VRBO Fees"],
+/**
+ * Item → category when history has nothing to say. Matches on well-known words only; each rule tries the default
+ * categories' names (server/seed.ts) first, then older names a portfolio may still use.
+ */
+const CATEGORY_RULES: [RegExp, string[]][] = [
+  [/manage/, ["Management fees", "Management Fee"]],
+  [/clean|hot ?tub|laundry|linen/, ["Cleaning and maintenance", "Cleaning"]],
+  [/minut|noise|software|subscription|monitor/, ["Services", "Miscellaneous"]],
+  [/propane|supplies|restock|consumable|toiletr/, ["Supplies"]],
+  [/plumb|electric/, ["Plumbing and electrical", "Repairs", "Maintenance"]],
+  [/repair|maint|handyman|dump|install|plow/, ["Repairs", "Maintenance"]],
+  [/furnish|mattress|appliance/, ["Furnishings", "Supplies"]],
+  [/commission|insurance waiver/, ["VRBO Fees", "Commissions"]],
 ];
 
 interface InvoiceInput extends Invoice {
@@ -636,8 +641,10 @@ function suggestCategory(
   }
   const best = [...votes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   if (best && byName.get(best.toLowerCase())) return byName.get(best.toLowerCase())!;
-  for (const [re, name] of CATEGORY_RULES)
-    if (re.test(n) && byName.get(name.toLowerCase())) return byName.get(name.toLowerCase())!;
+  for (const [re, names] of CATEGORY_RULES) {
+    if (!re.test(n)) continue;
+    for (const name of names) if (byName.get(name.toLowerCase())) return byName.get(name.toLowerCase())!;
+  }
   return null;
 }
 
@@ -1365,6 +1372,7 @@ export function managerAttention(db: DB, opts: { propertyId?: number } = {}) {
           db
             .selectDistinct({ id: managerDocuments.propertyId })
             .from(managerDocuments)
+            .where(propertyScope(db, managerDocuments.propertyId))
             .all()
             .map((r) => r.id),
         ),

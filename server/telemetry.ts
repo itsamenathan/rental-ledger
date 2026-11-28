@@ -199,6 +199,12 @@ function routeOf(c: Parameters<MiddlewareHandler>[0]) {
   return pick?.path ?? "unmatched";
 }
 
+/**
+ * The request path as it may be logged and traced: an invite link's token is a password until it's used, so
+ * /invite/<token> and /api/auth/invites/<token>[/accept] keep only `:token`.
+ */
+export const loggablePath = (path: string) => path.replace(/^(\/invite|\/api\/auth\/invites)\/[^/]+/, "$1/:token");
+
 /** Hono middleware: a server span + one access-log line per request. */
 export const httpTelemetry: MiddlewareHandler = async (c, next) => {
   const started = performance.now();
@@ -208,7 +214,11 @@ export const httpTelemetry: MiddlewareHandler = async (c, next) => {
         c.req.method,
         {
           kind: SpanKind.SERVER,
-          attributes: { "http.request.method": c.req.method, "url.path": c.req.path, "url.scheme": "http" },
+          attributes: {
+            "http.request.method": c.req.method,
+            "url.path": loggablePath(c.req.path),
+            "url.scheme": "http",
+          },
         },
         parent,
       )
@@ -224,7 +234,7 @@ export const httpTelemetry: MiddlewareHandler = async (c, next) => {
     const fields = {
       method: c.req.method,
       route,
-      path: c.req.path,
+      path: loggablePath(c.req.path),
       status,
       duration_ms: ms,
       user_id: actor?.user.id,

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from "react";
+import { apiUrl } from "../portfolio.ts";
 import { api, type Attachment } from "../api.ts";
 import { fmtDate } from "../format.ts";
 import { useApi, useSession, useToast, type TxSelection } from "../hooks.ts";
@@ -248,7 +249,7 @@ function ReceiptPop({ t, ctx, onDone }: { t: Tx; ctx: RowCtx; onDone: () => void
           {files.data.map((f) => (
             <li key={f.id}>
               <span title={f.filename}>{f.filename}</span>
-              <a className="link small" href={`/api/attachments/${f.id}`} target="_blank" rel="noreferrer">
+              <a className="link small" href={apiUrl(`/api/attachments/${f.id}`)} target="_blank" rel="noreferrer">
                 View
               </a>
             </li>

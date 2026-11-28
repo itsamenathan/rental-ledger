@@ -8,7 +8,8 @@ import { z } from "zod";
 import { tx, type DB } from "../db.ts";
 import { categories, recurringDismissals, subcategories, transactions } from "../db/schema.ts";
 import { audit, badRequest, cents, dollars, requireAdmin, requireWrite, type Actor } from "../context.ts";
-import { deleteCategory, getCategory, resolveCategory } from "./ledger.ts";
+import { currentPortfolioId } from "../portfolio.ts";
+import { categoriesInPortfolio, deleteCategory, getCategory, resolveCategory, txInPortfolio } from "./ledger.ts";
 import { RECEIPT_POLICIES, type ReceiptPolicy } from "./receipts.ts";
 
 const t = transactions;
@@ -33,10 +34,20 @@ export function listSubcategories(db: DB): SubcategoryInfo[] {
   const used = db
     .select({ category_id: t.categoryId, name: t.subcategory, count: count() })
     .from(t)
-    .where(and(sql`${t.deletedAt} IS NULL`, sql`${t.subcategory} <> ''`))
+    .where(and(sql`${t.deletedAt} IS NULL`, sql`${t.subcategory} <> ''`, txInPortfolio(db)))
     .groupBy(t.categoryId, t.subcategory)
     .all();
-  const saved = db.select().from(subcategories).all();
+  const saved = db
+    .select({
+      categoryId: subcategories.categoryId,
+      name: subcategories.name,
+      receiptPolicy: subcategories.receiptPolicy,
+      receiptMinCents: subcategories.receiptMinCents,
+    })
+    .from(subcategories)
+    .innerJoin(categories, eq(categories.id, subcategories.categoryId))
+    .where(categoriesInPortfolio(db))
+    .all();
   const out = new Map<string, SubcategoryInfo>();
   const none = { saved: false, receipt_policy: null, receipt_min: null };
   for (const u of used) {
@@ -62,7 +73,7 @@ export function categoryUsage(db: DB) {
   return db
     .select({ category_id: t.categoryId, count: count() })
     .from(t)
-    .where(sql`${t.deletedAt} IS NULL`)
+    .where(and(sql`${t.deletedAt} IS NULL`, txInPortfolio(db)))
     .groupBy(t.categoryId)
     .all();
 }
@@ -77,14 +88,15 @@ function savedRow(db: DB, categoryId: number, name: string) {
 
 /** Point recurring-bill dismissals at a series' new key after a rename/move, so dismissed months stay dismissed. */
 function rekeyDismissals(db: DB, match: (cat: string, sub: string) => boolean, next: (parts: string[]) => string[]) {
-  for (const d of db.select().from(recurringDismissals).all()) {
+  const mine = eq(recurringDismissals.portfolioId, currentPortfolioId(db));
+  for (const d of db.select().from(recurringDismissals).where(mine).all()) {
     const parts = d.seriesKey.split(":");
     if (parts.length !== 4 || !match(parts[1]!, parts[3]!)) continue;
     const key = next(parts).join(":");
     const clash = db
       .select({ id: recurringDismissals.id })
       .from(recurringDismissals)
-      .where(and(eq(recurringDismissals.seriesKey, key), eq(recurringDismissals.month, d.month)))
+      .where(and(eq(recurringDismissals.seriesKey, key), eq(recurringDismissals.month, d.month), mine))
       .get();
     if (clash) db.delete(recurringDismissals).where(eq(recurringDismissals.id, d.id)).run();
     else db.update(recurringDismissals).set({ seriesKey: key }).where(eq(recurringDismissals.id, d.id)).run();
@@ -292,6 +304,7 @@ export function categoryTree(db: DB) {
   return db
     .select({ id: categories.id })
     .from(categories)
+    .where(categoriesInPortfolio(db))
     .all()
     .map((c) => ({
       category_id: c.id,

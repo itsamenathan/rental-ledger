@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { startTransition, useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, type Overview, type User, type UserSettings } from "./api.ts";
 import { money, THIS_YEAR } from "./format.ts";
 import {
@@ -16,12 +16,16 @@ import {
 export function SessionProvider({
   user,
   canWrite,
+  portfolio,
+  portfolios,
   settings: initialSettings,
   onLogout,
   children,
 }: {
   user: User;
   canWrite: boolean;
+  portfolio: Session["portfolio"];
+  portfolios: Session["portfolios"];
   settings: UserSettings;
   onLogout: () => void;
   children: ReactNode;
@@ -34,7 +38,16 @@ export function SessionProvider({
     // The service worker keeps the last "who am I" for offline starts; refresh it so a reload offline keeps the choice.
     void api("auth/me").catch(() => undefined);
   }, []);
-  const reloadOverview = useCallback(async () => setOverview(await api<Overview>("overview")), []);
+  const reloadOverview = useCallback(async (then?: () => void) => {
+    const next = await api<Overview>("overview");
+    if (!then) return setOverview(next);
+    // One render for the new list and `then` (a navigation): a property's changed web address must never be seen
+    // with the old URL, or the page would take it for an unknown address and redirect.
+    startTransition(() => {
+      setOverview(next);
+      then();
+    });
+  }, []);
   const boot = useCallback(() => api<Overview>("overview").then(setOverview, (e: Error) => setFailed(e.message)), []);
   useEffect(() => {
     void boot();
@@ -59,6 +72,8 @@ export function SessionProvider({
   const value: Session = {
     user,
     canWrite,
+    portfolio,
+    portfolios,
     settings,
     updateSettings,
     overview,

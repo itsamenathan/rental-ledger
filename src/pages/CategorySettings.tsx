@@ -66,6 +66,11 @@ export default function CategorySettings() {
       () => api(`categories/${c.id}`, { method: "PATCH", json: { receipt_policy: policy, receipt_min: min } }),
       `Receipts for ${c.name}: ${ruleText(policy as Policy, min ?? overview.receipt_min)}`,
     );
+  const setAllocation = (c: Category, v: Allocation) =>
+    save(
+      () => api(`categories/${c.id}`, { method: "PATCH", json: { default_allocation: v } }),
+      `New ${c.name} entries: ${allocationText(v).toLowerCase()}`,
+    );
   const setSubRule = (c: Category, sub: Sub, policy: Policy | "inherit", min: number | null) =>
     save(
       () =>
@@ -93,6 +98,7 @@ export default function CategorySettings() {
             <span />
             <span>{kind === "expense" ? "Expenses" : "Income"}</span>
             <span>Entries</span>
+            <span>{kind === "expense" ? "Direct or indirect" : ""}</span>
             <span>{kind === "expense" ? "Ask for a receipt" : ""}</span>
           </div>
           <ul className="cat-tree">
@@ -143,6 +149,16 @@ export default function CategorySettings() {
                     </span>
                     <span className="cat-row-count">{t ? entries(t.count) : ""}</span>
                     {kind === "expense" ? (
+                      <AllocationControl
+                        label={`Direct or indirect for ${c.name}`}
+                        value={c.default_allocation}
+                        canWrite={canWrite}
+                        onChange={(v) => setAllocation(c, v)}
+                      />
+                    ) : (
+                      <span className="alloc-none" />
+                    )}
+                    {kind === "expense" ? (
                       <ReceiptControl
                         label={`Receipts for ${c.name}`}
                         policy={c.receipt_policy}
@@ -162,6 +178,7 @@ export default function CategorySettings() {
                           <span />
                           <span className="cat-tree-name">{sub.name}</span>
                           <span className="cat-row-count">{sub.count ? entries(sub.count) : "not used yet"}</span>
+                          <span className="alloc-none" />
                           {kind === "expense" ? (
                             <ReceiptControl
                               label={`Receipts for ${c.name} › ${sub.name}`}
@@ -221,6 +238,43 @@ export default function CategorySettings() {
         />
       )}
     </section>
+  );
+}
+
+type Allocation = Category["default_allocation"];
+const allocationText = (v: Allocation) =>
+  v === "direct" ? "Direct (rental only)" : v === "indirect" ? "Indirect (whole property)" : "Ask each time";
+
+/**
+ * Whether a category's entries are direct (only the rental, deducted in full) or indirect (the whole property, split
+ * by rental days). It's the default for new entries; one entry can still be set the other way.
+ */
+function AllocationControl({
+  label,
+  value,
+  canWrite,
+  onChange,
+}: {
+  label: string;
+  value: Allocation;
+  canWrite: boolean;
+  onChange: (v: Allocation) => Promise<void>;
+}) {
+  if (!canWrite) return <span className={`receipt-text ${value == null ? "muted" : ""}`}>{allocationText(value)}</span>;
+  return (
+    <span className="receipt-control alloc-control">
+      <select
+        aria-label={label}
+        title="The default for new entries; any one entry can be set the other way"
+        className={value == null ? "inherited" : ""}
+        value={value ?? ""}
+        onChange={(e) => void onChange((e.target.value || null) as Allocation)}
+      >
+        <option value="direct">{allocationText("direct")}</option>
+        <option value="indirect">{allocationText("indirect")}</option>
+        <option value="">{allocationText(null)}</option>
+      </select>
+    </span>
   );
 }
 

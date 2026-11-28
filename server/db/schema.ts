@@ -3,7 +3,18 @@
  * server/db/migrations. Migrations are applied automatically on startup.
  */
 import { sql } from "drizzle-orm";
-import { blob, check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import {
+  blob,
+  check,
+  foreignKey,
+  index,
+  integer,
+  primaryKey,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
 
 const now = sql`(strftime('%Y-%m-%dT%H:%M:%fZ','now'))`;
 const createdAt = () => text("created_at").notNull().default(now);
@@ -15,10 +26,13 @@ export const users = sqliteTable(
     email: text("email").notNull(),
     name: text("name").notNull().default(""),
     passwordHash: text("password_hash"),
+    /** Unused since roles moved to `memberships` (kept: dropping it would rebuild the users table) */
     role: text("role", { enum: ["admin", "member", "viewer"] })
       .notNull()
       .default("member"),
     oidcSub: text("oidc_sub").unique(),
+    /** Runs the server: creates portfolios, sees every login, may open any portfolio read-only (audited there) */
+    isInstanceAdmin: integer("is_instance_admin", { mode: "boolean" }).notNull().default(false),
     disabled: integer("disabled", { mode: "boolean" }).notNull().default(false),
     /** The person's own preferences (see services/user-settings.ts); only keys they changed are stored */
     settings: text("settings", { mode: "json" })
@@ -29,6 +43,77 @@ export const users = sqliteTable(
   (t) => [
     uniqueIndex("users_email_unique").on(sql`lower(${t.email})`),
     check("users_role_check", sql`${t.role} IN ('admin','member','viewer')`),
+  ],
+);
+
+/**
+ * One person's or household's portfolio: their properties, categories, receipt rules, import profiles and audit log.
+ * Logins belong to portfolios through `memberships`. See docs/plans/portfolios.md.
+ */
+export const portfolios = sqliteTable(
+  "portfolios",
+  {
+    id: integer("id").primaryKey(),
+    /** Web address, from the name (server/slugs.ts): /<slug>/… in the app, ?portfolio=<slug> on API calls */
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    archived: integer("archived", { mode: "boolean" }).notNull().default(false),
+    createdAt: createdAt(),
+  },
+  // Names needn't be unique: a server-wide unique name would let one portfolio's admin find out what others are
+  // called. Slugs are unique, so only the instance admin sets them (creating a portfolio, changing a web address), and a
+  // "taken" answer tells a portfolio admin nothing.
+  (t) => [uniqueIndex("portfolios_slug_unique").on(t.slug)],
+);
+
+/**
+ * A one-time link that lets someone join a portfolio with a role (services/invites.ts). Only a hash of the token is
+ * kept; it expires, can be revoked, and works once.
+ */
+export const invites = sqliteTable(
+  "invites",
+  {
+    id: integer("id").primaryKey(),
+    portfolioId: integer("portfolio_id")
+      .notNull()
+      .references(() => portfolios.id, { onDelete: "cascade" }),
+    /** sha256 of the token */
+    tokenHash: text("token_hash").notNull().unique(),
+    role: text("role", { enum: ["admin", "member", "viewer"] }).notNull(),
+    /** Who it's for, as the admin wrote it (shown in the list; not checked) */
+    note: text("note").notNull().default(""),
+    createdBy: integer("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    expiresAt: text("expires_at").notNull(),
+    acceptedAt: text("accepted_at"),
+    acceptedBy: integer("accepted_by").references(() => users.id, { onDelete: "set null" }),
+    revokedAt: text("revoked_at"),
+  },
+  (t) => [
+    index("invites_portfolio").on(t.portfolioId),
+    check("invites_role_check", sql`${t.role} IN ('admin','member','viewer')`),
+  ],
+);
+
+/** Who can open a portfolio. The role here replaces users.role once memberships carry permissions (phase 2). */
+export const memberships = sqliteTable(
+  "memberships",
+  {
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    portfolioId: integer("portfolio_id")
+      .notNull()
+      .references(() => portfolios.id, { onDelete: "cascade" }),
+    role: text("role", { enum: ["admin", "member", "viewer"] })
+      .notNull()
+      .default("member"),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.portfolioId] }),
+    index("memberships_portfolio").on(t.portfolioId),
+    check("memberships_role_check", sql`${t.role} IN ('admin','member','viewer')`),
   ],
 );
 
@@ -53,6 +138,10 @@ export const apiKeys = sqliteTable(
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    /** A key works in one portfolio */
+    portfolioId: integer("portfolio_id")
+      .notNull()
+      .references(() => portfolios.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     prefix: text("prefix").notNull(),
     /** sha256 of the full key */
@@ -69,7 +158,12 @@ export const properties = sqliteTable(
   "properties",
   {
     id: integer("id").primaryKey(),
+    portfolioId: integer("portfolio_id")
+      .notNull()
+      .references(() => portfolios.id),
     name: text("name").notNull(),
+    /** Web address within the portfolio, from the name (server/slugs.ts): /<portfolio>/<slug>/… */
+    slug: text("slug").notNull(),
     address: text("address").notNull().default(""),
     /** YYYY-MM-DD */
     placedInService: text("placed_in_service"),
@@ -80,13 +174,23 @@ export const properties = sqliteTable(
     archived: integer("archived", { mode: "boolean" }).notNull().default(false),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex("properties_name_unique").on(sql`lower(${t.name})`)],
+  (t) => [
+    uniqueIndex("properties_name_unique").on(t.portfolioId, sql`lower(${t.name})`),
+    uniqueIndex("properties_slug_unique")
+      .on(t.portfolioId, t.slug)
+      .where(sql`slug <> ''`),
+    /** Target of transactions' composite foreign key */
+    uniqueIndex("properties_portfolio_id").on(t.id, t.portfolioId),
+  ],
 );
 
 export const categories = sqliteTable(
   "categories",
   {
     id: integer("id").primaryKey(),
+    portfolioId: integer("portfolio_id")
+      .notNull()
+      .references(() => portfolios.id),
     name: text("name").notNull(),
     kind: text("kind", { enum: ["income", "expense"] }).notNull(),
     defaultAllocation: text("default_allocation", { enum: ["direct", "indirect"] }),
@@ -106,7 +210,9 @@ export const categories = sqliteTable(
     receiptMinCents: integer("receipt_min_cents"),
   },
   (t) => [
-    uniqueIndex("categories_name_unique").on(sql`lower(${t.name})`),
+    uniqueIndex("categories_name_unique").on(t.portfolioId, sql`lower(${t.name})`),
+    /** Target of transactions' composite foreign key */
+    uniqueIndex("categories_portfolio_id").on(t.id, t.portfolioId),
     check("categories_kind_check", sql`${t.kind} IN ('income','expense')`),
     check("categories_allocation_check", sql`${t.defaultAllocation} IN ('direct','indirect')`),
   ],
@@ -137,16 +243,14 @@ export const transactions = sqliteTable(
   "transactions",
   {
     id: integer("id").primaryKey(),
-    propertyId: integer("property_id")
-      .notNull()
-      .references(() => properties.id),
+    /** Always the property's portfolio (composite foreign keys below); bank-import dedupe is per portfolio */
+    portfolioId: integer("portfolio_id").notNull(),
+    propertyId: integer("property_id").notNull(),
     /** Cash-basis date paid/received, YYYY-MM-DD */
     date: text("date").notNull(),
     /** Signed: income positive, expenses negative */
     amountCents: integer("amount_cents").notNull(),
-    categoryId: integer("category_id")
-      .notNull()
-      .references(() => categories.id),
+    categoryId: integer("category_id").notNull(),
     subcategory: text("subcategory").notNull().default(""),
     vendor: text("vendor").notNull().default(""),
     allocation: text("allocation", { enum: ["direct", "indirect"] }),
@@ -156,9 +260,9 @@ export const transactions = sqliteTable(
     needsReview: integer("needs_review", { mode: "boolean" }).notNull().default(false),
     reviewNote: text("review_note").notNull().default(""),
     source: text("source").notNull().default("web"),
-    externalId: text("external_id").unique(),
+    externalId: text("external_id"),
     /** Random id the app generates when an entry is saved (offline outbox); a replay returns the existing row. */
-    clientId: text("client_id").unique(),
+    clientId: text("client_id"),
     createdAt: createdAt(),
     createdBy: integer("created_by").references(() => users.id),
     updatedAt: text("updated_at").notNull().default(now),
@@ -166,6 +270,18 @@ export const transactions = sqliteTable(
     deletedAt: text("deleted_at"),
   },
   (t) => [
+    foreignKey({
+      name: "transactions_property_fk",
+      columns: [t.propertyId, t.portfolioId],
+      foreignColumns: [properties.id, properties.portfolioId],
+    }),
+    foreignKey({
+      name: "transactions_category_fk",
+      columns: [t.categoryId, t.portfolioId],
+      foreignColumns: [categories.id, categories.portfolioId],
+    }),
+    uniqueIndex("transactions_external_id").on(t.portfolioId, t.externalId),
+    uniqueIndex("transactions_client_id").on(t.portfolioId, t.clientId),
     check("transactions_date_check", sql`${t.date} GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]'`),
     check("transactions_allocation_check", sql`${t.allocation} IN ('direct','indirect')`),
     index("tx_date")
@@ -211,6 +327,9 @@ export const pendingUploads = sqliteTable(
   "pending_uploads",
   {
     id: integer("id").primaryKey(),
+    portfolioId: integer("portfolio_id")
+      .notNull()
+      .references(() => portfolios.id, { onDelete: "cascade" }),
     filename: text("filename").notNull(),
     contentType: text("content_type").notNull(),
     size: integer("size").notNull(),
@@ -398,6 +517,8 @@ export const auditLog = sqliteTable(
   {
     id: integer("id").primaryKey(),
     at: text("at").notNull().default(now),
+    /** null for entries about a login rather than a portfolio (users, sessions, preferences) */
+    portfolioId: integer("portfolio_id").references(() => portfolios.id, { onDelete: "cascade" }),
     userId: integer("user_id").references(() => users.id, { onDelete: "set null" }),
     apiKeyId: integer("api_key_id").references(() => apiKeys.id, { onDelete: "set null" }),
     /** web | api | mcp | cli */
@@ -408,7 +529,7 @@ export const auditLog = sqliteTable(
     /** JSON */
     changes: text("changes", { mode: "json" }),
   },
-  (t) => [index("audit_entity").on(t.entity, t.entityId)],
+  (t) => [index("audit_entity").on(t.entity, t.entityId), index("audit_portfolio_at").on(t.portfolioId, t.at)],
 );
 
 /**
@@ -419,6 +540,9 @@ export const recurringDismissals = sqliteTable(
   "recurring_dismissals",
   {
     id: integer("id").primaryKey(),
+    portfolioId: integer("portfolio_id")
+      .notNull()
+      .references(() => portfolios.id),
     /** property:category:vendor:subcategory, see services/recurring.ts */
     seriesKey: text("series_key").notNull(),
     month: text("month").notNull().default(""),
@@ -437,12 +561,15 @@ export const receiptExclusions = sqliteTable(
   "receipt_exclusions",
   {
     id: integer("id").primaryKey(),
+    portfolioId: integer("portfolio_id")
+      .notNull()
+      .references(() => portfolios.id),
     name: text("name").notNull(),
     note: text("note").notNull().default(""),
     createdAt: createdAt(),
     createdBy: integer("created_by").references(() => users.id),
   },
-  (t) => [uniqueIndex("receipt_exclusions_name").on(sql`lower(${t.name})`)],
+  (t) => [uniqueIndex("receipt_exclusions_name").on(t.portfolioId, sql`lower(${t.name})`)],
 );
 
 /**
@@ -454,13 +581,16 @@ export const importProfiles = sqliteTable(
   "import_profiles",
   {
     id: integer("id").primaryKey(),
+    portfolioId: integer("portfolio_id")
+      .notNull()
+      .references(() => portfolios.id),
     name: text("name").notNull(),
     headers: text("headers").notNull().default("[]"),
     mapping: text("mapping").notNull(),
     createdAt: createdAt(),
     updatedAt: text("updated_at").notNull().default(now),
   },
-  (t) => [uniqueIndex("import_profiles_name").on(sql`lower(${t.name})`)],
+  (t) => [uniqueIndex("import_profiles_name").on(t.portfolioId, sql`lower(${t.name})`)],
 );
 
 /**

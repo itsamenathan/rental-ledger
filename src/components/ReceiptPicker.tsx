@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useEffectEvent, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { apiUrl } from "../portfolio.ts";
 import { useLocation, useNavigate } from "react-router";
 import type { Attachment } from "../api.ts";
 import type { OutboxFile } from "../outbox.ts";
@@ -231,12 +232,12 @@ export default function ReceiptPicker({
             <Tile
               key={`a${a.id}`}
               name={a.filename}
-              href={`/api/attachments/${a.id}`}
+              href={apiUrl(`/api/attachments/${a.id}`)}
               thumb={
                 a.content_type.startsWith("image/")
-                  ? `/api/attachments/${a.id}`
+                  ? apiUrl(`/api/attachments/${a.id}`)
                   : a.has_preview
-                    ? `/api/attachments/${a.id}/preview`
+                    ? apiUrl(`/api/attachments/${a.id}/preview`)
                     : null
               }
               status={<span className="tile-status ok">Saved</span>}

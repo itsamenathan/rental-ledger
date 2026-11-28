@@ -2,9 +2,8 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api.ts";
 import { monthTitle } from "../format.ts";
-import { useApi, useSession, useToast, useConfirm } from "../hooks.ts";
+import { useApi, useConfirm, usePropertyPath, useSession, useToast } from "../hooks.ts";
 import TodoRow from "./TodoRow.tsx";
-import { scopePath } from "../scope.ts";
 import {
   dayLabel,
   kindLabel,
@@ -73,6 +72,7 @@ export function CandidateList({
   const toast = useToast();
   const run = useRun(onChange);
   const [kinds, setKinds] = useState<Record<string, StayKind>>({});
+  const inProperty = usePropertyPath();
   const keyOf = (c: { property_id: number; start_date: string; end_date: string }) =>
     `${c.property_id}/${c.start_date}/${c.end_date}`;
   return (
@@ -82,7 +82,7 @@ export function CandidateList({
           key={keyOf(c)}
           title={rangeLabel(c)}
           property={c.property}
-          to={scopePath(String(c.property_id), `/calendar?month=${c.start_date.slice(0, 7)}`)}
+          to={inProperty(c.property_id, `/calendar?month=${c.start_date.slice(0, 7)}`)}
           note={
             showReason ? c.reason : `Blocked on ${c.blocked_on.join(" and ")} with no guest. Was this a personal stay?`
           }
@@ -273,7 +273,8 @@ function GuestNightRow({ m, onChange }: { m: GuestMonth; onChange: () => void })
 /** The reservations behind a month's calendar numbers, with links to see the month in full. */
 function CountedStays({ m }: { m: GuestMonth }) {
   const month = m.month.slice(5);
-  const at = (to: string) => scopePath(String(m.property_id), to);
+  const inProperty = usePropertyPath();
+  const at = (to: string) => inProperty(m.property_id, to);
   return (
     <ul className="todo-sub">
       {m.stays.map((s) => {

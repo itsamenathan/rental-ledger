@@ -8,6 +8,7 @@ import type { DB } from "./db.ts";
 import { tx } from "./db.ts";
 import { categories, properties, transactions } from "./db/schema.ts";
 import { audit } from "./context.ts";
+import { currentPortfolioId } from "./portfolio.ts";
 import { createCategory, createProperty, listCategories, listProperties, type Category } from "./services/ledger.ts";
 import { upsertOccupancy } from "./services/rental.ts";
 
@@ -88,6 +89,8 @@ export async function importFromGrist(db: DB, o: GristOpts) {
     skipped: [] as string[],
   };
 
+  // CLI only: runs in the only portfolio (with several, run it inside inPortfolio).
+  const portfolioId = currentPortfolioId(db);
   const run = () => {
     // property: reuse by name, or adopt the untouched seeded default
     const existing = listProperties(db);
@@ -95,7 +98,11 @@ export async function importFromGrist(db: DB, o: GristOpts) {
     let property = existing.find((p) => p.name.toLowerCase() === name.toLowerCase());
     if (!property) {
       const props = listProperties(db);
-      const used = db.select({ n: count() }).from(transactions).get()!.n;
+      const used = db
+        .select({ n: count() })
+        .from(transactions)
+        .where(eq(transactions.portfolioId, portfolioId))
+        .get()!.n;
       if (props.length === 1 && props[0]!.name === "My Rental" && used === 0) {
         db.update(properties).set({ name }).where(eq(properties.id, props[0]!.id)).run();
         property = { ...props[0]!, name };
@@ -126,6 +133,7 @@ export async function importFromGrist(db: DB, o: GristOpts) {
         .where(
           and(
             eq(categories.name, "Platform Fees"),
+            eq(categories.portfolioId, portfolioId),
             notExists(
               db
                 .select({ x: sql`1` })
@@ -182,10 +190,14 @@ export async function importFromGrist(db: DB, o: GristOpts) {
         reference,
       };
       const externalId = `grist:${o.docId}:${r.id}`;
-      const existing = db.select().from(transactions).where(eq(transactions.externalId, externalId)).get();
+      const existing = db
+        .select()
+        .from(transactions)
+        .where(and(eq(transactions.externalId, externalId), eq(transactions.portfolioId, portfolioId)))
+        .get();
       if (!existing) {
         db.insert(transactions)
-          .values({ ...row, propertyId: property.id, source: "grist", externalId })
+          .values({ ...row, portfolioId, propertyId: property.id, source: "grist", externalId })
           .run();
         summary.created++;
       } else if ((Object.keys(row) as (keyof typeof row)[]).some((k) => existing[k] !== row[k])) {

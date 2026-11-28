@@ -1,6 +1,16 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
-import { api, DEFAULT_SETTINGS, type User, type UserSettings } from "./api.ts";
+import { api, DEFAULT_SETTINGS, type Me } from "./api.ts";
+import {
+  BASENAME,
+  PORTFOLIO_LOST_EVENT,
+  forgetPortfolio,
+  lastPortfolio,
+  PORTFOLIO_SLUG,
+  rememberPortfolio,
+} from "./portfolio.ts";
+import { setOutboxPortfolios } from "./outbox.ts";
+import { InvitePage, NoPortfolio, ViewingBanner } from "./pages/Portfolios.tsx";
 import { useApi, useOutbox, useProperty, useSession, useConfirm } from "./hooks.ts";
 import { ConfirmProvider, Modal, SessionProvider, ToastProvider } from "./lib.tsx";
 import { OutboxProvider, SyncBanner } from "./components/Outbox.tsx";
@@ -19,50 +29,113 @@ import ManagerStatement from "./pages/ManagerStatement.tsx";
 import Files from "./pages/Files.tsx";
 import Settings, { PropertySettings } from "./pages/Settings.tsx";
 import { LegacyRedirect, PropertyProvider, PropertySwitcher, ScopeGuard } from "./property.tsx";
-import { propertySettingsPath } from "./scope.ts";
 
-interface Me {
-  user: User | null;
-  can_write: boolean;
-  settings?: UserSettings | null;
+/** Where a signed-in page outside any portfolio goes: the last one used, else the only (or first) open one. */
+function pickPortfolio(me: Me): string | null {
+  const mine = (me.portfolios ?? []).filter((p) => !p.archived && p.slug !== PORTFOLIO_SLUG);
+  const last = lastPortfolio();
+  return mine.find((p) => p.slug === last)?.slug ?? me.portfolio?.slug ?? mine[0]?.slug ?? null;
 }
 
+/** Into a portfolio, keeping the rest of the address (an old /transactions or /p/1/… link, the installed app's start). */
+const enter = (slug: string) =>
+  location.replace(`/${slug}${location.pathname === "/" ? "" : location.pathname}${location.search}${location.hash}`);
+
 export default function App() {
+  // Invite links work signed in or out, outside any portfolio.
+  if (location.pathname.startsWith("/invite/"))
+    return (
+      <BrowserRouter>
+        <ToastProvider>
+          <Routes>
+            <Route path="/invite/:token" element={<InvitePage />} />
+          </Routes>
+        </ToastProvider>
+      </BrowserRouter>
+    );
+  return <Booted />;
+}
+
+function Booted() {
   const [me, setMe] = useState<Me | null>(null);
   const refresh = () =>
     api<Me>("auth/me")
       .then(setMe)
-      .catch(() => setMe({ user: null, can_write: false }));
+      .catch(() => {
+        // Offline start of the installed app at "/": go to the portfolio used last (its pages are cached).
+        const last = !PORTFOLIO_SLUG && lastPortfolio();
+        if (last) enter(last);
+        else setMe({ user: null, can_write: false });
+      });
   useEffect(() => {
     void refresh();
     const onExpired = () => setMe({ user: null, can_write: false });
+    // No access to this page's portfolio any more: start over in one they can open (or the "no portfolio" page).
+    const onLost = () => {
+      if (!PORTFOLIO_SLUG) return;
+      forgetPortfolio();
+      location.assign("/");
+    };
     window.addEventListener("auth:expired", onExpired);
-    return () => window.removeEventListener("auth:expired", onExpired);
+    window.addEventListener(PORTFOLIO_LOST_EVENT, onLost);
+    return () => {
+      window.removeEventListener("auth:expired", onExpired);
+      window.removeEventListener(PORTFOLIO_LOST_EVENT, onLost);
+    };
   }, []);
+  const slug = me?.portfolio?.slug;
+  useEffect(() => {
+    if (slug && slug === PORTFOLIO_SLUG) rememberPortfolio(slug);
+    else if (me?.user && PORTFOLIO_SLUG && !slug) forgetPortfolio(); // an old link to a portfolio they can't open
+  }, [slug, me]);
 
   if (!me) return <div className="boot">Loading…</div>;
+  if (!me.user)
+    return (
+      <BrowserRouter basename={BASENAME}>
+        <Routes>
+          <Route path="*" element={<Login onDone={refresh} />} />
+        </Routes>
+      </BrowserRouter>
+    );
+  if (!PORTFOLIO_SLUG || !me.portfolio) {
+    const pick = pickPortfolio(me);
+    if (pick) {
+      // Outside any portfolio: in, keeping the page. One they can't open (a typo, access lost): another one's start.
+      if (PORTFOLIO_SLUG) location.replace(`/${pick}`);
+      else enter(pick);
+      return <div className="boot">Loading…</div>;
+    }
+  }
+  if (!PORTFOLIO_SLUG || !me.portfolio)
+    return (
+      <BrowserRouter basename={BASENAME}>
+        <ToastProvider>
+          <ConfirmProvider>
+            <NoPortfolio me={me} onLogout={() => setMe({ user: null, can_write: false })} />
+          </ConfirmProvider>
+        </ToastProvider>
+      </BrowserRouter>
+    );
+  setOutboxPortfolios(me.portfolios ?? []);
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={BASENAME}>
       <ToastProvider>
         <ConfirmProvider>
-          {me.user ? (
-            <SessionProvider
-              user={me.user}
-              canWrite={me.can_write}
-              settings={{ ...DEFAULT_SETTINGS, ...me.settings }}
-              onLogout={() => setMe({ user: null, can_write: false })}
-            >
-              <OutboxProvider>
-                <PropertyProvider>
-                  <Shell />
-                </PropertyProvider>
-              </OutboxProvider>
-            </SessionProvider>
-          ) : (
-            <Routes>
-              <Route path="*" element={<Login onDone={refresh} />} />
-            </Routes>
-          )}
+          <SessionProvider
+            user={me.user}
+            canWrite={me.can_write}
+            portfolio={me.portfolio}
+            portfolios={me.portfolios ?? []}
+            settings={{ ...DEFAULT_SETTINGS, ...me.settings }}
+            onLogout={() => setMe({ user: null, can_write: false })}
+          >
+            <OutboxProvider>
+              <PropertyProvider>
+                <Shell />
+              </PropertyProvider>
+            </OutboxProvider>
+          </SessionProvider>
         </ConfirmProvider>
       </ToastProvider>
     </BrowserRouter>
@@ -182,7 +255,7 @@ function Shell() {
   const navigate = useNavigate();
   const [moreOpen, setMoreOpen] = useState(false);
   /** Where a nav item goes: pages under this property; "Property" is its settings page. */
-  const href = (to: string) => (to === "/property" ? propertySettingsPath(scope.single) : scope.path(to));
+  const href = (to: string) => (to === "/property" ? scope.settingsPath : scope.path(to));
   const moreActive = MOBILE_MORE.flatMap((g) => g.items).some((to) => loc.pathname.startsWith(href(to)));
   useEffect(() => {
     setMoreOpen(false);
@@ -271,10 +344,11 @@ function Shell() {
       </aside>
       <main className="content">
         <PropertySwitcher className="mobile-switcher" />
+        <ViewingBanner />
         <SyncBanner />
         <Routes>
           <Route
-            path="/p/:key/*"
+            path="/:seg/*"
             element={
               <ScopeGuard>
                 {/* key: a page's own state (filters, forms) starts fresh for another property */}
@@ -300,6 +374,7 @@ function Shell() {
             }
           />
           <Route path="/settings/*" element={<Settings />} />
+          <Route path="/p/*" element={<LegacyRedirect />} />
           <Route path="*" element={<LegacyRedirect />} />
         </Routes>
       </main>
@@ -379,8 +454,15 @@ function Login({ onDone }: { onDone: () => void }) {
     setError(null);
     try {
       await api(setup ? "auth/setup" : "auth/login", { method: "POST", json: { email, password, name } });
-      history.replaceState(null, "", "/");
-      onDone();
+      // Back to an invite link that sent them to sign in; into this address's portfolio if it has one (a session that
+      // ran out); else pick one afresh.
+      const next = new URLSearchParams(location.search).get("next");
+      if (next?.startsWith("/invite/")) location.assign(next);
+      else if (PORTFOLIO_SLUG) location.reload();
+      else {
+        history.replaceState(null, "", "/");
+        onDone();
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {

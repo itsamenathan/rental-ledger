@@ -7,6 +7,7 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "rental-test-"));
 
 const { openDb } = await import("./db.ts");
 const { seedDefaults } = await import("./seed.ts");
+const { TEST_CATEGORIES } = await import("./test-categories.ts");
 const { users } = await import("./db/schema.ts");
 const ledger = await import("./services/ledger.ts");
 const ms = await import("./services/manager-statement.ts");
@@ -47,7 +48,7 @@ const INVOICE_TEXT = [
 
 function setup(opts: { history?: boolean } = {}) {
   const db = openDb(":memory:");
-  seedDefaults(db);
+  seedDefaults(db, TEST_CATEGORIES);
   const user = db.insert(users).values({ email: "t@example.com", role: "admin" }).returning().get();
   const actor = { user: { ...user, role: "admin" as const }, apiKeyId: null, canWrite: true, via: "web" as const };
   if (opts.history)

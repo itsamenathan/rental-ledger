@@ -8,7 +8,7 @@ Income and expense tracking for short-term rental properties, built for year-end
   tax summary CSV, every transaction as CSV, and the receipts named by date, category and amount.
 - **Record this month's bills**: from a month page (or Add entry), add every expected recurring bill at once;
   same-every-time bills are pre-ticked, variable ones take the real amount.
-- **Backup and restore** (Settings → Backup, admins): one `.zip` with a live-safe snapshot of the database plus all
+- **Backup and restore** (Settings → Server → Backup & restore, the server's administrator: a backup holds every portfolio): one `.zip` with a live-safe snapshot of the database plus all
   receipts. Restoring a zip replaces all data in place without a restart; the current data is saved first to
   `backups/pre-restore-*.zip` in the data folder. Sign-ins are not restored: current passwords, sessions and API
   keys are kept, and users who exist only in the backup come back disabled. CLI: `node server/cli.ts backup --out backup.zip` and
@@ -47,8 +47,17 @@ Income and expense tracking for short-term rental properties, built for year-end
 - **To do**: one list of everything that needs a look: flagged entries, expenses with no direct/indirect set, and
   recurring-bill alerts (the nav badge counts these). $75+ expenses without receipts are counted, with a link to them on the Files page.
 - **CSV import** of bank exports, with duplicate detection.
-- **Users and auth**: email/password, optional OIDC (e.g. Pocket ID), roles `admin` / `member` / `viewer`.
-- **Per-user API keys** (`read` or `write`) for the REST API and the **MCP server** at `/mcp`.
+- **Portfolios: other people's rentals on the same server.** Each portfolio is one person's or household's
+  properties together (properties, categories, receipt rules, tax years, audit log), kept completely apart from the others. A login can
+  belong to several, with a role in each (`admin` / `member` / `viewer`), and switches between them in the sidebar.
+  People join with invite links (Settings → People & invites: one-time, 7 days, password or SSO). The first account runs the
+  server (the Server group in Settings: Portfolios, Logins, Backup & restore, Server activity): it creates portfolios (from the default categories or a copy of its own), sets
+  passwords, disables logins, and can look into any portfolio read-only, which is noted in that portfolio's audit
+  log. Addresses are readable, e.g. `/alexs-portfolio/harbor-view/occupancy`, and admins can change them. Anyone in a portfolio can take their own copy with
+  Settings → Download everything (CSVs plus receipts and manager paperwork), and leave a portfolio they no longer need.
+- **Users and auth**: email/password, optional OIDC (e.g. Pocket ID). Without `OIDC_AUTO_CREATE`, a new SSO user
+  needs an invite link; with it, they get a login but no portfolio until invited.
+- **API keys** (`read` or `write`, each for one portfolio) for the REST API and the **MCP server** at `/mcp`.
 - **Audit log** of every change: who made it, and whether it came from the web, the API, or MCP.
 
 ## Stack
@@ -87,6 +96,10 @@ The first visit shows a setup screen that creates the admin account. You can als
 ```sh
 node server/cli.ts create-user --email you@example.com --password '…' --name You
 ```
+
+With several portfolios, `create-user` and `import-grist` take `--portfolio "<name or slug>"`.
+If nobody who runs the server can sign in any more, `node server/cli.ts make-server-admin --email you@example.com`
+makes that login the server's administrator again (and re-enables it).
 
 ## Database changes
 

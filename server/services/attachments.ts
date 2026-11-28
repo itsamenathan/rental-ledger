@@ -1,9 +1,9 @@
 import { and, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { tx, type DB } from "../db.ts";
-import { attachments, filePreviews } from "../db/schema.ts";
+import { attachments, filePreviews, transactions } from "../db/schema.ts";
 import { audit, notFound, requireWrite, type Actor } from "../context.ts";
-import { getTransaction } from "./ledger.ts";
+import { getTransaction, txInPortfolio } from "./ledger.ts";
 import { checkUpload, cleanFilename, readPreview, readStored, releaseFile, sha256, storeBytes } from "./storage.ts";
 
 export { ALLOWED, cleanFilename } from "./storage.ts";
@@ -29,23 +29,32 @@ const attachmentCols = {
 };
 
 export function listAttachments(db: DB, transactionId: number): Attachment[] {
+  const entry = db
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(and(eq(transactions.id, transactionId), txInPortfolio(db)))
+    .get();
+  if (!entry) throw notFound(`Transaction ${transactionId}`);
   return db
     .select({
       ...attachmentCols,
       has_preview: sql<number>`exists (select 1 from ${filePreviews} where ${filePreviews.sha256} = ${attachments.sha256})`,
     })
     .from(attachments)
-    .where(eq(attachments.transactionId, transactionId))
+    .innerJoin(transactions, eq(transactions.id, attachments.transactionId))
+    .where(and(eq(attachments.transactionId, transactionId), txInPortfolio(db)))
     .orderBy(attachments.id)
     .all()
     .map((r) => ({ ...r, has_preview: !!r.has_preview }));
 }
 
+/** An attachment of an entry in the current portfolio (another portfolio's id is "not found"). */
 function getStored(db: DB, id: number) {
   const row = db
     .select({ ...attachmentCols, storage_key: attachments.storageKey, sha256: attachments.sha256 })
     .from(attachments)
-    .where(eq(attachments.id, id))
+    .innerJoin(transactions, eq(transactions.id, attachments.transactionId))
+    .where(and(eq(attachments.id, id), txInPortfolio(db)))
     .get();
   if (!row) throw notFound("Attachment");
   return row;
@@ -155,7 +164,7 @@ export async function updateAttachment(db: DB, actor: Actor, id: number, raw: un
   const target = patch.transaction_id ?? row.transaction_id;
   if (target !== row.transaction_id) getTransaction(db, target);
 
-  const sha = db.select({ sha: attachments.sha256 }).from(attachments).where(eq(attachments.id, id)).get()!.sha;
+  const sha = row.sha256;
   const already =
     target !== row.transaction_id
       ? db
@@ -203,8 +212,8 @@ export async function updateAttachment(db: DB, actor: Actor, id: number, raw: un
 export function linkAttachment(db: DB, actor: Actor, id: number, raw: unknown): Attachment {
   requireWrite(actor);
   const { transaction_id: target } = z.object({ transaction_id: z.number().int().positive() }).strict().parse(raw);
-  const row = db.select().from(attachments).where(eq(attachments.id, id)).get();
-  if (!row) throw notFound("Attachment");
+  const stored = getStored(db, id);
+  const row = db.select().from(attachments).where(eq(attachments.id, stored.id)).get()!;
   getTransaction(db, target);
   const already = db
     .select({ id: attachments.id })

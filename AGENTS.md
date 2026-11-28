@@ -38,17 +38,75 @@ release. Add a tool name to select part of the graph. For example, run
   Drizzle query builder, and API responses keep snake_case field names via select aliases.
 - Schema changes: edit `server/db/schema.ts`, then `vp run db:generate --name <change>`, review the SQL in
   `server/db/migrations/`, and commit both. Never hand-write or edit an applied migration. Migrations apply automatically
-  on startup (`runMigrations` in `server/db.ts`).
+  on startup (`runMigrations` in `server/db.ts`), all in one transaction with foreign keys off (the
+  `PRAGMA foreign_keys=OFF` drizzle-kit writes does nothing inside a transaction); `foreign_key_check` runs after a
+  migration and logs broken references.
+  drizzle-kit's `ADD COLUMN … NOT NULL` without a default fails on tables with rows: fill it in the unapplied
+  migration (see `0017_portfolios.sql`).
 - Use `tx(db, fn)` from `server/db.ts` for multi-statement writes; nested calls join the outer transaction.
-- Properties are separate books. Transactions, occupancy, calendars, tax years and manager paperwork belong to one
-  property; users, API keys, categories, receipt rules, import profiles and backups are app-wide. Services take an
-  optional `propertyId` (undefined = every property); REST/MCP resolve it with `resolvePropertyId` (writes and
-  per-property reads) or `resolvePropertyScope` (reads that may add up, `property=all`). A missing property only
-  falls back to the sole active one; with several it's a 400, never a guess.
-- In the app every page lives under `/p/<id>/…` (`/p/all/…` for Overview, Month, Categories, Recurring, To do,
-  Transactions, Files; `ALL_PAGES` in `src/scope.ts`). Build links with `useScopedPath()` and send `useProperty().qs`
+- Portfolios (`docs/plans/portfolios.md`): one person's or household's properties together. Properties, transactions,
+  categories, receipt rules, import profiles, recurring dismissals, pending uploads, API keys and audit entries
+  belong to one portfolio (`portfolio_id`; everything else hangs off a property). Logins, sessions and preferences
+  are per login (`memberships` say which portfolios a login can open, with a role in each); backups are whole-server
+  (instance admin only). The request's portfolio is the API key's, or `?portfolio=<slug>` (else the login's only
+  one), set by `resolveActor` in `server/http/middleware.ts` and held in AsyncLocalStorage (`server/portfolio.ts`);
+  services read it with `currentPortfolioId(db)`, which outside a request (CLI `--portfolio`, tests, seeding) is the
+  only portfolio, or what `inPortfolio(id, fn)` says. `actor.user.role` is the membership's role, so `requireAdmin`
+  means portfolio admin; `requireInstanceAdmin` (`users.is_instance_admin`; `users.role` is unused) is for creating
+  portfolios, changing logins (password, disabled, name: they reach every portfolio) and backups. The instance admin
+  can open any portfolio read-only; `recordInstanceAdminView` notes it in that portfolio's audit log once a day.
+  People join only by invite link (`server/services/invites.ts`: hashed one-time token, 7 days, revocable; signed in
+  = joins with that login, never matched by email; SSO sign-up carries the token in the OIDC cookie). A portfolio
+  always keeps an admin. `server/services/portfolios.ts` has members, server-wide screens and portfolio creation
+  (seeded inside `inPortfolio`; startup only seeds a lone portfolio, `seedFirstRun`). Every query on portfolio data filters by it: `txInPortfolio`, `categoriesInPortfolio`, or
+  `propertyScope(db, col, propertyId)` instead of `propertyId ? eq(col, propertyId) : undefined`; lookups by id
+  include it, so another portfolio's id is a 404. Stored-file reference counting and backup/restore are the
+  deliberate exceptions. `server/portfolios.test.ts` calls every REST route and MCP tool as one portfolio looking for
+  the other's canary values: add ids for a new `:id` route there.
+- Properties are separate books within a portfolio. Transactions, occupancy, calendars, tax years and manager
+  paperwork belong to one property. Services take an optional `propertyId` (undefined = every property of the
+  portfolio); REST/MCP resolve it with `resolvePropertyId` (writes and per-property reads) or `resolvePropertyScope`
+  (reads that may add up, `property=all`). A missing property only falls back to the sole active one; with several
+  it's a 400, never a guess.
+- Client portfolio: the app runs under `/<portfolio slug>/` (React Router `basename`, `src/portfolio.ts`), so links and
+  routes don't mention it; switching portfolios is a full page load. Every API URL goes through `apiUrl()` (which `api()`
+  uses) to add `?portfolio=<slug>`: wrap any `/api/…` href and server-sent `url`/`preview_url` in it. Slugs are readable, made from
+  the name (`server/slugs.ts`, shared with the app): unique, kept on rename, changeable ("Web address": a property's by anyone who can write, the portfolio's by the instance admin only, since a "taken" answer would reveal other portfolios), and
+  never one of `RESERVED_PORTFOLIO_SLUGS` (server routes, built files, app pages; `server/slugs.test.ts` checks the list
+  against `createApp()`'s routes, `public/` and `App.tsx`, so add a new top-level route or page there). Migration
+  0017 leaves existing properties' slugs empty and `fillSlugs` (`server/db.ts`, after every migrate) fills them. A page whose first
+  segment is reserved (old links like `/transactions` or `/p/<id>/…`, the installed app's start) goes to the last
+  portfolio used (`portfolio-last`), or the only one; a portfolio the login can't open goes to the start of one it can;
+  `/invite/<token>` renders outside any portfolio. Per-portfolio localStorage keys use `portfolioKey()`. Outbox
+  entries carry their portfolio's `portfolio_id` (not the slug, which can change) and replay into it, older ones into
+  portfolio 1 (`setOutboxPortfolios`); the service worker caches `auth/me`/`overview`/`suggestions`
+  per `?portfolio=`. Words: the UI says **portfolio** for several properties together ("Other portfolios", "All
+  portfolios", "You don't have access to this portfolio"), never "books" (which only means a property's own
+  accounting), and error messages that reach the UI say the same. The portfolio's name and its General page always
+  show, even with one. Settings is grouped by whom a page affects (`Settings()` in `src/pages/Settings.tsx`): Your
+  account (Account, Preferences), Portfolio (General — rename, web address, leave —, Properties, Categories, Who has
+  access, API keys & agents, Change history = this portfolio's audit log, Download everything =
+  `GET /api/export/portfolio.zip` from
+  `server/services/portfolio-export.ts`, the people's own copy since a backup holds everyone) and Server (instance admin only, `/settings/server/*`: All portfolios, Logins, Backup &
+  restore, Server activity = `GET /api/admin/audit`). Put a new page in the group whose scope it changes; the
+  portfolio pages are in `src/pages/Portfolios.tsx`. Change history labels access entries in plain words
+  (`describeAccess` in Settings.tsx). The shell's one picker (`PropertySwitcher`) lists this portfolio's properties
+  and, under "Other portfolios", the login's other portfolios. A refusal because the caller has no access to this
+  portfolio carries `details.code = "no_access"`; `api()` then fires `PORTFOLIO_LOST_EVENT` and the app forgets the
+  portfolio and starts over at `/`.
+- In the app every page lives under `/<property slug>/…` inside the portfolio (`/all/…` for Overview, Month, Categories,
+  Recurring, To do, Transactions, Files; `ALL_PAGES` in `src/scope.ts`), e.g. `/alexs-portfolio/harbor-view/occupancy`.
+  Property slugs are unique per portfolio, made like portfolio slugs, never `all`/`settings`/`p` or a bare number (a number
+  is an old id: `/p/<id>/…` and `/<id>/…` redirect to the slug). `useProperty().key` stays the id (or "all") for
+  `qs`, the picker and storage; `.segment` is what goes in the URL. Build links with `useScopedPath()` (another property's page, e.g. a To do row's:
+  `usePropertyPath()(propertyId, to)`, never the id in the URL) and send `useProperty().qs`
   on API calls; the shell's `PropertySwitcher` is the only property picker (hidden with one active property). Old
-  URLs redirect to the last property used. `/settings` stays app-wide; `/p/<id>/settings` is the property's own.
+  URLs redirect to the last property used. `/settings` is the login's and the portfolio's (Account, Preferences,
+  People, Server…); `/<property slug>/settings` is the property's own.
+- Starter categories (`DEFAULT_CATEGORIES` in `server/seed.ts`) are the lines of the tax preparer's rental worksheet,
+  each with a Schedule E line and a direct/indirect `default_allocation` that a new entry takes unless it names one
+  (any entry can override it). Tests of ledger logic seed the fixed `TEST_CATEGORIES` (`server/test-categories.ts`)
+  instead, so changing the starters doesn't touch them.
 - PATCH bodies go through `parsePatch` in `ledger.ts`: zod 4 fills `.default()` values even inside `.partial()`.
 - User preferences (`server/services/user-settings.ts`): a person's own UI choices live as JSON in `users.settings`,
   not on the property or app-wide. To add one, put its validator in `fields` and its default in `DEFAULTS`; no
@@ -191,10 +249,11 @@ release. Add a tool name to select part of the graph. For example, run
 
 # Test harness (worktrees)
 
-Each worktree gets its own throwaway `./data` with fictional data and known logins: Harbor View Cottage (about 3 years
+Each worktree gets its own throwaway `./data` with fictional data and known logins. Portfolio "Alex's portfolio" has Harbor
+View Cottage (about 3 years
 of transactions, receipts, occupancy, and To do items: a missing bill, a duplicate, a flagged and an unallocated
 entry) and a smaller Pine Ridge Cabin (2 years, its own calendar and one flagged entry), so the property switcher and
-`/p/all` have something to show. T3 Code runs
+`/alexs-portfolio/all` have something to show. T3 Code runs
 `scripts/harness setup` when it creates a worktree.
 
 - `scripts/harness dev` starts `vp dev` on 0.0.0.0 at this worktree's own port (stable per path, printed and stored in
@@ -208,7 +267,9 @@ entry) and a smaller Pine Ridge Cabin (2 years, its own calendar and one flagged
   `sudo tailscale set --operator=$USER` once, and `server.allowedHosts` in `vite.config.ts` allows `.ts.net` hosts.
   `scripts/harness https [off]` does the same for a server started some other way. The dev port itself can't be reused
   for https: the server listens on every interface.
-- Logins: `admin@example.com`, `member@example.com`, `viewer@example.com`, password `password`.
+- Logins: `admin@example.com`, `member@example.com`, `viewer@example.com`, password `password`. A second portfolio,
+  "Jordan's rentals" (Lakeside Duplex, six months of entries), belongs to `jordan@example.com`; `member@` is in both
+  (the portfolio switcher shows), and `admin@` runs the server (Settings → Server, and a read-only look into Jordan's).
 - `scripts/harness info` prints the URL, a write and a read API key (`Authorization: Bearer …`), an admin session
   cookie for curl, `data/sample-bank-export.csv` for trying CSV import, `data/sample-airbnb.ics` (one new
   reservation) for trying "Import .ics file" on the Calendar page, and `data/sample-airbnb-reservations.csv` for

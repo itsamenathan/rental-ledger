@@ -9,7 +9,8 @@
  *   change made elsewhere in the meantime is reported as a conflict instead of being overwritten.
  * - delete: removing an existing entry, guarded the same way.
  */
-import { api, ApiError, type Transaction } from "./api.ts";
+import { api, ApiError, type PortfolioRef, type Transaction } from "./api.ts";
+import { PORTFOLIO_SLUG } from "./portfolio.ts";
 
 export interface OutboxFile {
   name: string;
@@ -25,6 +26,11 @@ export interface OutboxEntry {
   id: string;
   op: OutboxOp;
   user_id: number;
+  /**
+   * The id of the portfolio it was saved in, and replays into (an id, not the slug, which can change). Missing on
+   * work saved before there were several portfolios: that belongs to the first one (`setOutboxPortfolios`).
+   */
+  portfolio_id?: number;
   created_at: string;
   /** create: body for POST /api/transactions. */
   payload: Record<string, unknown> | null;
@@ -90,9 +96,25 @@ const changed = () => window.dispatchEvent(new Event(OUTBOX_EVENT));
 export const asText = (v: unknown): string =>
   typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
 
+/** The login's portfolios: this page's id, and each one's current slug for replaying into it. Set by the app on start. */
+const known: { current: number | null; legacy: number | null; slugs: Map<number, string> } = {
+  current: null,
+  legacy: null,
+  slugs: new Map(),
+};
+export function setOutboxPortfolios(portfolios: PortfolioRef[]) {
+  known.slugs = new Map(portfolios.map((p) => [p.id, p.slug]));
+  known.current = portfolios.find((p) => p.slug === PORTFOLIO_SLUG)?.id ?? null;
+  // Work saved before there were several portfolios: everything then was moved into the first one (migration 0017).
+  known.legacy = known.slugs.has(1) ? 1 : portfolios.length === 1 ? portfolios[0]!.id : null;
+}
+const portfolioOf = (e: OutboxEntry) => e.portfolio_id ?? known.legacy;
+
 export async function listOutbox(userId: number): Promise<OutboxEntry[]> {
   const all = await run("readonly", (s) => s.getAll() as IDBRequest<OutboxEntry[]>);
-  return all.filter((e) => e.user_id === userId).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  return all
+    .filter((e) => e.user_id === userId && known.current != null && portfolioOf(e) === known.current)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
 const get = (id: string) => run("readonly", (s) => s.get(id) as IDBRequest<OutboxEntry | undefined>);
@@ -161,6 +183,7 @@ export async function enqueue(opts: {
     id,
     op: opts.payload ? "create" : "attach",
     user_id: opts.userId,
+    portfolio_id: known.current ?? undefined,
     payload: opts.payload ? { ...opts.payload, client_id: id } : null,
     tx_id: opts.txId ?? null,
     files: await toOutboxFiles(opts.files),
@@ -208,6 +231,7 @@ export async function enqueueUpdate(opts: {
     id: newClientId(),
     op: "update",
     user_id: opts.userId,
+    portfolio_id: known.current ?? undefined,
     payload: null,
     tx_id: opts.base.id,
     patch: opts.patch,
@@ -226,6 +250,7 @@ export async function enqueueDelete(opts: { userId: number; base: Transaction; l
     id: newClientId(),
     op: "delete",
     user_id: opts.userId,
+    portfolio_id: known.current ?? undefined,
     payload: null,
     tx_id: opts.base.id,
     base: opts.base,
@@ -247,10 +272,15 @@ export interface SyncResult {
 }
 
 /** Upload one receipt; several phone photos in one request could pass the server's body limit. */
-async function uploadOne(txId: number, f: OutboxFile) {
+async function uploadOne(txId: number, f: OutboxFile, portfolio: string | null) {
   const form = new FormData();
   form.append("file", new File([f.data], f.name, { type: f.type }));
-  await api(`transactions/${txId}/attachments`, { method: "POST", body: form, signal: timeout(UPLOAD_TIMEOUT_MS) });
+  await api(`transactions/${txId}/attachments`, {
+    method: "POST",
+    body: form,
+    signal: timeout(UPLOAD_TIMEOUT_MS),
+    portfolio,
+  });
 }
 
 /**
@@ -284,11 +314,15 @@ export async function uploadOrQueue(
 /** Send one entry, saving progress after each step so an interrupted send resumes where it stopped. */
 async function send(e: OutboxEntry) {
   const guard = e.base?.updated_at;
+  // Only this page's portfolio is listed, so this is the page's slug unless it was renamed since the page loaded.
+  const id = portfolioOf(e);
+  const portfolio = (id != null && known.slugs.get(id)) || PORTFOLIO_SLUG;
   if (e.op === "delete") {
     try {
       await api(`transactions/${e.tx_id}${guard ? `?expected_updated_at=${encodeURIComponent(guard)}` : ""}`, {
         method: "DELETE",
         signal: timeout(SAVE_TIMEOUT_MS),
+        portfolio,
       });
     } catch (err) {
       if (!(err instanceof ApiError && err.status === 404)) throw err; // already gone: done
@@ -301,6 +335,7 @@ async function send(e: OutboxEntry) {
       method: "POST",
       json: e.payload,
       signal: timeout(SAVE_TIMEOUT_MS),
+      portfolio,
     });
     e = { ...e, tx_id: saved.id };
     await put(e);
@@ -310,12 +345,13 @@ async function send(e: OutboxEntry) {
       method: "PATCH",
       json: { ...e.patch, expected_updated_at: guard },
       signal: timeout(SAVE_TIMEOUT_MS),
+      portfolio,
     });
     e = { ...e, patch: null };
     await put(e);
   }
   while (e.files.length) {
-    await uploadOne(e.tx_id!, e.files[0]!);
+    await uploadOne(e.tx_id!, e.files[0]!, portfolio);
     e = { ...e, files: e.files.slice(1) };
     await put(e);
   }

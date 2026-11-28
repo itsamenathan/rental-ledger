@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { apiUrl } from "./portfolio.ts";
 import { api } from "./api.ts";
 import { isUnreachable, timeout, UPLOAD_TIMEOUT_MS } from "./outbox.ts";
 
@@ -21,7 +22,7 @@ export interface PickedReceipt {
 /** Tell the server to drop uploads that won't be saved. Survives the page closing; failures are left to the server's prune. */
 function discard(ids: number[]) {
   if (!ids.length) return;
-  void fetch("/api/uploads/discard", {
+  void fetch(apiUrl("/api/uploads/discard"), {
     method: "POST",
     credentials: "same-origin",
     headers: { "content-type": "application/json" },

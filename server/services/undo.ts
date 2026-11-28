@@ -7,6 +7,7 @@ import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { DB } from "../db.ts";
 import { tx } from "../db.ts";
 import { auditLog, occupancy, recurringDismissals, subcategories, transactions } from "../db/schema.ts";
+import { currentPortfolioId } from "../portfolio.ts";
 import { audit, AppError, badRequest, notFound, requireWrite, type Actor } from "../context.ts";
 import * as ledger from "./ledger.ts";
 import { deleteOccupancy, upsertOccupancy } from "./rental.ts";
@@ -313,7 +314,13 @@ export function annotate<
     db
       .select({ target: auditLog.entityId })
       .from(auditLog)
-      .where(and(eq(auditLog.action, "undo"), eq(auditLog.entity, "audit")))
+      .where(
+        and(
+          eq(auditLog.action, "undo"),
+          eq(auditLog.entity, "audit"),
+          eq(auditLog.portfolioId, currentPortfolioId(db)),
+        ),
+      )
       .all()
       .map((r) => r.target),
   );
@@ -325,7 +332,11 @@ export function annotate<
 
 export function undoAudit(db: DB, actor: Actor, auditId: number) {
   requireWrite(actor);
-  const row = db.select().from(auditLog).where(eq(auditLog.id, auditId)).get();
+  const row = db
+    .select()
+    .from(auditLog)
+    .where(and(eq(auditLog.id, auditId), eq(auditLog.portfolioId, currentPortfolioId(db))))
+    .get();
   if (!row) throw notFound("Audit entry");
   const already = db
     .select({ id: auditLog.id })

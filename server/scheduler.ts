@@ -6,7 +6,10 @@
  * linked feed that hasn't synced in that time (a page-load or manual refresh counts).
  */
 import { config } from "./config.ts";
+import { eq } from "drizzle-orm";
 import { getDb } from "./db.ts";
+import { portfolios } from "./db/schema.ts";
+import { inPortfolio } from "./portfolio.ts";
 import { enter } from "./maintenance.ts";
 import { refreshFeeds } from "./services/calendar.ts";
 import { log, withSpan } from "./telemetry.ts";
@@ -30,10 +33,19 @@ export function startScheduler(minutes = config.calendarRefreshMinutes) {
     }
     running = true;
     try {
-      // getDb() on every tick: a backup restore swaps the handle.
-      const results = await withSpan("calendar.scheduled_refresh", {}, () =>
-        refreshFeeds(getDb(), null, { stale_minutes: minutes }),
-      );
+      // getDb() on every tick: a backup restore swaps the handle. Each portfolio's feeds sync in that portfolio.
+      const db = getDb();
+      const results = [];
+      for (const { id } of db
+        .select({ id: portfolios.id })
+        .from(portfolios)
+        .where(eq(portfolios.archived, false))
+        .all())
+        results.push(
+          ...(await withSpan("calendar.scheduled_refresh", { portfolio_id: id }, () =>
+            inPortfolio(id, () => refreshFeeds(db, null, { stale_minutes: minutes })),
+          )),
+        );
       if (results.length)
         log.info(
           {

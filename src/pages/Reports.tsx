@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { apiUrl } from "../portfolio.ts";
 import { Link } from "react-router";
 import { api, qs } from "../api.ts";
 import { money, percent, THIS_YEAR } from "../format.ts";
@@ -85,7 +86,7 @@ export default function Reports() {
           <YearSelect value={year} onChange={setYear} />
           <a
             className="btn primary"
-            href={`/api/reports/tax-package.zip${qs({ year, property_id: propertyId })}`}
+            href={apiUrl(`/api/reports/tax-package.zip${qs({ year, property_id: propertyId })}`)}
             title="Summary, tax CSV, all transactions and receipts for the year, in one zip"
           >
             Download for preparer

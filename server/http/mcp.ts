@@ -22,6 +22,7 @@ import * as manager from "../services/manager-statement.ts";
 import * as docs from "../services/manager-documents.ts";
 import * as csvImport from "../services/csv-import.ts";
 import { listAudit } from "../services/audit.ts";
+import { currentPortfolio } from "../services/portfolios.ts";
 import type { Env } from "./middleware.ts";
 
 const INSTRUCTIONS = `
@@ -44,7 +45,9 @@ Rental property bookkeeping. Data model:
   list_owner_stay_candidates suggests blocks that may be owner stays and compare_occupancy_calendar compares guest
   nights; ask the user before add_owner_stay / apply_calendar_to_occupancy.
 - properties: each rental is separate. Transactions, occupancy, booking calendars, tax-year inputs and manager
-  paperwork all belong to one property; users, categories, receipt rules and import profiles are shared.
+  paperwork all belong to one property; categories, receipt rules and import profiles are shared by the properties
+  of the portfolio. This API key only ever sees its own portfolio (get_overview names it); "all" means all of its
+  properties. Someone with several portfolios has a separate key for each.
 Picking a property:
 - get_overview lists the properties. Pass \`property\` (name or id) to every tool that takes one. It may be left
   out only while there is a single active property; with several, a missing property is an error, never a guess.
@@ -143,14 +146,16 @@ export function buildMcpServer(actor: Actor) {
     "get_overview",
     {
       description:
-        "Properties, categories (with kind/default allocation/Schedule E line), years with data, and each active property's to-do counts (flagged = review queue). Call this first, and pick the property to work on from here.",
+        "Which portfolio this key works in, its properties, categories (with kind/default allocation/Schedule E line), years with data, and each active property's to-do counts (flagged = review queue). Call this first, and pick the property to work on from here.",
       inputSchema: {},
       annotations: ro,
     },
     wrap(() => {
       const properties = ledger.listProperties(db);
       return {
-        you: { email: actor.user.email, can_write: actor.canWrite },
+        you: { email: actor.user.email, role: actor.user.role, can_write: actor.canWrite },
+        /** The portfolio this API key belongs to; everything below is in it only. */
+        portfolio: { name: currentPortfolio(db).name },
         properties,
         categories: ledger.listCategories(db, false),
         years: reports.availableYears(db),

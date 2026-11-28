@@ -16,6 +16,7 @@ import { and, eq, isNull, lt, not, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import type { DB } from "../db.ts";
 import { attachments, categories, receiptExclusions, subcategories, transactions } from "../db/schema.ts";
+import { currentPortfolioId } from "../portfolio.ts";
 import { audit, notFound, requireWrite, type Actor } from "../context.ts";
 
 /** App-wide default threshold for categories with policy 'threshold' and no override. */
@@ -32,6 +33,7 @@ const t = transactions;
 const c = categories;
 const s = subcategories;
 const e = receiptExclusions;
+const exclusionsInPortfolio = (db: DB) => eq(e.portfolioId, currentPortfolioId(db));
 
 /** The transaction's subcategory rule column, or NULL when its subcategory has no rule of its own. */
 const subRule = (col: typeof s.receiptPolicy | typeof s.receiptMinCents) =>
@@ -44,7 +46,8 @@ const subRule = (col: typeof s.receiptPolicy | typeof s.receiptMinCents) =>
  */
 export function needsReceipt(): SQL {
   const hasAttachment = sql`EXISTS (SELECT 1 FROM ${attachments} WHERE ${attachments.transactionId} = ${t.id})`;
-  const excluded = sql`EXISTS (SELECT 1 FROM ${e} WHERE lower(${e.name}) = lower(trim(${t.vendor})))`;
+  const excluded = sql`EXISTS (SELECT 1 FROM ${e} WHERE ${e.portfolioId} = ${t.portfolioId}
+    AND lower(${e.name}) = lower(trim(${t.vendor})))`;
   const byRule = sql`CASE coalesce(${subRule(s.receiptPolicy)}, ${c.receiptPolicy})
     WHEN 'never' THEN 0
     WHEN 'always' THEN 1
@@ -66,7 +69,7 @@ export function missingReceiptIds(db: DB, where?: SQL): number[] {
     .select({ id: t.id })
     .from(t)
     .innerJoin(c, eq(c.id, t.categoryId))
-    .where(and(needsReceipt(), where))
+    .where(and(needsReceipt(), eq(t.portfolioId, currentPortfolioId(db)), where))
     .orderBy(t.date, t.id)
     .all()
     .map((r) => r.id);
@@ -84,10 +87,11 @@ export interface ReceiptExclusion {
 
 export function listReceiptExclusions(db: DB): ReceiptExclusion[] {
   const matches = sql<number>`(SELECT count(*) FROM ${t} WHERE ${t.deletedAt} IS NULL AND ${t.amountCents} < 0
-    AND lower(trim(${t.vendor})) = lower(${e.name}))`.mapWith(Number);
+    AND ${t.portfolioId} = ${e.portfolioId} AND lower(trim(${t.vendor})) = lower(${e.name}))`.mapWith(Number);
   return db
     .select({ id: e.id, name: e.name, note: e.note, matches })
     .from(e)
+    .where(exclusionsInPortfolio(db))
     .orderBy(sql`lower(${e.name})`)
     .all();
 }
@@ -104,12 +108,12 @@ export function addReceiptExclusion(db: DB, actor: Actor, raw: unknown) {
   const existing = db
     .select({ id: e.id })
     .from(e)
-    .where(eq(sql`lower(${e.name})`, p.name.toLowerCase()))
+    .where(and(eq(sql`lower(${e.name})`, p.name.toLowerCase()), exclusionsInPortfolio(db)))
     .get();
   if (existing) return listReceiptExclusions(db).find((x) => x.id === existing.id)!;
   const { id } = db
     .insert(e)
-    .values({ name: p.name, note: p.note, createdBy: actor.user.id })
+    .values({ portfolioId: currentPortfolioId(db), name: p.name, note: p.note, createdBy: actor.user.id })
     .returning({ id: e.id })
     .get();
   audit(db, actor, "create", "receipt_exclusion", id, p);
@@ -123,9 +127,12 @@ export function removeReceiptExclusion(db: DB, actor: Actor, ref: number | strin
     .select()
     .from(e)
     .where(
-      typeof ref === "number" || /^\d+$/.test(ref)
-        ? or(eq(e.id, Number(ref)), eq(sql`lower(${e.name})`, String(ref).toLowerCase()))
-        : eq(sql`lower(${e.name})`, ref.trim().toLowerCase()),
+      and(
+        typeof ref === "number" || /^\d+$/.test(ref)
+          ? or(eq(e.id, Number(ref)), eq(sql`lower(${e.name})`, String(ref).toLowerCase()))
+          : eq(sql`lower(${e.name})`, ref.trim().toLowerCase()),
+        exclusionsInPortfolio(db),
+      ),
     )
     .get();
   if (!row) throw notFound("Vendor on the never-ask list");

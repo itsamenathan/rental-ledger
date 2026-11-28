@@ -1,5 +1,6 @@
 import type { DB } from "./db.ts";
 import { auditLog } from "./db/schema.ts";
+import { currentPortfolioIdOrNull } from "./portfolio.ts";
 import { log } from "./telemetry.ts";
 
 export type Role = "admin" | "member" | "viewer";
@@ -10,6 +11,8 @@ export interface User {
   email: string;
   name: string;
   role: Role;
+  /** Runs the server (backups, every login); not a way into other portfolios */
+  instance_admin?: boolean;
 }
 
 /** Who is performing an operation. Every write records this in the audit log. */
@@ -40,6 +43,13 @@ export function requireWrite(actor: Actor) {
 export function requireAdmin(actor: Actor) {
   if (actor.user.role !== "admin") throw new AppError(403, "Admin only");
 }
+/** Whole-server operations (backups hold every portfolio). The CLI passes no actor. */
+export function requireInstanceAdmin(actor: Actor) {
+  if (!actor.user.instance_admin) throw new AppError(403, "Only the server's administrator can do this");
+}
+
+/** Audit entities about a login or the whole server rather than one portfolio. */
+const LOGIN_ENTITIES = new Set(["user", "user_settings", "backup"]);
 
 export function audit(
   db: DB,
@@ -55,6 +65,7 @@ export function audit(
   );
   db.insert(auditLog)
     .values({
+      portfolioId: LOGIN_ENTITIES.has(entity) ? null : currentPortfolioIdOrNull(db),
       userId: actor?.user.id ?? null,
       apiKeyId: actor?.apiKeyId ?? null,
       via: actor?.via ?? "cli",
