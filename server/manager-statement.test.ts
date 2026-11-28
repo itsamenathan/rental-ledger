@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -256,7 +257,19 @@ describe("reconcile + apply", () => {
     expect(p.summary.income_missing).toBe(0);
     const warns = p.checks.filter((c) => c.level === "warn" && !c.code).map((c) => c.text);
     expect(warns).toHaveLength(1);
-    expect(warns[0]).toContain("The Oct 2 stay (#R1) is $1,000.50 on the statement but $800.50 was deposited (Oct 4)");
+    expect(warns[0]).toContain(
+      "The Oct 2 stay (#R1) is $1,000.50 on the statement but $800.50 was deposited (Oct 4), $200.00 less. Ask your manager about the $200.00",
+    );
+    // $30.00 fee on $1,000.50: about $6.00 of it on the missing $200.00.
+    expect(warns[0]).toContain(
+      "the management fee ($30.00) may have been charged on the full amount, about $6.00 of it on the missing $200.00",
+    );
+    // Keyed by the earlier wording, so differences already marked as explained stay explained.
+    const legacy =
+      "The Oct 2 stay (#R1) is $1,000.50 on the statement but $800.50 was deposited (Oct 4). Ask your manager about the difference (a refund, resolution or adjustment); the management fee may have been charged on the full amount";
+    expect(p.checks.find((c) => c.text === warns[0])?.key).toBe(
+      `w:${createHash("sha1").update(legacy).digest("hex").slice(0, 12)}`,
+    );
     expect(
       p.checks.find((c) => c.level === "info" && c.text.startsWith("A VRBO payout ($400.00) couldn't be tied")),
     ).toBeTruthy();
@@ -266,8 +279,14 @@ describe("reconcile + apply", () => {
     const { db, actor } = setup();
     const row1 = ledger.createTransaction(db, null, { date: "2026-10-04", amount: 800.5, category: "Rental Income" });
     const statement = csv(row("A", "airbnbOfficial", "2026-10-02", "2026-10-05", "$1,000.50", "R1"));
-    ms.applyManagerMonth(db, actor, { statement_csv: statement });
-    expect(ledger.getTransaction(db, row1.id).description).toBe(""); // not tagged
+    const res = ms.applyManagerMonth(db, actor, { statement_csv: statement });
+    expect(res.flagged).toEqual([row1.id]);
+    expect(ledger.getTransaction(db, row1.id)).toMatchObject({ needs_review: true, description: "" }); // not tagged
+    expect(ledger.getTransaction(db, row1.id).review_note).toContain("this deposit is $200.00 less");
+    // Cleared by hand: the next save leaves it alone.
+    ledger.updateTransaction(db, actor, row1.id, { needs_review: false });
+    expect(ms.applyManagerMonth(db, actor, { statement_csv: statement }).flagged).toEqual([]);
+    expect(ledger.getTransaction(db, row1.id).needs_review).toBe(false);
     ledger.updateTransaction(db, actor, row1.id, { description: "Reservation R1" }); // tagged by hand
     const p = ms.previewManagerMonth(db, { statement_csv: statement });
     expect(p.income[0]).toMatchObject({ status: "differs", difference: -200 });

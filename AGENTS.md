@@ -153,8 +153,11 @@ release. Add a tool name to select part of the graph. For example, run
   transfers (never offered for creation). Invoice lines are matched one-to-one by amount + category (not `bulkCreate`,
   which would drop equal-amount lines). Never touch `external_id`/`reference` on existing rows; manager names are never
   hard-coded (CSV columns match by suffix, the subcategory comes from history).
+- A payout that "differs" (a deposit near the stay, close to but not the statement's amount) is flagged for review
+  when the month is saved (apply), once per transaction: the ids go in `flagged` on the `manager_statement` audit row,
+  so a flag cleared by hand stays cleared. Its warning spells out the difference and the management fee's likely share.
 - Manager warnings can be "marked as explained" (`manager_acknowledgements`, keyed by a hash of the warning text, so
-  changed amounts ask again). Months with entries to add or unexplained warnings count on the To do page.
+  changed amounts ask again; when rewording a warning, keep hashing the old wording, as `legacyDifferenceText` does). Months with entries to add or unexplained warnings count on the To do page.
 - Stored files go through `server/services/storage.ts`: identical bytes share one file across `attachments`,
   `manager_documents` and `pending_uploads`; delete rows first, then `releaseFile`. Backups include every key from all
   three tables. `storeBytes(db, data, ext, save)` takes a synchronous `save(key)`
